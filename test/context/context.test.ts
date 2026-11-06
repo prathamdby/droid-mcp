@@ -263,6 +263,45 @@ describe("context tools over MCP", () => {
     expect(bodyOf()).toEqual({ expectedVersion: "1", body: "a\nb\nC\n", merge: "auto" })
   })
 
+  it("replaces a document with an uploaded file, sending only expectedVersion and fileId", async () => {
+    const spaceId = await createSpace()
+    const document = await createDocument(spaceId, "logo.png", "placeholder")
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+
+    const upload = Schema.decodeUnknownSync(Upload)(
+      await client.ok("context_create_file", {
+        spaceId,
+        contentType: "image/png",
+        sizeBytes: bytes.byteLength,
+        sha256: sha256(bytes),
+      }),
+    )
+
+    await client.ok("context_upload_file_part", {
+      spaceId,
+      fileId: upload.fileId,
+      partIndex: 0,
+      contentBase64: base64(bytes),
+    })
+
+    expect(
+      await client.ok("context_update_document", {
+        spaceId,
+        documentId: document.id,
+        expectedVersion: document.version,
+        fileId: upload.fileId,
+      }),
+    ).toMatchObject({ version: "2", body: "" })
+    expect(bodyOf()).toEqual({ expectedVersion: document.version, fileId: upload.fileId })
+
+    expect(
+      await client.ok("context_get_document", { spaceId, documentId: document.id }),
+    ).toMatchObject({
+      version: "2",
+      file: { fileId: upload.fileId, contentType: "image/png", sizeBytes: bytes.byteLength },
+    })
+  })
+
   it("keeps a version past 2^53 as an exact string", async () => {
     const spaceId = await createSpace()
     const document = await createDocument(spaceId, "big.md", "x")
@@ -546,6 +585,24 @@ describe("context tools over MCP", () => {
         { spaceId, documentId, expectedVersion: "1", merge: "auto", fileId },
       ],
       ["context_create_space", { name: "   ", accessScope: "members" }],
+      [
+        "context_create_file",
+        {
+          spaceId,
+          contentType: "image/png",
+          sizeBytes: 10 * 1024 * 1024 + 1,
+          sha256: "a".repeat(64),
+        },
+      ],
+      [
+        "context_create_file",
+        {
+          spaceId,
+          contentType: "application/pdf",
+          sizeBytes: 25 * 1024 * 1024 + 1,
+          sha256: "a".repeat(64),
+        },
+      ],
     ]
 
     for (const [name, args] of declared) {
@@ -675,7 +732,7 @@ describe("context tools over MCP", () => {
     const read = await client.ok("context_get_document", { spaceId, documentId: document.id })
 
     expect(JSON.stringify(read)).not.toContain(TENANT)
-    expect(read).toMatchObject({ body: "[redacted]" })
+    expect(read).toMatchObject({ body: "tenant [redacted]" })
   })
 
   it("reports a malformed response with a fixed message and no SDK text", async () => {

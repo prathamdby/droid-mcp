@@ -67,6 +67,15 @@ const CONTENT_TYPES = [
   "application/pdf",
 ] as const
 
+/** The SDK's per-type upload limits, which it does not export. */
+const FILE_MAX_BYTES = {
+  "image/png": 10 * 1024 * 1024,
+  "image/jpeg": 10 * 1024 * 1024,
+  "image/gif": 10 * 1024 * 1024,
+  "image/webp": 10 * 1024 * 1024,
+  "application/pdf": 25 * 1024 * 1024,
+} satisfies { readonly [Type in (typeof CONTENT_TYPES)[number]]: number }
+
 /** Same-length decimal strings compare like the numbers they spell. */
 const withinCounterRange = (value: string): boolean =>
   value.length < COUNTER_MAX.length || (value.length === COUNTER_MAX.length && value <= COUNTER_MAX)
@@ -393,7 +402,8 @@ export const contextTools = (): RestDomain =>
       operation: "createContextFile",
       description:
         "Start an image or PDF upload of `sizeBytes` bytes whose SHA-256 is `sha256` (64 " +
-        "lowercase hex characters). Returns `{ fileId, partSizeBytes, partCount, expiresAt }`. " +
+        "lowercase hex characters). Images are at most 10 MiB and PDFs at most 25 MiB. " +
+        "Returns `{ fileId, partSizeBytes, partCount, expiresAt }`. " +
         "Upload every part with context_upload_file_part, then commit the file with " +
         "context_create_document or context_update_document and `fileId` before `expiresAt`.",
       inputs: {
@@ -402,6 +412,10 @@ export const contextTools = (): RestDomain =>
         sizeBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
         sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
       },
+      check: ({ contentType, sizeBytes }) =>
+        sizeBytes > FILE_MAX_BYTES[contentType]
+          ? contentType + " files are at most " + String(FILE_MAX_BYTES[contentType]) + " bytes"
+          : undefined,
       run: (params, options) => createContextFile({ ...options, ...params }),
     }),
     contextTool({

@@ -306,7 +306,10 @@ describe("rest organization tools over MCP", () => {
       body: { upsert: [{ key: "API_TOKEN", value: SECRET_VALUE }], delete: [] },
     })
 
-    expect(outcome.structured).toEqual({ secrets: [{ key: "API_TOKEN" }], note: "[redacted]" })
+    expect(outcome.structured).toEqual({
+      secrets: [{ key: "API_TOKEN" }],
+      note: "set [redacted]",
+    })
     expect(outcome.text).not.toContain(SECRET_VALUE)
   })
 

@@ -23,10 +23,11 @@ const LEGACY_ROUTES = [
   "GET /api/v0/machines/templates/{templateId}",
 ]
 
-/** The tools the spec designates as destructive, hosted and Context alike. */
+/** The hosted and Context tools that must carry the destructive sentence, and no others. */
 const DESIGNATED_DESTRUCTIVE = [
   "rest_delete_computer",
   "rest_delete_environment",
+  "rest_set_default_environment",
   "rest_cancel_environment_build",
   "rest_delete_remote_session",
   "rest_delete_wiki_run",
@@ -282,12 +283,13 @@ describe("hosted REST coverage", () => {
     expect([...routes].sort()).toEqual([...fixture.operations, ...LEGACY_ROUTES].sort())
   })
 
-  it("puts the destructive sentence on every designated tool", async () => {
-    const described = new Map((await client.list()).map((tool) => [tool.name, tool.description]))
+  it("puts the destructive sentence on exactly the designated hosted and Context tools", async () => {
+    const marked = (await client.list())
+      .filter((tool) => tool.name.startsWith("rest_") || tool.name.startsWith("context_"))
+      .filter((tool) => (tool.description ?? "").includes(DESTRUCTIVE))
+      .map((tool) => tool.name)
 
-    for (const name of DESIGNATED_DESTRUCTIVE) {
-      expect(described.get(name) ?? "", name).toContain(DESTRUCTIVE)
-    }
+    expect(marked.sort()).toEqual([...DESIGNATED_DESTRUCTIVE].sort())
   })
 
   it("reports the listed tool count in server_info", async () => {

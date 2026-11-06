@@ -133,6 +133,18 @@ describe("hosted REST transport over MCP", () => {
     })
   })
 
+  it.each([
+    ["with a declared length", {}],
+    ["streamed without a length", { "transfer-encoding": "chunked" }],
+  ])("refuses a body over 32 MiB %s", async (_label, headers) => {
+    api.failNext(LIST, 200, "x".repeat(32 * 1024 * 1024 + 1), headers)
+
+    expect(await client.fail("rest_list_computers")).toEqual({
+      code: "rest_unavailable",
+      message: "listComputers returned more than 33554432 bytes (HTTP 200)",
+    })
+  })
+
   it("reports a refused connection without a cause dump", async () => {
     const refused = await clientFor({
       factoryBaseUrl: "http://127.0.0.1:" + String(await closedPort()),
@@ -180,7 +192,7 @@ describe("hosted REST transport over MCP", () => {
     })
 
     expect(await client.ok("rest_list_computers")).toEqual({
-      computers: [{ id: "c-1", note: "[redacted]" }],
+      computers: [{ id: "c-1", note: "key [redacted]" }],
       apiKey: { id: "k-1" },
     })
 

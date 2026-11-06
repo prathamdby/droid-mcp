@@ -74,6 +74,10 @@ describe("rest-http", () => {
     )
   })
 
+  it("replaces a secret that contains a shorter one whole", () => {
+    expect(scrubSecrets("x org-1234 y", ["org", "org-1234"])).toBe("x [redacted] y")
+  })
+
   it("wraps bytes in a base64 envelope", () => {
     expect(binaryEnvelope(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), "application/zip")).toEqual({
       encoding: "base64",
@@ -120,10 +124,10 @@ describe("redact", () => {
     })
   })
 
-  it("replaces any string containing a configured secret", () => {
+  it("replaces only the configured secret inside a string", () => {
     expect(
       redact(["plain", "has canary-123 inside", { deep: ["canary-123"] }], ["canary-123"]),
-    ).toEqual(["plain", "[redacted]", { deep: ["[redacted]"] }])
+    ).toEqual(["plain", "has [redacted] inside", { deep: ["[redacted]"] }])
     expect(redact("anything", [""])).toBe("anything")
     expect(redact(42, ["4"])).toBe(42)
   })
@@ -131,6 +135,6 @@ describe("redact", () => {
   it("scrubs a minted key value wherever else the body repeats it", () => {
     expect(
       redact({ apiKey: { id: "k-2", value: "fk-live-9" }, hint: "export KEY=fk-live-9" }, []),
-    ).toEqual({ apiKey: { id: "k-2" }, hint: "[redacted]" })
+    ).toEqual({ apiKey: { id: "k-2" }, hint: "export KEY=[redacted]" })
   })
 })

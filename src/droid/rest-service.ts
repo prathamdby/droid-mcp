@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer"
+
 import { ContextApiError } from "@factory/droid-sdk"
 import type { ContextApiOptions } from "@factory/droid-sdk"
 import * as Context from "effect/Context"
@@ -95,6 +97,40 @@ interface Received {
 
 const BINARY_ACCEPT = "application/json, application/octet-stream;q=0.9, */*;q=0.8"
 
+/** A larger body is refused before it is buffered, and before a binary one is base64-encoded. */
+const RESPONSE_MAX_BYTES = 32 * 1024 * 1024
+
+/** The whole body, or `undefined` once it passes `RESPONSE_MAX_BYTES`. */
+const readCapped = async (response: Response): Promise<Uint8Array | undefined> => {
+  if (Number(response.headers.get("content-length") ?? "0") > RESPONSE_MAX_BYTES) {
+    await response.body?.cancel()
+
+    return undefined
+  }
+
+  if (response.body === null) return new Uint8Array()
+
+  const reader = response.body.getReader()
+  const chunks: Array<Uint8Array> = []
+  let total = 0
+  let next = await reader.read()
+
+  while (!next.done) {
+    total += next.value.byteLength
+
+    if (total > RESPONSE_MAX_BYTES) {
+      await reader.cancel()
+
+      return undefined
+    }
+
+    chunks.push(next.value)
+    next = await reader.read()
+  }
+
+  return new Uint8Array(Buffer.concat(chunks))
+}
+
 interface RequestHeaders {
   [name: string]: string
 }
@@ -134,9 +170,11 @@ const send = (
           signal: AbortSignal.any([signal, timeout]),
         })
 
-        const bytes = new Uint8Array(await response.arrayBuffer())
-
-        return { status: response.status, contentType: response.headers.get("content-type"), bytes }
+        return {
+          status: response.status,
+          contentType: response.headers.get("content-type"),
+          bytes: await readCapped(response),
+        }
       },
       catch: () =>
         new RestUnavailable({
@@ -147,7 +185,28 @@ const send = (
               " ms waiting for the Factory API"
             : request.operation + " could not reach the Factory API",
         }),
-    })
+    }).pipe(
+      Effect.flatMap((read) =>
+        read.bytes === undefined
+          ? Effect.fail(
+              new RestUnavailable({
+                message:
+                  request.operation +
+                  " returned more than " +
+                  String(RESPONSE_MAX_BYTES) +
+                  " bytes (HTTP " +
+                  String(read.status) +
+                  ")",
+                status: read.status,
+              }),
+            )
+          : Effect.succeed({
+              status: read.status,
+              contentType: read.contentType,
+              bytes: read.bytes,
+            }),
+      ),
+    )
   })
 
 const withDetail = (message: string, detail: string | undefined): string =>

@@ -1,7 +1,7 @@
 import * as Predicate from "effect/Predicate"
 
 import type { JsonValue } from "./protocol.ts"
-import { REDACTED } from "./rest-http.ts"
+import { scrubSecrets } from "./rest-http.ts"
 
 /** Keys whose values never leave the server, at any depth. */
 const SECRET_KEYS: ReadonlyArray<string> = [
@@ -19,9 +19,6 @@ const VALUE_PARENTS: ReadonlyArray<string> = ["apikey"]
 const VALUE_ARRAYS: ReadonlyArray<string> = ["secrets", "upsert"]
 
 const isSecretKey = (key: string): boolean => SECRET_KEYS.includes(key.toLowerCase())
-
-const containsSecret = (text: string, secrets: ReadonlyArray<string>): boolean =>
-  secrets.some((secret) => secret.length > 0 && text.includes(secret))
 
 interface JsonObject {
   readonly [key: string]: JsonValue
@@ -60,7 +57,7 @@ const redactObject = (
 }
 
 const redactValue = (value: JsonValue, secrets: ReadonlyArray<string>): JsonValue => {
-  if (Predicate.isString(value)) return containsSecret(value, secrets) ? REDACTED : value
+  if (Predicate.isString(value)) return scrubSecrets(value, secrets)
 
   if (Array.isArray(value)) return value.map((entry) => redactValue(entry, secrets))
 
@@ -88,9 +85,9 @@ const mintedValues = (value: JsonValue): ReadonlyArray<string> => {
 }
 
 /**
- * Drops credential fields and replaces any string that contains a configured
- * secret or a minted key value. Runs on every success body before it reaches a
- * client.
+ * Drops credential fields and replaces each occurrence of a configured secret
+ * or a minted key value inside strings. Runs on every success body before it
+ * reaches a client.
  */
 export const redact = (value: JsonValue, secrets: ReadonlyArray<string>): JsonValue =>
   redactValue(value, [...secrets, ...mintedValues(value)])

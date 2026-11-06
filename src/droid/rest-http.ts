@@ -42,11 +42,14 @@ export const isJsonContentType = (contentType: string | null): boolean => {
   return media === "application/json" || media.endsWith("+json")
 }
 
-/** Replaces every occurrence of a non-empty secret with a marker. */
+/**
+ * Replaces every occurrence of a non-empty secret with a marker. Longer
+ * secrets go first, so one that contains a shorter one is replaced whole.
+ */
 export const scrubSecrets = (text: string, secrets: ReadonlyArray<string>): string => {
   let result = text
 
-  for (const secret of secrets) {
+  for (const secret of [...secrets].sort((left, right) => right.length - left.length)) {
     if (secret.length > 0) result = result.split(secret).join(REDACTED)
   }
 
