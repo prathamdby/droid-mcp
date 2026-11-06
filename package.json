@@ -1,0 +1,37 @@
+{
+  "name": "droid-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server for Factory Droid, written in Effect and served over Streamable HTTP",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types src/main.ts serve",
+    "doctor": "node --experimental-strip-types src/main.ts doctor",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:http": "vitest run --project http",
+    "test:live": "DROID_MCP_LIVE_DAEMON=1 vitest run --project live",
+    "lint": "oxlint",
+    "fmt:check": "oxfmt --check .",
+    "fmt": "oxfmt --write .",
+    "codegen": "node --experimental-strip-types scripts/codegen.ts && node --experimental-strip-types scripts/embed-skill.ts",
+    "codegen:check": "node --experimental-strip-types scripts/codegen.ts --check && node --experimental-strip-types scripts/embed-skill.ts --check"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.1.2",
+    "@factory/droid-sdk": "0.10.0",
+    "effect": "4.1.2"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.91.0",
+    "@types/node": "^24.0.0",
+    "oxfmt": "0.76.0",
+    "oxlint": "1.91.0",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

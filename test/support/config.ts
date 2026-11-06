@@ -1,0 +1,22 @@
+import type { Config } from "../../src/config.ts"
+
+export const testConfig = (overrides: Partial<Config> = {}): Config => ({
+  command: "serve",
+  socketPath: "/tmp/droid-mcp-test/daemon.sock",
+  runtimeDir: "/tmp/droid-mcp-test",
+  droidPath: "droid",
+  host: "127.0.0.1",
+  port: 0,
+  keys: [],
+  keysFile: undefined,
+  maxAutonomy: "medium",
+  allowedOrigins: [],
+  daemonUrl: undefined,
+  factoryApiKey: undefined,
+  factoryBaseUrl: "https://api.factory.ai",
+  logLevel: "error",
+  promptTimeoutMs: 300_000,
+  requestTimeoutMs: 30_000,
+  initializeTimeoutMs: 60_000,
+  ...overrides,
+})
