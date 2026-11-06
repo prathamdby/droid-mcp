@@ -14,6 +14,8 @@ export const testConfig = (overrides: Partial<Config> = {}): Config => ({
   daemonUrl: undefined,
   factoryApiKey: undefined,
   factoryBaseUrl: "https://api.factory.ai",
+  factoryContextBaseUrl: undefined,
+  factoryContextHeaders: {},
   logLevel: "error",
   promptTimeoutMs: 300_000,
   requestTimeoutMs: 30_000,

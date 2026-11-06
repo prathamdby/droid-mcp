@@ -1,3 +1,6 @@
+import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
+
 import { ConfigError, errorMessage } from "./droid/errors.ts"
 import { LOG_LEVELS, isLogLevel } from "./log.ts"
 import type { LogLevel } from "./log.ts"
@@ -24,6 +27,10 @@ export interface Config {
   readonly daemonUrl: string | undefined
   readonly factoryApiKey: string | undefined
   readonly factoryBaseUrl: string
+  /** A Prem origin serving `/api/context`; never defaulted to the hosted API. */
+  readonly factoryContextBaseUrl: string | undefined
+  /** Extra headers for Context requests, such as a deployment's organization header. */
+  readonly factoryContextHeaders: Readonly<Record<string, string>>
   readonly logLevel: LogLevel
   readonly promptTimeoutMs: number
   readonly requestTimeoutMs: number
@@ -91,6 +98,93 @@ const parseLogLevel = (raw: string): LogLevel => {
   if (isLogLevel(raw)) return raw
   throw new ConfigError({ message: "--log-level must be one of " + LOG_LEVELS.join(", ") })
 }
+
+/**
+ * A base URL must be a bare http(s) origin: request paths are appended to it,
+ * so a path, query, or embedded credentials would silently change every call.
+ */
+export const parseOrigin = (name: string, raw: string): string => {
+  const invalid = (reason: string): ConfigError =>
+    new ConfigError({ message: name + " must be an http(s) origin: " + reason })
+
+  let url: URL
+
+  try {
+    url = new URL(raw)
+  } catch {
+    throw invalid("not a URL")
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw invalid("unsupported scheme")
+
+  if (url.username !== "" || url.password !== "") throw invalid("credentials are not allowed")
+
+  if (url.search !== "" || url.hash !== "" || raw.includes("?") || raw.includes("#")) {
+    throw invalid("query and fragment are not allowed")
+  }
+
+  if (url.pathname !== "/") throw invalid("a path is not allowed")
+
+  return url.origin
+}
+
+/** Headers the server owns or that would break framing; operators cannot set them. */
+const RESERVED_HEADERS: ReadonlyArray<string> = [
+  "authorization",
+  "cookie",
+  "host",
+  "proxy-authorization",
+  "connection",
+  "content-length",
+  "content-type",
+  "transfer-encoding",
+  "te",
+  "upgrade",
+  "keep-alive",
+  "expect",
+  "trailer",
+]
+
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+const HEADER_VALUE_FORBIDDEN = /[\r\n\0]/
+
+const HeaderRecord = Schema.Record(Schema.String, Schema.String)
+
+export const parseContextHeaders = (raw: string | undefined): Readonly<Record<string, string>> => {
+  if (raw === undefined || raw.trim().length === 0) return {}
+
+  const invalid = (reason: string): ConfigError =>
+    new ConfigError({ message: "FACTORY_CONTEXT_HEADERS " + reason })
+
+  let parsed: Schema.Json
+
+  try {
+    parsed = Schema.decodeUnknownSync(Schema.Json)(JSON.parse(raw))
+  } catch {
+    throw invalid("must be a JSON object of string values")
+  }
+
+  const headers = Option.getOrUndefined(Schema.decodeUnknownOption(HeaderRecord)(parsed))
+
+  if (headers === undefined) {
+    throw invalid("must be a JSON object of string values")
+  }
+
+  for (const [name, value] of Object.entries(headers)) {
+    if (!HEADER_NAME.test(name)) throw invalid("has an invalid header name")
+
+    if (RESERVED_HEADERS.includes(name.toLowerCase())) {
+      throw invalid("may not set " + name.toLowerCase())
+    }
+
+    if (HEADER_VALUE_FORBIDDEN.test(value)) throw invalid("has an invalid value for " + name)
+  }
+
+  return headers
+}
+
+const nonEmpty = (raw: string | undefined): string | undefined =>
+  raw === undefined || raw.trim().length === 0 ? undefined : raw
 
 const parseCommand = (raw: string | undefined): Command => {
   if (raw === undefined) return "help"
@@ -187,8 +281,17 @@ export const parseConfig = (
     allowedOrigins,
     daemonUrl: values.get("--daemon-url") ?? env["DROID_MCP_DAEMON_URL"],
     factoryApiKey: env["FACTORY_API_KEY"],
-    factoryBaseUrl:
-      values.get("--factory-base-url") ?? env["FACTORY_BASE_URL"] ?? "https://api.factory.ai",
+    factoryBaseUrl: parseOrigin(
+      "FACTORY_BASE_URL",
+      values.get("--factory-base-url") ??
+        nonEmpty(env["FACTORY_BASE_URL"]) ??
+        "https://api.factory.ai",
+    ),
+    factoryContextBaseUrl:
+      nonEmpty(env["FACTORY_CONTEXT_BASE_URL"]) === undefined
+        ? undefined
+        : parseOrigin("FACTORY_CONTEXT_BASE_URL", env["FACTORY_CONTEXT_BASE_URL"] ?? ""),
+    factoryContextHeaders: parseContextHeaders(env["FACTORY_CONTEXT_HEADERS"]),
     logLevel: parseLogLevel(logLevelRaw),
     promptTimeoutMs:
       values.get("--prompt-timeout") !== undefined

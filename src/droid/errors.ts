@@ -58,6 +58,13 @@ export class FactoryApiKeyMissing extends Schema.TaggedError<FactoryApiKeyMissin
   },
 ) {}
 
+export class ContextBaseUrlMissing extends Schema.TaggedError<ContextBaseUrlMissing>()(
+  "ContextBaseUrlMissing",
+  {
+    message: Schema.String,
+  },
+) {}
+
 export class ConfigError extends Schema.TaggedError<ConfigError>()("ConfigError", {
   message: Schema.String,
 }) {}
@@ -82,6 +89,7 @@ export const AppErrors = Schema.Union([
   ExecFailed,
   ExecTimeout,
   FactoryApiKeyMissing,
+  ContextBaseUrlMissing,
   ConfigError,
 ])
 
@@ -95,6 +103,7 @@ const ERROR_CODES = {
   ExecFailed: "exec_failed",
   ExecTimeout: "exec_timeout",
   FactoryApiKeyMissing: "factory_api_key_missing",
+  ContextBaseUrlMissing: "context_base_url_missing",
   ConfigError: "config_invalid",
 } satisfies { readonly [Tag in (typeof AppErrors.Type)["_tag"]]: string }
 
