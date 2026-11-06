@@ -2,6 +2,7 @@ import * as Tool from "effect/ai/Tool"
 import * as Toolkit from "effect/ai/Toolkit"
 
 import type { Config } from "../config.ts"
+import { contextTools } from "./context.ts"
 import { generatedSurface } from "./generated.ts"
 import { restTools } from "./rest.ts"
 import { Info, infoHandler } from "./server.ts"
@@ -24,7 +25,8 @@ export const toolsFor = (config: Config) => {
   const mcp = sessionMcpTools()
   const history = sessionHistoryTools()
   const discover = sessionDiscoverTools(config)
-  const rest = restTools(config)
+  const rest = restTools()
+  const context = contextTools()
 
   const tools: Array<Tool.Any> = [
     Info,
@@ -35,6 +37,7 @@ export const toolsFor = (config: Config) => {
     ...history.tools,
     ...discover.tools,
     ...rest.tools,
+    ...context.tools,
     ...generated.tools,
   ]
 
@@ -52,6 +55,7 @@ export const toolsFor = (config: Config) => {
     ...history.handlers,
     ...discover.handlers,
     ...rest.handlers,
+    ...context.handlers,
     ...generated.handlers,
   }
 

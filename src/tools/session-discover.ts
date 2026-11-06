@@ -9,7 +9,7 @@ import type { JsonValue } from "../droid/protocol.ts"
 import { SessionHubService, TurnResultSchema } from "../droid/turns.ts"
 import { ToolFailure } from "./failure.ts"
 import { requireAutonomy, requireCwd, toolFailure } from "./guards.ts"
-import { AutonomySchema } from "./session.ts"
+import { AutonomySchema, WaitMsSchema } from "./session.ts"
 
 const send = (
   sessionId: string,
@@ -71,7 +71,7 @@ const Run = Tool.make("session_run", {
     prompt: Schema.String,
     autonomyLevel: AutonomySchema,
     modelId: Schema.optional(Schema.String),
-    waitMs: Schema.optional(Schema.Number),
+    waitMs: Schema.optional(WaitMsSchema),
   }),
   success: TurnResultSchema,
   failure: ToolFailure,

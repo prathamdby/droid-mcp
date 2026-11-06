@@ -4,11 +4,20 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
 import type { Config } from "../config.ts"
-import { SessionHubService, SessionSettingsSchema, TurnResultSchema } from "../droid/turns.ts"
+import {
+  MAX_WAIT_MS,
+  SessionHubService,
+  SessionSettingsSchema,
+  TurnResultSchema,
+} from "../droid/turns.ts"
 import { ToolFailure } from "./failure.ts"
 import { requireAutonomy, requireCwd, toolFailure } from "./guards.ts"
 
 export const AutonomySchema = Schema.Literals(["off", "low", "medium", "high"])
+
+export const WaitMsSchema = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: MAX_WAIT_MS }),
+).annotate({ description: "How long to wait, in milliseconds: 20000 by default, 300000 at most." })
 
 const Create = Tool.make("session_create", {
   description:
@@ -38,7 +47,7 @@ const Stream = Tool.make("session_stream", {
   parameters: Schema.Struct({
     sessionId: Schema.String,
     prompt: Schema.String,
-    waitMs: Schema.optional(Schema.Number),
+    waitMs: Schema.optional(WaitMsSchema),
   }),
   success: TurnResultSchema,
   failure: ToolFailure,
@@ -51,8 +60,8 @@ const Events = Tool.make("session_events", {
     "is repeated. Set truncated when the cursor is older than the retained buffer.",
   parameters: Schema.Struct({
     sessionId: Schema.String,
-    cursor: Schema.Number,
-    waitMs: Schema.optional(Schema.Number),
+    cursor: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    waitMs: Schema.optional(WaitMsSchema),
   }),
   success: TurnResultSchema,
   failure: ToolFailure,

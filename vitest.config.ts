@@ -37,6 +37,7 @@ export default defineConfig({
             "test/codegen/**/*.test.ts",
             "test/daemon/**/*.test.ts",
             "test/rest/**/*.test.ts",
+            "test/context/**/*.test.ts",
             "test/skill/**/*.test.ts",
             "test/acceptance/**/*.test.ts",
           ],

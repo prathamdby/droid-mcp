@@ -142,6 +142,15 @@ describe("exec client", () => {
     expect(outcome.exit.stderr).toContain("boom")
   })
 
+  it("fails without crashing when the droid binary is missing", async () => {
+    const failure = await Effect.runPromise(
+      start({ droidPath: join(here, "missing-droid"), cwd: here, version }).pipe(Effect.flip),
+    )
+
+    expect(failure._tag).toBe("ExecFailed")
+    expect(failure.detail).toContain("ENOENT")
+  })
+
   it("times out a request that never answers", async () => {
     const outcome = await Effect.runPromise(
       withClient((client) =>

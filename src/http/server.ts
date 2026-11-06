@@ -74,7 +74,7 @@ export const mcpLayer = (options: ServerOptions) => {
     Layer.provide(handlers),
     Layer.provide(sessionHubLayer(hubOptions(options.config))),
     Layer.provide(daemonLayer(options.config)),
-    Layer.provide(restLayer(options.config)),
+    Layer.provide(restLayer(options.config, options.keys)),
   ) as Layer.Layer<never, never, never>
 
   const registrations = Layer.mergeAll(toolRegistrations, skillRegistrations)

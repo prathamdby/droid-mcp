@@ -1,21 +1,28 @@
 # droid-mcp
 
-droid-mcp is an MCP server that lets an AI assistant drive Factory Droid on your machine. You connect an MCP client to it, and the assistant can start Droid sessions, run turns, answer permission prompts, and manage long-running daemon sessions through tools.
+droid-mcp is an MCP server that lets an AI assistant drive Factory Droid on your machine. You connect an MCP client to it, and the assistant can start Droid sessions, run turns, answer permission prompts, manage long-running daemon sessions, and reach the hosted Factory API and the Context API through tools.
 
 ## What it does
 
-The server provides 199 tools in three groups.
+The server provides 287 tools in six families. 158 are generated from the Factory Droid SDK, one per wire method, and 129 are hand-written.
 
-- 158 tools generated from the Factory Droid SDK. Each SDK method becomes one MCP tool.
-- 31 tools for the session loop and prompts.
-- 9 tools for the hosted Factory API, covering computers and their metrics.
+| Prefix     | Count | What the tools cover                                                                                            |
+| ---------- | ----- | --------------------------------------------------------------------------------------------------------------- |
+| `daemon_`  | 130   | Generated. The long-running `droid daemon`: its sessions, automations, worktrees, and MCP servers.              |
+| `droid_`   | 28    | Generated. Session-scoped SDK methods that the `session_*` tools do not already own.                            |
+| `session_` | 31    | The local turn loop, prompts, and per-session administration.                                                   |
+| `rest_`    | 79    | The hosted Factory API: computers, Environments, hosted sessions, wiki, CI, organization, and service accounts. |
+| `context_` | 18    | The Context API on a Prem origin: spaces, documents, files, and stored session records.                         |
+| `server_`  | 1     | `server_info`.                                                                                                  |
+
+The 79 `rest_*` tools cover the 77 operations of the published Factory OpenAPI document (version 0.1.0) plus the two machine-template operations the SDK still calls.
 
 It also serves a `droid` skill and a `droid` prompt that teach the assistant the turn loop, so you do not have to explain it yourself.
 
 A turn works like this.
 
 1. `session_create` starts a Droid child process for a working directory and an autonomy level. The server rejects any autonomy level above the cap reported by `server_info`.
-2. `session_stream` sends the prompt and waits up to `waitMs`, 20 seconds by default.
+2. `session_stream` sends the prompt and waits up to `waitMs`, 20 seconds by default and 300 seconds at most.
 3. If the turn is still running, call `session_events` with the cursor it returned. The cursor is the last event sequence number you have seen, so events do not repeat. Call it until the status is `completed`, `failed`, or `interrupted`.
 4. While the turn runs, prompts such as `pending_permission`, `pending_question`, and `pending_options` appear, each with a deadline. Answer them with the matching tool.
 5. `session_close` stops the process. Sessions idle for 30 minutes are closed automatically.
@@ -24,7 +31,7 @@ A turn works like this.
 
 - Node.js 24 or newer. The server runs its TypeScript directly with Node's type stripping, so there is no build step.
 - The `droid` CLI on your `PATH`.
-- A Factory API key in `FACTORY_API_KEY`. Droid itself needs this key.
+- A Factory API key in `FACTORY_API_KEY`. Droid itself needs this key, and so do the `rest_*` and `context_*` tools.
 - pnpm, to install dependencies.
 
 ## Set it up
@@ -74,17 +81,22 @@ Each flag also has an environment variable. The defaults work for a local instal
 | `--runtime-dir`      | `DROID_MCP_RUNTIME_DIR`     |                                                     |
 | `--allow-origin`     | `DROID_MCP_ALLOWED_ORIGINS` | none, requests with an `Origin` header are rejected |
 | `--factory-base-url` | `FACTORY_BASE_URL`          | `https://api.factory.ai`                            |
+|                      | `FACTORY_CONTEXT_BASE_URL`  | none, the `context_*` tools fail until it is set    |
+|                      | `FACTORY_CONTEXT_HEADERS`   | none                                                |
 | `--log-level`        | `DROID_MCP_LOG_LEVEL`       | `info`                                              |
 | `--prompt-timeout`   |                             | `300000` ms                                         |
 | `--request-timeout`  |                             | `30000` ms                                          |
 
 `--max-autonomy` accepts `off`, `low`, `medium`, or `high`. `FACTORY_API_KEY` is read from the environment and is never logged and never returned by a tool.
 
+`FACTORY_BASE_URL` and `FACTORY_CONTEXT_BASE_URL` must be bare `http` or `https` origins, with no path, query, fragment, or credentials. The `rest_*` tools call `FACTORY_BASE_URL`. The `context_*` tools call `FACTORY_CONTEXT_BASE_URL`, the Prem origin that serves the Context API, and fail with `context_base_url_missing` while it is unset. `FACTORY_CONTEXT_HEADERS` is a JSON object of string values sent with every Context request, for example `{"x-factory-organization":"org-..."}`. It may not set `authorization`, `cookie`, `host`, or framing headers such as `content-type`. An invalid value for any of the three stops startup with exit code 2. Context header values are treated as secrets, like the API key.
+
 ## Security
 
 - Keep the MCP keys secret. Anyone who has a key can drive Droid on the host.
 - The server binds to localhost by default. Do not expose the port without TLS and a required key.
 - Requests that carry an `Origin` header are rejected unless you allow that origin explicitly.
+- The REST and Context tools redact secrets from results and errors. A minted service-account key value is never returned, and secret values sent to the organization secrets tool are never echoed back.
 
 ## Development
 
@@ -108,7 +120,7 @@ src/
 ├── main.ts              # doctor | serve
 ├── config.ts            # flags and env, no Effect
 ├── http/                # Streamable HTTP and bearer auth
-├── droid/               # exec client, turn hub, prompts, daemon, REST
+├── droid/               # exec client, turn hub, prompts, daemon, REST and Context
 ├── tools/               # hand-written tools plus one generated tool per SDK method
 ├── generated/           # codegen output, do not edit
 └── skill/droid/         # the skill markdown, embedded at build time

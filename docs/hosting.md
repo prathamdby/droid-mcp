@@ -40,11 +40,37 @@ sudo -u droid sh -c 'umask 077; openssl rand -hex 32 > /etc/droid-mcp/keys'
 Use `--keys-file /etc/droid-mcp/keys`. The server refuses to start with no keys:
 there is no unauthenticated mode.
 
-`FACTORY_API_KEY` goes in the environment file, not the keys file.
+`FACTORY_API_KEY` and the Factory origins go in the environment file, not the keys
+file. The file holds secrets, so keep it readable by the service user only:
 
 ```sh
-sudo -u droid sh -c 'umask 077; printf "FACTORY_API_KEY=%s\n" "fk-..." > /etc/droid-mcp/env'
+sudo -u droid sh -c 'umask 077; cat > /etc/droid-mcp/env' <<'EOF'
+FACTORY_API_KEY=fk-...
+FACTORY_BASE_URL=https://api.factory.ai
+FACTORY_CONTEXT_BASE_URL=https://prem.example.com
+FACTORY_CONTEXT_HEADERS={"x-factory-organization":"org-..."}
+EOF
 ```
+
+- `FACTORY_BASE_URL` is the hosted Factory API the `rest_*` tools call. It
+  defaults to `https://api.factory.ai`, so leave it out unless you use another
+  deployment.
+- `FACTORY_CONTEXT_BASE_URL` is the Prem origin that serves the Context API.
+  Without it the `context_*` tools fail with `context_base_url_missing` and
+  everything else still works.
+- `FACTORY_CONTEXT_HEADERS` is a JSON object of string values sent with every
+  Context request. Use it for the organization header your Prem deployment
+  expects; the header name is deployment-specific. It may not set
+  `authorization`, `cookie`, `host`, or framing headers. Write the JSON on one
+  line and do not wrap it in quotes.
+
+Both base URLs must be bare origins: a scheme, a host, and an optional port,
+with no path, query, fragment, or credentials. Use `https://` for anything that
+leaves the machine, because every request carries `FACTORY_API_KEY` as a bearer
+token and Context requests also carry the configured header values. Plain
+`http://` is only for a local test server. An invalid value stops the service
+at startup with exit code 2 and a `config_invalid` line in the journal that
+names the variable but not its value.
 
 ## 3. Service
 
@@ -85,7 +111,7 @@ journalctl -u droid-mcp -f
 ```
 
 The server logs one JSON object per event to stderr. It never logs prompts, tool
-arguments, or the API key.
+arguments, the API key, or Context header values.
 
 ## 4. TLS
 
