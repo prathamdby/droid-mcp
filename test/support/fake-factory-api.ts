@@ -424,6 +424,10 @@ const COMPUTER_ROUTES: ReadonlyArray<readonly [string, RouteHandler]> = [
 
       if (!state.computers.has(computerId)) return notFound("computer")
 
+      if (paramOf(request, "fileName").includes("/")) {
+        return badRequest("fileName may not contain a slash")
+      }
+
       if (!Predicate.isNumber(body.sizeBytes) || !Predicate.isString(body.contentType)) {
         return badRequest("sizeBytes and contentType are required")
       }
@@ -455,6 +459,10 @@ const COMPUTER_ROUTES: ReadonlyArray<readonly [string, RouteHandler]> = [
 
       if (!Predicate.isString(body.transferId) || !Predicate.isString(body.sessionId)) {
         return badRequest("transferId and sessionId are required")
+      }
+
+      if (Predicate.isString(body.destPath) && body.destPath.startsWith("/")) {
+        return badRequest("destPath must be relative")
       }
 
       const transfer = state.transfers.get(body.transferId)
@@ -553,6 +561,15 @@ const ENVIRONMENT_ROUTES: ReadonlyArray<readonly [string, RouteHandler]> = [
 
       if (!Predicate.isString(body.name) || !Array.isArray(body.repositories)) {
         return badRequest("name and repositories are required")
+      }
+
+      // Both published repository shapes require a url and a script.
+      if (
+        !body.repositories.every((repository) =>
+          Schema.is(Schema.Struct({ url: Schema.String, script: Schema.String }))(repository),
+        )
+      ) {
+        return badRequest("each repository needs a url and a script")
       }
 
       const id = nextId(state, "e-")

@@ -195,8 +195,7 @@ describe("rest service account tools over MCP", () => {
     const outcome = await client.call("rest_rotate_service_account_api_key", {
       serviceAccountId: "sa-1",
       keyId: "key-1",
-      expiresAt: EXPIRES_AT,
-      gracePeriodMinutes: 5,
+      body: { expiresAt: EXPIRES_AT, gracePeriodMinutes: 5 },
     })
 
     const minted = api.state.mintedKeyValues[0] ?? ""
@@ -225,7 +224,7 @@ describe("rest service account tools over MCP", () => {
       const outcome = await client.call("rest_rotate_service_account_api_key", {
         serviceAccountId: "sa-1",
         keyId: "key-1",
-        gracePeriodMinutes,
+        body: { gracePeriodMinutes },
       })
 
       expect(outcome.rpcError ?? outcome.isError).toBeTruthy()

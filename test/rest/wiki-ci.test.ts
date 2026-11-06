@@ -222,6 +222,32 @@ describe("rest wiki and CI tools over MCP", () => {
     expect(api.last()?.headers.accept).toContain("application/octet-stream")
   })
 
+  it("refuses export bytes that contain the Factory key, and scrubs it from the content type", async () => {
+    const leaked = new TextEncoder().encode("PK\u0003\u0004 factory-wiki-key")
+
+    api.route("GET /api/v0/wiki/{wikiRunId}/export", () => ({
+      bytes: leaked,
+      contentType: "application/zip",
+    }))
+
+    expect(await client.fail("rest_export_wiki_run", { wikiRunId: "w-1" })).toEqual({
+      code: "rest_unavailable",
+      message: "exportWikiRun returned binary content containing a protected value; refused",
+    })
+
+    api.route("GET /api/v0/wiki/{wikiRunId}/export", () => ({
+      bytes: WIKI_ZIP,
+      contentType: "application/zip; name=factory-wiki-key",
+    }))
+
+    const envelope = Schema.decodeUnknownSync(Envelope)(
+      await client.ok("rest_export_wiki_run", { wikiRunId: "w-1" }),
+    )
+
+    expect(envelope.contentType).toBe("application/zip; name=[redacted]")
+    expect(Buffer.from(envelope.data, "base64").equals(Buffer.from(WIKI_ZIP))).toBe(true)
+  })
+
   it("passes a JSON export answer through unchanged", async () => {
     const json = { status: "pending", files: [{ path: "index.md", sizeBytes: 12 }] }
 

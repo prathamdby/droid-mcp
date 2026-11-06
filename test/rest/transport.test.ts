@@ -209,6 +209,86 @@ describe("hosted REST transport over MCP", () => {
     )
   })
 
+  it("scrubs configured secrets from member names", async () => {
+    api.failNext(LIST, 200, { computers: [], [FACTORY_KEY]: { ["x-" + MCP_KEY]: 1 } })
+
+    const outcome = await client.call("rest_list_computers")
+
+    expect(outcome.structured).toEqual({ computers: [], "[redacted]": { "x-[redacted]": 1 } })
+    expect(outcome.text).not.toContain(FACTORY_KEY)
+    expect(outcome.text).not.toContain(MCP_KEY)
+  })
+
+  it("scrubs a key minted in an error body from its detail", async () => {
+    api.failNext(LIST, 500, {
+      detail: "rotation half-done; new key fk-minted-1 is live",
+      status: 500,
+      title: "x",
+      apiKey: { id: "k-9", value: "fk-minted-1" },
+    })
+
+    expect(await client.fail("rest_list_computers")).toEqual({
+      code: "rest_unavailable",
+      message:
+        "listComputers failed upstream (HTTP 500): rotation half-done; new key [redacted] is live",
+    })
+  })
+
+  it("keeps a member named __proto__ as data", async () => {
+    api.failNext(LIST, 200, '{"computers":[],"__proto__":{"x":1}}')
+
+    const outcome = await client.call("rest_list_computers")
+
+    expect(outcome.isError).toBe(false)
+    expect(JSON.parse(outcome.text)).toEqual(JSON.parse('{"computers":[],"__proto__":{"x":1}}'))
+  })
+
+  it("refuses deeply nested JSON as rest_unavailable instead of overflowing", async () => {
+    const deep = "[".repeat(3_000) + "]".repeat(3_000)
+
+    api.failNext(LIST, 200, deep)
+    api.failNext(LIST, 500, '{"detail":' + deep + "}")
+
+    expect(await client.fail("rest_list_computers")).toEqual({
+      code: "rest_unavailable",
+      message: "listComputers returned a malformed response (HTTP 200)",
+    })
+    expect(await client.fail("rest_list_computers")).toEqual({
+      code: "rest_unavailable",
+      message: "listComputers failed upstream (HTTP 500)",
+    })
+  })
+
+  it("returns a JSON null body as null, not an acknowledgment", async () => {
+    api.failNext(LIST, 200, null)
+
+    const outcome = await client.call("rest_list_computers")
+
+    expect(outcome.isError).toBe(false)
+    expect(outcome.text).toBe("null")
+  })
+
+  it("refuses a lone surrogate in a path or query value before any request", async () => {
+    const path = await client.fail("rest_get_computer", { computerId: "\ud800" })
+    const named = await client.fail("rest_list_computers", { hostId: "a\udfff" })
+    const extra = await client.fail("rest_list_computers", { query: { tag: ["ok", "\ud800"] } })
+
+    expect(path).toEqual({
+      code: "invalid_params",
+      message:
+        "rest_get_computer: computerId must be a non-empty, well-formed path segment other than . or ..",
+    })
+    expect(named).toEqual({
+      code: "invalid_params",
+      message: "rest_list_computers: query parameter hostId is not well-formed Unicode",
+    })
+    expect(extra).toEqual({
+      code: "invalid_params",
+      message: "rest_list_computers: query parameter tag is not well-formed Unicode",
+    })
+    expect(api.requests).toHaveLength(0)
+  })
+
   it("answers 401 for a missing or wrong MCP bearer before any tool runs", async () => {
     const server = await startServer({
       config: testConfig({ factoryApiKey: FACTORY_KEY, factoryBaseUrl: api.baseUrl }),

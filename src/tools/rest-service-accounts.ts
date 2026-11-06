@@ -108,19 +108,19 @@ export const serviceAccountTools = (): RestDomain =>
       name: "rest_rotate_service_account_api_key",
       operation: "rotateServiceAccountApiKey",
       description:
-        "Replace an API key with a new one, optionally expiring at `expiresAt`, and keep the " +
-        "old key valid for `gracePeriodMinutes`. Returns the new key's metadata and a notice; " +
+        "Replace an API key with a new one. `body` is optional: `expiresAt` sets the new " +
+        "key's expiry and `gracePeriodMinutes` keeps the old key valid; without them the old " +
+        "key is revoked at once. Returns the new key's metadata and a notice; " +
         "the one-time value is dropped. " +
         DESTRUCTIVE,
       method: "POST",
       path: KEYS + "/{keyId}/rotate",
-      inputs: {
-        serviceAccountId: Id,
-        keyId: Id,
+      inputs: { serviceAccountId: Id, keyId: Id },
+      body: {
         expiresAt: Schema.optional(ExpiresAt),
         gracePeriodMinutes: Schema.optional(GracePeriodMinutes),
       },
-      bodyFields: ["expiresAt", "gracePeriodMinutes"],
+      bodyOptional: true,
       result: withKeyNotice,
     }),
     restTool({

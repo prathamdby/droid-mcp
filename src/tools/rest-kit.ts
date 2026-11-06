@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema"
 
 import { presentFields } from "../droid/protocol.ts"
 import type { JsonValue } from "../droid/protocol.ts"
-import { encodePathSegment } from "../droid/rest-http.ts"
+import { encodePathSegment, isWellFormed } from "../droid/rest-http.ts"
 import { RestService } from "../droid/rest-service.ts"
 import type { RestError, RestMethod, RestResponse, RestResult } from "../droid/rest-service.ts"
 import { ToolFailure } from "./failure.ts"
@@ -31,6 +31,10 @@ export const Cursor = Schema.String
 export const BooleanFlag = Schema.Boolean
 
 export const JsonBody = Schema.Record(Schema.String, Schema.Json)
+
+/** An object whose listed fields are checked; upstream accepts more members, kept as given. */
+export const openStruct = <const Fields extends Schema.Struct.Fields>(fields: Fields) =>
+  Schema.StructWithRest(Schema.Struct(fields), [JsonBody])
 
 const QueryScalar = Schema.Union([Schema.String, Schema.Finite, Schema.Boolean])
 
@@ -69,18 +73,19 @@ export interface RestToolSpec<Fields extends Schema.Struct.Fields> {
    * required with those fields required and every other member kept.
    */
   readonly body?: "optional" | Schema.Struct.Fields
+  /** Lets a field-record `body` be omitted, so upstream applies its defaults. */
+  readonly bodyOptional?: boolean
   /** Inputs gathered into a flat JSON body; omitted when none is present. */
   readonly bodyFields?: ReadonlyArray<keyof Fields & string>
   readonly response?: RestResponse
   /** Projection of the upstream result; the default passes JSON and maps empty to `{ ok: true }`. */
-  readonly result?: (json: RestResult, params: RestParams) => JsonValue
+  readonly result?: (json: RestResult) => JsonValue
   readonly success?: Schema.Top
   /** Per-call values that must be scrubbed from results and errors. */
   readonly secrets?: (params: RestParams) => ReadonlyArray<string>
 }
 
 export interface RestToolEntry {
-  readonly name: string
   readonly tool: Tool.Any
   readonly handler: RestHandler
 }
@@ -136,7 +141,8 @@ const queryEntries = (
   return [[name, scalarText(value)]]
 }
 
-const defaultResult = (json: RestResult): JsonValue => json ?? { ok: true }
+/** Only an empty success is acknowledged; a JSON `null` body is a result like any other. */
+const defaultResult = (json: RestResult): JsonValue => (json === undefined ? { ok: true } : json)
 
 /** Builds one hosted REST tool and its handler from a descriptor. */
 export const restTool = <const Fields extends Schema.Struct.Fields>(
@@ -158,7 +164,9 @@ export const restTool = <const Fields extends Schema.Struct.Fields>(
   if (spec.body === "optional") {
     fields[BODY_FIELD] = Schema.optional(JsonBody)
   } else if (spec.body !== undefined) {
-    fields[BODY_FIELD] = Schema.StructWithRest(Schema.Struct(spec.body), [JsonBody])
+    const body = openStruct(spec.body)
+
+    fields[BODY_FIELD] = spec.bodyOptional === true ? Schema.optional(body) : body
   }
 
   const named = new Set(Object.keys(fields))
@@ -188,7 +196,10 @@ export const restTool = <const Fields extends Schema.Struct.Fields>(
 
       if (segment === undefined) {
         return Effect.fail(
-          invalidParams(spec.name, name + " must be a non-empty path segment other than . or .."),
+          invalidParams(
+            spec.name,
+            name + " must be a non-empty, well-formed path segment other than . or ..",
+          ),
         )
       }
 
@@ -207,9 +218,7 @@ export const restTool = <const Fields extends Schema.Struct.Fields>(
       Schema.decodeUnknownOption(ExtraQuery)(params[EXTRA_QUERY_FIELD]),
     )
 
-    if (extra === undefined) return Effect.succeed(entries)
-
-    for (const [key, value] of Object.entries(extra)) {
+    for (const [key, value] of Object.entries(extra ?? {})) {
       if (named.has(key)) {
         return Effect.fail(
           invalidParams(spec.name, "query." + key + " duplicates the named input " + key),
@@ -217,6 +226,14 @@ export const restTool = <const Fields extends Schema.Struct.Fields>(
       }
 
       entries.push(...queryEntries(key, value))
+    }
+
+    const malformed = entries.find(([key, value]) => !isWellFormed(key) || !isWellFormed(value))
+
+    if (malformed !== undefined) {
+      return Effect.fail(
+        invalidParams(spec.name, "query parameter " + malformed[0] + " is not well-formed Unicode"),
+      )
     }
 
     return Effect.succeed(entries)
@@ -256,10 +273,10 @@ export const restTool = <const Fields extends Schema.Struct.Fields>(
         })
         .pipe(Effect.mapError(restFailure))
 
-      return project(json, params)
+      return project(json)
     })
 
-  return { name: spec.name, tool, handler }
+  return { tool, handler }
 }
 
 /** Collects a domain's descriptors into the `{ tools, handlers }` pair `toolsFor` merges. */
@@ -268,10 +285,10 @@ export const restDomain = (entries: ReadonlyArray<RestToolEntry>): RestDomain =>
   const handlers: Record<string, RestHandler> = {}
 
   for (const entry of entries) {
-    if (entry.name in handlers) throw new Error("duplicate REST tool " + entry.name)
+    if (entry.tool.name in handlers) throw new Error("duplicate REST tool " + entry.tool.name)
 
     tools.push(entry.tool)
-    handlers[entry.name] = entry.handler
+    handlers[entry.tool.name] = entry.handler
   }
 
   return { tools, handlers }

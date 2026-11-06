@@ -122,7 +122,12 @@ export const remoteSessionTools = (): RestDomain =>
       method: "POST",
       path: SESSION + "/messages",
       inputs: { sessionId: Id },
-      body: { text: Id, computerId: Schema.optional(Schema.String) },
+      body: {
+        text: Schema.String.annotate({
+          description: "The message text; may be empty when images or files carry the message.",
+        }),
+        computerId: Schema.optional(Schema.String),
+      },
     }),
     restTool({
       name: "rest_get_remote_session_message",

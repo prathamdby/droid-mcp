@@ -550,6 +550,133 @@ describe("context tools over MCP", () => {
     expect(new URLSearchParams(api.last()?.query).get("afterSequence")).toBe("2")
   })
 
+  /** Uploads `bytes` as one part and commits them, returning the file ID. */
+  const commitFile = async (spaceId: string, bytes: Uint8Array): Promise<string> => {
+    const upload = Schema.decodeUnknownSync(Upload)(
+      await client.ok("context_create_file", {
+        spaceId,
+        contentType: "image/png",
+        sizeBytes: bytes.byteLength,
+        sha256: sha256(bytes),
+      }),
+    )
+
+    await client.ok("context_upload_file_part", {
+      spaceId,
+      fileId: upload.fileId,
+      partIndex: 0,
+      contentBase64: base64(bytes),
+    })
+    await client.ok("context_create_document", {
+      spaceId,
+      path: "file-" + upload.fileId + ".png",
+      fileId: upload.fileId,
+    })
+
+    return upload.fileId
+  }
+
+  it("returns file-part bytes intact even when their base64 spells a configured value", async () => {
+    const spaceId = await createSpace()
+    const fileId = await commitFile(spaceId, new Uint8Array([1, 2, 3]))
+
+    await withClient(
+      { factoryContextHeaders: { [TENANT_HEADER]: TENANT, "x-probe": "AQID" } },
+      async (other) => {
+        expect(await other.ok("context_read_file_part", { spaceId, fileId, partIndex: 0 })).toEqual(
+          { partIndex: 0, sizeBytes: 3, encoding: "base64", data: "AQID" },
+        )
+      },
+    )
+  })
+
+  it("refuses a file part whose bytes contain a configured value", async () => {
+    const spaceId = await createSpace()
+    const fileId = await commitFile(spaceId, new TextEncoder().encode("PNG " + TENANT))
+
+    expect(await client.fail("context_read_file_part", { spaceId, fileId, partIndex: 0 })).toEqual({
+      code: "rest_unavailable",
+      message: "readContextFilePart returned binary content containing a protected value; refused",
+    })
+  })
+
+  it.each([
+    ["with a declared length", {}],
+    ["streamed without a length", { "transfer-encoding": "chunked" }],
+  ])("refuses a file part over 3 MiB %s before buffering it", async (_label, headers) => {
+    api.failNext("GET /api/context/spaces/{spaceId}/files/{fileId}/parts/{partIndex}", {
+      bytes: new Uint8Array(3 * 1024 * 1024 + 1),
+      headers,
+    })
+
+    expect(
+      await client.fail("context_read_file_part", {
+        spaceId: contextUuid(1),
+        fileId: contextUuid(2),
+        partIndex: 0,
+      }),
+    ).toEqual({
+      code: "rest_unavailable",
+      message: "readContextFilePart returned more than 3145728 bytes (HTTP 200)",
+    })
+  })
+
+  it("redacts stored records as JSON and returns valid JSONL", async () => {
+    const spaceId = await createSpace()
+    const sessionId = contextUuid(920)
+    const quoted = 'say "hi" now'
+
+    const records = [
+      { enabled: true, n: 1 },
+      { note: "tenant " + TENANT },
+      { text: quoted, [quoted]: 1 },
+    ]
+
+    await client.ok("context_register_session", { spaceId, sessionId })
+    await client.ok("context_append_session", {
+      spaceId,
+      sessionId,
+      startSequence: "1",
+      contentJsonl: records.map((record) => JSON.stringify(record) + "\n").join(""),
+    })
+
+    await withClient(
+      { factoryContextHeaders: { [TENANT_HEADER]: TENANT, "x-flag": "true", "x-quote": quoted } },
+      async (other) => {
+        const page = Schema.decodeUnknownSync(Schema.Struct({ contentJsonl: Schema.String }))(
+          await other.ok("context_read_session_records", { spaceId, sessionId }),
+        )
+
+        const lines = page.contentJsonl.split("\n")
+
+        expect(lines.pop()).toBe("")
+        expect(lines.map((line) => JSON.parse(line))).toEqual([
+          { enabled: true, n: 1 },
+          { note: "tenant [redacted]" },
+          { text: "[redacted]", "[redacted]": 1 },
+        ])
+        expect(page.contentJsonl).not.toContain("hi")
+      },
+    )
+  })
+
+  it("refuses a lone surrogate before any request", async () => {
+    expect(await client.fail("context_get_space", { spaceId: "\ud800" })).toEqual({
+      code: "invalid_params",
+      message: "context_get_space: spaceId is not well-formed Unicode",
+    })
+    expect((await client.fail("context_list_spaces", { cursor: "a\udfffb" })).code).toBe(
+      "invalid_params",
+    )
+    expect(api.requests).toHaveLength(0)
+  })
+
+  it("keeps response members the contract does not name", async () => {
+    api.failNext("GET /api/context/spaces", { json: { items: [], extra: { future: true } } })
+
+    expect(await client.ok("context_list_spaces")).toEqual({ items: [], extra: { future: true } })
+  })
+
   it("rejects invalid inputs before any request", async () => {
     const spaceId = contextUuid(1)
     const fileId = contextUuid(2)
@@ -754,8 +881,9 @@ describe("context tools over MCP", () => {
 
     expect(await client.fail("context_list_spaces")).toEqual({
       code: "rest_unavailable",
-      message: "listContextSpaces could not reach the Context API",
+      message: "listContextSpaces was redirected (HTTP 307); redirect refused",
     })
+    expect(hosted.requests).toHaveLength(0)
   })
 
   it("times out with the configured request timeout", async () => {

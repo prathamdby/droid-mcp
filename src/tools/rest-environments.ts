@@ -62,7 +62,9 @@ export const environmentTools = (): RestDomain =>
       body: {
         name: Schema.optional(Schema.String),
         repositories: Schema.optional(Repositories),
-        setupScript: Schema.optional(Schema.String),
+        setupScript: Schema.optional(
+          Schema.NullOr(Schema.String).annotate({ description: "null clears the setup script." }),
+        ),
         sourceId: Schema.optional(Schema.String),
       },
     }),

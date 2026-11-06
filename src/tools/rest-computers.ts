@@ -7,6 +7,7 @@ import {
   Id,
   JsonBody,
   PageLimit,
+  openStruct,
   restDomain,
   restTool,
 } from "./rest-kit.ts"
@@ -18,19 +19,15 @@ const COMPUTER = "/api/v0/computers/{computerId}"
 
 const FILE = COMPUTER + "/files/{fileName}"
 
-/** Upstream accepts more members than it documents; they are forwarded as given. */
-const sourceOf = <const Fields extends Schema.Struct.Fields>(fields: Fields) =>
-  Schema.StructWithRest(Schema.Struct(fields), [JsonBody])
-
 const ComputerSource = Schema.Union([
-  sourceOf({ kind: Schema.Literal("environment"), environmentId: Id, isListed: Schema.Boolean }),
-  sourceOf({ kind: Schema.Literal("template"), templateId: Id, isListed: Schema.Boolean }),
-  sourceOf({
+  openStruct({ kind: Schema.Literal("environment"), environmentId: Id, isListed: Schema.Boolean }),
+  openStruct({ kind: Schema.Literal("template"), templateId: Id, isListed: Schema.Boolean }),
+  openStruct({
     kind: Schema.Literal("execution-template"),
     templateId: Id,
     isListed: Schema.Boolean,
   }),
-  sourceOf({ kind: Schema.Literal("computer"), sourceComputerId: Id }),
+  openStruct({ kind: Schema.Literal("computer"), sourceComputerId: Id }),
 ]).annotate({
   description:
     "What to build the computer from: an Environment, a template, an execution template, " +

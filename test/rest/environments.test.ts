@@ -84,7 +84,7 @@ describe("rest Environment tools over MCP", () => {
   it("creates an Environment and keeps extra body members", async () => {
     const body = {
       name: "api",
-      repositories: [{ url: "https://github.com/acme/api" }],
+      repositories: [{ url: "https://github.com/acme/api", script: "" }],
       scope: "organization",
       setupScript: "make deps",
       futureFlag: true,
@@ -141,6 +141,22 @@ describe("rest Environment tools over MCP", () => {
     expect(bodyOf()).toEqual({ setupScript: "pnpm install --frozen-lockfile" })
     expect(updated.id).toBe(PR_AGENT_ID)
     expect(updated.buildId).not.toBe("build-2")
+  })
+
+  it("clears a setup script with null on update only", async () => {
+    await client.ok("rest_update_environment", {
+      environmentId: PR_AGENT_ID,
+      body: { setupScript: null },
+    })
+
+    expect(bodyOf()).toEqual({ setupScript: null })
+
+    const create = await client.call("rest_create_environment", {
+      body: { name: "x", repositories: [], setupScript: null },
+    })
+
+    expect(create.rpcError ?? create.isError).toBeTruthy()
+    expect(api.requests).toHaveLength(1)
   })
 
   it("deletes an Environment and reports a delete conflict as a failure", async () => {

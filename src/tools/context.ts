@@ -1,34 +1,15 @@
 import { Buffer } from "node:buffer"
 
-import {
-  appendContextSession,
-  createContextDocument,
-  createContextFile,
-  createContextSpace,
-  deleteContextDocument,
-  deleteContextFile,
-  getContextDocument,
-  getContextDocumentByPath,
-  getContextSession,
-  getContextSpace,
-  listContextDocuments,
-  listContextSessions,
-  listContextSpaces,
-  readContextFilePart,
-  readContextSessionRecords,
-  registerContextSession,
-  updateContextDocument,
-  uploadContextFilePart,
-} from "@factory/droid-sdk"
 import * as Tool from "effect/ai/Tool"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Predicate from "effect/Predicate"
 import * as Schema from "effect/Schema"
 
-import { decodeJsonText } from "../droid/rest-http.ts"
+import type { JsonFields, JsonValue } from "../droid/protocol.ts"
+import { decodeJsonText, encodePathSegment, isWellFormed } from "../droid/rest-http.ts"
 import { RestService } from "../droid/rest-service.ts"
-import type { ContextApiOptions, RestResult } from "../droid/rest-service.ts"
+import type { ContextRequest, RestError, RestResult } from "../droid/rest-service.ts"
 import { ToolFailure } from "./failure.ts"
 import {
   Cursor,
@@ -38,14 +19,18 @@ import {
   restDomain,
   restFailure,
 } from "./rest-kit.ts"
-import type { RestDomain, RestHandler, RestToolEntry } from "./rest-kit.ts"
+import type { RestDomain, RestHandler, RestParams, RestToolEntry } from "./rest-kit.ts"
 
 /**
  * Context tools: spaces, documents, files, and stored session records on the
- * Prem origin named by `FACTORY_CONTEXT_BASE_URL`, through the SDK's Context
- * helpers. Inputs are checked here first, because the helpers send whatever
- * they are given and only validate responses.
+ * Prem origin named by `FACTORY_CONTEXT_BASE_URL`. Each tool sends the request
+ * the SDK's Context helper of the same name would, through `RestService`, so
+ * calls are cancellable and size-capped. Inputs are checked here first, as
+ * the helpers do not check them, and responses are checked against the
+ * helpers' contracts before redaction.
  */
+
+const CONTEXT_API_PATH = "/api/context"
 
 const COUNTER_MAX = "9223372036854775807"
 
@@ -54,7 +39,6 @@ const PATH_MAX_BYTES = 512
 const NAME_MAX_LENGTH = 120
 const PART_MAX_BYTES = 3 * 1024 * 1024
 const PART_MAX_BASE64_LENGTH = (PART_MAX_BYTES / 3) * 4
-const PART_MAX_INDEX = 8
 const RECORD_MAX_BYTES = 64 * 1024
 const BATCH_MAX_BYTES = 256 * 1024
 const BATCH_MAX_RECORDS = 100
@@ -75,6 +59,9 @@ const FILE_MAX_BYTES = {
   "image/webp": 10 * 1024 * 1024,
   "application/pdf": 25 * 1024 * 1024,
 } satisfies { readonly [Type in (typeof CONTENT_TYPES)[number]]: number }
+
+/** The last part of the largest file, as the SDK derives it. */
+const PART_MAX_INDEX = Math.ceil(Math.max(...Object.values(FILE_MAX_BYTES)) / PART_MAX_BYTES) - 1
 
 /** Same-length decimal strings compare like the numbers they spell. */
 const withinCounterRange = (value: string): boolean =>
@@ -126,6 +113,144 @@ const Limit = PageLimit.annotate({ description: "Items per page, 1-100." })
 const PartIndex = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: PART_MAX_INDEX }),
 ).annotate({ description: "The zero-based part index, 0-" + String(PART_MAX_INDEX) + "." })
+
+/*
+ * Response contracts, as the SDK helpers check them. Enumerations are open
+ * strings, so a value added upstream does not fail a whole page; members
+ * beyond these are kept.
+ */
+
+const attribution = {
+  createdByPrincipalKind: Schema.String,
+  createdByPrincipalId: Schema.String,
+  updatedByPrincipalKind: Schema.String,
+  updatedByPrincipalId: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+}
+
+const SpaceReply = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  accessScope: Schema.String,
+  ...attribution,
+})
+
+const FileReply = Schema.Struct({
+  fileId: Schema.String,
+  contentType: Schema.String,
+  sizeBytes: Schema.Number,
+  sha256: Schema.String,
+  partSizeBytes: Schema.Number,
+  partCount: Schema.Number,
+})
+
+const metadataFields = {
+  id: Schema.String,
+  spaceId: Schema.String,
+  path: Schema.String,
+  version: Version,
+  retiredAt: Schema.optional(Schema.NullOr(Schema.String)),
+  ...attribution,
+  file: Schema.optional(FileReply),
+}
+
+const MetadataReply = Schema.Struct(metadataFields)
+
+const DocumentReply = Schema.Struct({ ...metadataFields, body: Schema.String })
+
+const UploadReply = Schema.Struct({
+  fileId: Schema.String,
+  partSizeBytes: Schema.Number,
+  partCount: Schema.Number,
+  expiresAt: Schema.String,
+})
+
+const SessionReply = Schema.Struct({
+  sessionId: Schema.String,
+  spaceId: Schema.String,
+  parentSessionId: Schema.NullOr(Schema.String),
+  ownerKind: Schema.String,
+  ownerId: Schema.String,
+  lastSequence: Sequence,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+})
+
+const AppendReply = Schema.Struct({
+  lastSequence: Sequence,
+  acceptedThroughSequence: Version,
+  appendedRecords: Schema.Int,
+})
+
+const RecordsReply = Schema.Struct({
+  contentJsonl: Schema.String,
+  lastSequence: Sequence,
+  nextCursor: Sequence,
+  hasMore: Schema.Boolean,
+})
+
+const pageOf = (item: Schema.Top) =>
+  Schema.Struct({ items: Schema.Array(item), nextCursor: Schema.optional(Schema.String) })
+
+type Parse = (json: JsonValue) => JsonValue | undefined
+
+const isFields = (json: JsonValue): json is JsonFields =>
+  Predicate.isObject(json) && !Array.isArray(json)
+
+const matching =
+  (schema: Schema.Top): Parse =>
+  (json) =>
+    Schema.is(schema)(json) ? json : undefined
+
+/** Metadata the server returns without a body, completed with the body the SDK reports. */
+const metadataWithBody =
+  (body: string): Parse =>
+  (json) =>
+    isFields(json) && Schema.is(MetadataReply)(json) ? { ...json, body } : undefined
+
+const segment = (value: string): string => encodePathSegment(value) ?? ""
+
+const spacePath = (spaceId: string): string => CONTEXT_API_PATH + "/spaces/" + segment(spaceId)
+
+const documentPath = (spaceId: string, documentId: string): string =>
+  spacePath(spaceId) + "/documents/" + segment(documentId)
+
+const sessionPath = (spaceId: string, sessionId: string): string =>
+  spacePath(spaceId) + "/sessions/" + segment(sessionId)
+
+const filePath = (spaceId: string, fileId: string): string =>
+  spacePath(spaceId) + "/files/" + segment(fileId)
+
+const partPath = (spaceId: string, fileId: string, partIndex: number): string =>
+  filePath(spaceId, fileId) + "/parts/" + String(partIndex)
+
+/** Present entries, in the order the SDK sends them. */
+const queryOf = (
+  entries: ReadonlyArray<readonly [string, string | number | undefined]>,
+): ReadonlyArray<readonly [string, string]> =>
+  entries.flatMap(([key, value]) => (value === undefined ? [] : [[key, String(value)] as const]))
+
+/** One request, less the operation the tool supplies. */
+type ContextCall = Omit<ContextRequest, "operation">
+
+const read = (
+  path: string,
+  parse: Parse,
+  query: ReadonlyArray<readonly [string, string]> = [],
+): ContextCall => ({ method: "GET", path, query, body: undefined, response: "json", parse })
+
+const write = (
+  method: ContextRequest["method"],
+  path: string,
+  body: JsonValue | undefined,
+  parse: Parse,
+): ContextCall => ({ method, path, query: [], body, response: "json", parse })
+
+interface ContextClient {
+  readonly send: (call: ContextCall) => Effect.Effect<RestResult, RestError>
+  readonly bytes: (path: string, maxBytes: number) => Effect.Effect<Uint8Array, RestError>
+}
 
 const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf8")
 
@@ -201,6 +326,19 @@ const sequenceRangeProblem = (startSequence: string, contentJsonl: string): stri
 const firstProblem = (...problems: ReadonlyArray<string | undefined>): string | undefined =>
   problems.find((problem) => problem !== undefined)
 
+/** A lone surrogate cannot be put in a URL or a valid request, so it is refused up front. */
+const unicodeProblem = (params: RestParams): string | undefined => {
+  for (const [name, value] of Object.entries(params)) {
+    const texts: ReadonlyArray<unknown> = Array.isArray(value) ? value : [value]
+
+    if (texts.some((text) => Predicate.isString(text) && !isWellFormed(text))) {
+      return name + " is not well-formed Unicode"
+    }
+  }
+
+  return undefined
+}
+
 /** Input fields that decode without services, so a handler can re-decode its arguments. */
 interface PlainFields {
   readonly [name: PropertyKey]: Schema.Top & { readonly DecodingServices: never }
@@ -208,7 +346,7 @@ interface PlainFields {
 
 type ParamsOf<Fields extends PlainFields> = Schema.Struct<Fields>["Type"]
 
-interface ContextToolSpec<Fields extends PlainFields, A> {
+interface ContextToolSpec<Fields extends PlainFields> {
   readonly name: string
   /** The SDK helper's name, used in failure messages. */
   readonly operation: string
@@ -216,7 +354,10 @@ interface ContextToolSpec<Fields extends PlainFields, A> {
   readonly inputs: Fields
   /** The reason a call is refused before any request, if any. */
   readonly check?: (params: ParamsOf<Fields>) => string | undefined
-  readonly run: (params: ParamsOf<Fields>, options: ContextApiOptions) => Promise<A>
+  readonly call: (
+    params: ParamsOf<Fields>,
+    client: ContextClient,
+  ) => Effect.Effect<RestResult, RestError>
 }
 
 const CONTEXT_ORIGIN =
@@ -225,8 +366,8 @@ const CONTEXT_ORIGIN =
 const PAGED =
   " One call returns one page; pass `nextCursor`, when present, as `cursor` for the next."
 
-const contextTool = <const Fields extends PlainFields, A>(
-  spec: ContextToolSpec<Fields, A>,
+const contextTool = <const Fields extends PlainFields>(
+  spec: ContextToolSpec<Fields>,
 ): RestToolEntry => {
   const parameters = Schema.Struct(spec.inputs)
   const decode = Schema.decodeUnknownOption(parameters)
@@ -247,20 +388,23 @@ const contextTool = <const Fields extends PlainFields, A>(
         return yield* Effect.fail(invalidParams(spec.name, "arguments do not match the schema"))
       }
 
-      const problem = spec.check?.(params)
+      const problem = unicodeProblem(raw) ?? spec.check?.(params)
 
       if (problem !== undefined) return yield* Effect.fail(invalidParams(spec.name, problem))
 
       const rest = yield* RestService
 
-      const json: RestResult = yield* rest
-        .context(spec.operation, (options) => spec.run(params, options))
-        .pipe(Effect.mapError(restFailure))
+      const client: ContextClient = {
+        send: (call) => rest.context({ operation: spec.operation, ...call }),
+        bytes: (path, maxBytes) => rest.contextBytes({ operation: spec.operation, path, maxBytes }),
+      }
 
-      return json ?? { ok: true }
+      const json: RestResult = yield* spec.call(params, client).pipe(Effect.mapError(restFailure))
+
+      return json === undefined ? { ok: true } : json
     })
 
-  return { name: spec.name, tool, handler }
+  return { tool, handler }
 }
 
 export const contextTools = (): RestDomain =>
@@ -279,7 +423,10 @@ export const contextTools = (): RestDomain =>
         name.trim().length === 0 || name.trim().length > NAME_MAX_LENGTH
           ? "name must be 1 to " + String(NAME_MAX_LENGTH) + " characters after trimming"
           : undefined,
-      run: (params, options) => createContextSpace({ ...options, ...params }),
+      call: ({ name, accessScope }, client) =>
+        client.send(
+          write("POST", CONTEXT_API_PATH + "/spaces", { name, accessScope }, matching(SpaceReply)),
+        ),
     }),
     contextTool({
       name: "context_list_spaces",
@@ -287,14 +434,24 @@ export const contextTools = (): RestDomain =>
       description:
         "List the Context spaces the caller can read, as `{ items, nextCursor? }`." + PAGED,
       inputs: { limit: Schema.optional(Limit), cursor: Schema.optional(Cursor) },
-      run: (params, options) => listContextSpaces({ ...options, ...params }),
+      call: ({ limit, cursor }, client) =>
+        client.send(
+          read(
+            CONTEXT_API_PATH + "/spaces",
+            matching(pageOf(SpaceReply)),
+            queryOf([
+              ["limit", limit],
+              ["cursor", cursor],
+            ]),
+          ),
+        ),
     }),
     contextTool({
       name: "context_get_space",
       operation: "getContextSpace",
       description: "Read one Context space by `spaceId`.",
       inputs: { spaceId: SpaceId },
-      run: (params, options) => getContextSpace({ ...options, ...params }),
+      call: ({ spaceId }, client) => client.send(read(spacePath(spaceId), matching(SpaceReply))),
     }),
     contextTool({
       name: "context_create_document",
@@ -310,10 +467,15 @@ export const contextTools = (): RestDomain =>
         fileId: Schema.optional(CommitFileId),
       },
       check: (params) => firstProblem(pathProblem(params.path), contentProblem(params)),
-      run: ({ spaceId, path, body, fileId }, options) =>
-        fileId === undefined
-          ? createContextDocument({ ...options, spaceId, path, body: body ?? "" })
-          : createContextDocument({ ...options, spaceId, path, fileId }),
+      call: ({ spaceId, path, body, fileId }, client) =>
+        client.send(
+          write(
+            "POST",
+            spacePath(spaceId) + "/documents",
+            fileId === undefined ? { path, body: body ?? "" } : { path, fileId },
+            matching(MetadataReply),
+          ),
+        ),
     }),
     contextTool({
       name: "context_list_documents",
@@ -329,7 +491,18 @@ export const contextTools = (): RestDomain =>
         cursor: Schema.optional(Cursor),
         kinds: Schema.optional(Schema.NonEmptyArray(Schema.Literals(["text", "binary"]))),
       },
-      run: (params, options) => listContextDocuments({ ...options, ...params }),
+      call: ({ spaceId, limit, cursor, kinds }, client) =>
+        client.send(
+          read(
+            spacePath(spaceId) + "/documents",
+            matching(pageOf(MetadataReply)),
+            queryOf([
+              ["limit", limit],
+              ["cursor", cursor],
+              ["kinds", kinds?.join(",")],
+            ]),
+          ),
+        ),
     }),
     contextTool({
       name: "context_get_document",
@@ -339,7 +512,8 @@ export const contextTools = (): RestDomain =>
         "document has an empty body and a `file` description; read its bytes with " +
         "context_read_file_part.",
       inputs: { spaceId: SpaceId, documentId: DocumentId },
-      run: (params, options) => getContextDocument({ ...options, ...params }),
+      call: ({ spaceId, documentId }, client) =>
+        client.send(read(documentPath(spaceId, documentId), matching(DocumentReply))),
     }),
     contextTool({
       name: "context_get_document_by_path",
@@ -348,7 +522,12 @@ export const contextTools = (): RestDomain =>
         "Read a document by its relative `path` in a space, with its `body` and `version`.",
       inputs: { spaceId: SpaceId, path: DocumentPath },
       check: (params) => pathProblem(params.path),
-      run: (params, options) => getContextDocumentByPath({ ...options, ...params }),
+      call: ({ spaceId, path }, client) =>
+        client.send(
+          read(spacePath(spaceId) + "/documents/by-path", matching(DocumentReply), [
+            ["path", path],
+          ]),
+        ),
     }),
     contextTool({
       name: "context_update_document",
@@ -375,17 +554,23 @@ export const contextTools = (): RestDomain =>
             ? "a file replacement cannot be merged; omit merge or use strict"
             : undefined,
         ),
-      run: ({ spaceId, documentId, expectedVersion, merge, body, fileId }, options) =>
-        fileId === undefined
-          ? updateContextDocument({
-              ...options,
-              spaceId,
-              documentId,
-              expectedVersion,
-              merge,
-              body: body ?? "",
-            })
-          : updateContextDocument({ ...options, spaceId, documentId, expectedVersion, fileId }),
+      call: (
+        { spaceId, documentId, expectedVersion, merge = "auto", body = "", fileId },
+        client,
+      ) => {
+        const path = documentPath(spaceId, documentId)
+
+        if (fileId !== undefined) {
+          return client.send(write("PUT", path, { expectedVersion, fileId }, metadataWithBody("")))
+        }
+
+        // A strict write answers with metadata only; the server accepted the submitted body.
+        return merge === "strict"
+          ? client.send(write("PUT", path, { expectedVersion, body }, metadataWithBody(body)))
+          : client.send(
+              write("PUT", path, { expectedVersion, body, merge }, matching(DocumentReply)),
+            )
+      },
     }),
     contextTool({
       name: "context_delete_document",
@@ -395,7 +580,15 @@ export const contextTools = (): RestDomain =>
         "with `currentVersion` otherwise). Returns the retired document's metadata. " +
         DESTRUCTIVE,
       inputs: { spaceId: SpaceId, documentId: DocumentId, expectedVersion: Version },
-      run: (params, options) => deleteContextDocument({ ...options, ...params }),
+      call: ({ spaceId, documentId, expectedVersion }, client) =>
+        client.send(
+          write(
+            "DELETE",
+            documentPath(spaceId, documentId),
+            { expectedVersion },
+            matching(MetadataReply),
+          ),
+        ),
     }),
     contextTool({
       name: "context_create_file",
@@ -416,7 +609,15 @@ export const contextTools = (): RestDomain =>
         sizeBytes > FILE_MAX_BYTES[contentType]
           ? contentType + " files are at most " + String(FILE_MAX_BYTES[contentType]) + " bytes"
           : undefined,
-      run: (params, options) => createContextFile({ ...options, ...params }),
+      call: ({ spaceId, contentType, sizeBytes, sha256 }, client) =>
+        client.send(
+          write(
+            "POST",
+            spacePath(spaceId) + "/files",
+            { contentType, sizeBytes, sha256 },
+            matching(UploadReply),
+          ),
+        ),
     }),
     contextTool({
       name: "context_upload_file_part",
@@ -434,12 +635,18 @@ export const contextTools = (): RestDomain =>
         }),
       },
       check: (params) => partProblem(params.contentBase64),
-      run: async ({ spaceId, fileId, partIndex, contentBase64 }, options) => {
+      call: ({ spaceId, fileId, partIndex, contentBase64 }, client) => {
         const content = decodePart(contentBase64) ?? new Uint8Array()
 
-        await uploadContextFilePart({ ...options, spaceId, fileId, partIndex, content })
-
-        return { ok: true, partIndex, sizeBytes: content.byteLength }
+        return client
+          .send({
+            method: "PUT",
+            path: partPath(spaceId, fileId, partIndex),
+            query: [],
+            body: content,
+            response: "empty",
+          })
+          .pipe(Effect.as({ ok: true, partIndex, sizeBytes: content.byteLength }))
       },
     }),
     contextTool({
@@ -448,18 +655,17 @@ export const contextTools = (): RestDomain =>
       description:
         "Read part `partIndex` of a committed file. Returns `{ partIndex, sizeBytes, " +
         'encoding: "base64", data }`; decode `data` and concatenate parts in order to ' +
-        "reconstruct the exact bytes.",
+        "reconstruct the exact bytes. A part that contains a protected value is refused.",
       inputs: { spaceId: SpaceId, fileId: FileId, partIndex: PartIndex },
-      run: async (params, options) => {
-        const bytes = await readContextFilePart({ ...options, ...params })
-
-        return {
-          partIndex: params.partIndex,
-          sizeBytes: bytes.byteLength,
-          encoding: "base64",
-          data: Buffer.from(bytes).toString("base64"),
-        }
-      },
+      call: ({ spaceId, fileId, partIndex }, client) =>
+        client.bytes(partPath(spaceId, fileId, partIndex), PART_MAX_BYTES).pipe(
+          Effect.map((bytes) => ({
+            partIndex,
+            sizeBytes: bytes.byteLength,
+            encoding: "base64",
+            data: Buffer.from(bytes).toString("base64"),
+          })),
+        ),
     }),
     contextTool({
       name: "context_delete_file",
@@ -469,7 +675,14 @@ export const contextTools = (): RestDomain =>
         "{ ok: true }. " +
         DESTRUCTIVE,
       inputs: { spaceId: SpaceId, fileId: FileId },
-      run: (params, options) => deleteContextFile({ ...options, ...params }),
+      call: ({ spaceId, fileId }, client) =>
+        client.send({
+          method: "DELETE",
+          path: filePath(spaceId, fileId),
+          query: [],
+          body: undefined,
+          response: "empty",
+        }),
     }),
     contextTool({
       name: "context_register_session",
@@ -485,7 +698,15 @@ export const contextTools = (): RestDomain =>
           ContextId.annotate({ description: "The parent stored session ID." }),
         ),
       },
-      run: (params, options) => registerContextSession({ ...options, ...params }),
+      call: ({ spaceId, sessionId, parentSessionId }, client) =>
+        client.send(
+          write(
+            "PUT",
+            sessionPath(spaceId, sessionId),
+            parentSessionId === undefined ? {} : { parentSessionId },
+            matching(SessionReply),
+          ),
+        ),
     }),
     contextTool({
       name: "context_get_session",
@@ -493,7 +714,8 @@ export const contextTools = (): RestDomain =>
       description:
         "Read a stored session record: its parent, owner, and `lastSequence` (a decimal string).",
       inputs: { spaceId: SpaceId, sessionId: SessionId },
-      run: (params, options) => getContextSession({ ...options, ...params }),
+      call: ({ spaceId, sessionId }, client) =>
+        client.send(read(sessionPath(spaceId, sessionId), matching(SessionReply))),
     }),
     contextTool({
       name: "context_list_sessions",
@@ -511,7 +733,18 @@ export const contextTools = (): RestDomain =>
           ContextId.annotate({ description: "A parent stored session ID, or `root`." }),
         ),
       },
-      run: (params, options) => listContextSessions({ ...options, ...params }),
+      call: ({ spaceId, limit, cursor, parentSessionId }, client) =>
+        client.send(
+          read(
+            spacePath(spaceId) + "/sessions",
+            matching(pageOf(SessionReply)),
+            queryOf([
+              ["limit", limit],
+              ["cursor", cursor],
+              ["parentSessionId", parentSessionId],
+            ]),
+          ),
+        ),
     }),
     contextTool({
       name: "context_append_session",
@@ -534,7 +767,15 @@ export const contextTools = (): RestDomain =>
           jsonlProblem(params.contentJsonl),
           sequenceRangeProblem(params.startSequence, params.contentJsonl),
         ),
-      run: (params, options) => appendContextSession({ ...options, ...params }),
+      call: ({ spaceId, sessionId, startSequence, contentJsonl }, client) =>
+        client.send(
+          write(
+            "POST",
+            sessionPath(spaceId, sessionId) + "/append",
+            { startSequence, contentJsonl },
+            matching(AppendReply),
+          ),
+        ),
     }),
     contextTool({
       name: "context_read_session_records",
@@ -555,6 +796,18 @@ export const contextTools = (): RestDomain =>
           Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: BATCH_MAX_BYTES })),
         ),
       },
-      run: (params, options) => readContextSessionRecords({ ...options, ...params }),
+      call: ({ spaceId, sessionId, afterSequence, limit, maxBytes }, client) =>
+        client.send({
+          ...read(
+            sessionPath(spaceId, sessionId) + "/records",
+            matching(RecordsReply),
+            queryOf([
+              ["afterSequence", afterSequence],
+              ["limit", limit],
+              ["maxBytes", maxBytes],
+            ]),
+          ),
+          response: "records",
+        }),
     }),
   ])

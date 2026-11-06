@@ -225,8 +225,19 @@ describe("rest hosted session tools over MCP", () => {
     expect(api.last()?.query).toBe("computerId=c-1")
   })
 
+  it("accepts empty text for a message carried by its attachments", async () => {
+    const images = [{ type: "base64", mediaType: "image/png", data: "iVBORw0KGgo=" }]
+
+    await client.ok("rest_post_remote_session_message", {
+      sessionId: "s-1",
+      body: { text: "", images },
+    })
+
+    expect(bodyOf()).toEqual({ text: "", images })
+  })
+
   it("requires message text before I/O", async () => {
-    const bodies: ReadonlyArray<Json> = [{}, { text: "" }, { images: [] }]
+    const bodies: ReadonlyArray<Json> = [{}, { images: [] }, { text: 3 }]
 
     for (const body of bodies) {
       const outcome = await client.call("rest_post_remote_session_message", {

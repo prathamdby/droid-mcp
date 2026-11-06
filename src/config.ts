@@ -59,11 +59,16 @@ const flagValues: ReadonlyArray<string> = [
 
 const isFlagValue = (name: string): boolean => flagValues.some((flag) => flag === name)
 
-const parseNumber = (name: string, raw: string): number => {
+/** Node timers fire at once past this delay, so a longer timeout would never wait. */
+const TIMEOUT_MAX_MS = 2_147_483_647
+
+const parseTimeout = (name: string, raw: string): number => {
   const value = Number(raw)
 
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new ConfigError({ message: name + " must be a positive number" })
+  if (!Number.isInteger(value) || value < 1 || value > TIMEOUT_MAX_MS) {
+    throw new ConfigError({
+      message: name + " must be a whole number of milliseconds from 1 to " + String(TIMEOUT_MAX_MS),
+    })
   }
 
   return value
@@ -146,7 +151,12 @@ const RESERVED_HEADERS: ReadonlyArray<string> = [
 ]
 
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
-const HEADER_VALUE_FORBIDDEN = /[\r\n\0]/
+
+/** Framing characters, and anything past Latin-1, which an HTTP header cannot carry. */
+const HEADER_VALUE_FORBIDDEN = /[\r\n\0\u{100}-\u{10FFFF}]/u
+
+/** Fetch strips surrounding spaces and tabs before sending, so the stored value matches the wire. */
+const HEADER_WHITESPACE = /^[ \t]+|[ \t]+$/g
 
 const HeaderRecord = Schema.Record(Schema.String, Schema.String)
 
@@ -170,17 +180,26 @@ export const parseContextHeaders = (raw: string | undefined): Readonly<Record<st
     throw invalid("must be a JSON object of string values")
   }
 
+  const seen = new Set<string>()
+
   for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase()
+
     if (!HEADER_NAME.test(name)) throw invalid("has an invalid header name")
 
-    if (RESERVED_HEADERS.includes(name.toLowerCase())) {
-      throw invalid("may not set " + name.toLowerCase())
-    }
+    if (RESERVED_HEADERS.includes(lower)) throw invalid("may not set " + lower)
+
+    // Fetch would join both values into one header, unlike either stored value.
+    if (seen.has(lower)) throw invalid("sets " + lower + " twice")
 
     if (HEADER_VALUE_FORBIDDEN.test(value)) throw invalid("has an invalid value for " + name)
+
+    seen.add(lower)
   }
 
-  return headers
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name, value.replace(HEADER_WHITESPACE, "")]),
+  )
 }
 
 const nonEmpty = (raw: string | undefined): string | undefined =>
@@ -295,15 +314,15 @@ export const parseConfig = (
     logLevel: parseLogLevel(logLevelRaw),
     promptTimeoutMs:
       values.get("--prompt-timeout") !== undefined
-        ? parseNumber("--prompt-timeout", values.get("--prompt-timeout") ?? "")
+        ? parseTimeout("--prompt-timeout", values.get("--prompt-timeout") ?? "")
         : 300_000,
     requestTimeoutMs:
       values.get("--request-timeout") !== undefined
-        ? parseNumber("--request-timeout", values.get("--request-timeout") ?? "")
+        ? parseTimeout("--request-timeout", values.get("--request-timeout") ?? "")
         : 30_000,
     initializeTimeoutMs:
       values.get("--initialize-timeout") !== undefined
-        ? parseNumber("--initialize-timeout", values.get("--initialize-timeout") ?? "")
+        ? parseTimeout("--initialize-timeout", values.get("--initialize-timeout") ?? "")
         : 60_000,
   }
 }

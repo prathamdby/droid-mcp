@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer"
 
 import { ContextApiError } from "@factory/droid-sdk"
-import type { ContextApiOptions } from "@factory/droid-sdk"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -10,26 +9,26 @@ import * as Schema from "effect/Schema"
 import type { Config } from "../config.ts"
 import { ContextBaseUrlMissing, FactoryApiKeyMissing } from "./errors.ts"
 import type { JsonValue } from "./protocol.ts"
-import { redact } from "./redact.ts"
+import { protectedValues, redact, redactRecords } from "./redact.ts"
 import {
   binaryEnvelope,
   decodeJsonText,
   errorDetail,
   isJsonContentType,
   safeDetail,
+  scrubSecrets,
   serializeQuery,
 } from "./rest-http.ts"
-
-export type { ContextApiOptions }
 
 /**
  * The hosted Factory API is HTTPS with a bearer key and JSON bodies. Every
  * `rest_*` tool goes through `request`, which owns credentials, timeouts,
  * redirect refusal, status mapping, and redaction. Tool modules never fetch.
  *
- * Context lives on a separately configured Prem origin and is reached through
- * the SDK's Context helpers; `context` supplies their options and maps their
- * errors onto the same contract.
+ * Context lives on a separately configured Prem origin. `context` and
+ * `contextBytes` reach it through the same transport, so a call is cancelled
+ * with its fiber and its response is size-capped before it is buffered; they
+ * map errors onto the same contract, keeping the Context API's conflict fields.
  */
 
 export class RestRejected extends Schema.TaggedError<RestRejected>()("RestRejected", {
@@ -58,6 +57,8 @@ export type RestMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
  */
 export type RestResponse = "json" | "empty" | "json-or-binary"
 
+type Query = ReadonlyArray<readonly [string, string]>
+
 export interface RestRequest {
   /** The upstream operation id, used in messages (e.g. `getComputer`). */
   readonly operation: string
@@ -65,26 +66,56 @@ export interface RestRequest {
   /** Already segment-encoded; starts with `/api/v0/`. */
   readonly path: string
   /** Repeated keys allowed. */
-  readonly query: ReadonlyArray<readonly [string, string]>
+  readonly query: Query
   readonly body: JsonValue | undefined
   readonly response: RestResponse
   /** Per-call values to scrub from results and errors. */
   readonly secrets: ReadonlyArray<string>
 }
 
+/**
+ * `json` checks and redacts the body; `empty` ignores it; `records` is JSON
+ * whose `contentJsonl` member holds JSONL records, each redacted as JSON.
+ */
+export type ContextResponse = "json" | "empty" | "records"
+
+export interface ContextRequest {
+  /** The Context operation, used in messages (e.g. `getContextSpace`). */
+  readonly operation: string
+  readonly method: RestMethod
+  /** Already segment-encoded; starts with `/api/context/`. */
+  readonly path: string
+  readonly query: Query
+  /** JSON, or bytes sent as `application/octet-stream`. */
+  readonly body: JsonValue | Uint8Array | undefined
+  readonly response: ContextResponse
+  /**
+   * Checks the upstream body against its contract before redaction, and may
+   * add members; `undefined` means it does not match. Absent accepts any JSON.
+   */
+  readonly parse?: (json: JsonValue) => JsonValue | undefined
+}
+
+export interface ContextBytesRequest {
+  readonly operation: string
+  /** Already segment-encoded; starts with `/api/context/`. */
+  readonly path: string
+  /** A larger body is refused before it is buffered. */
+  readonly maxBytes: number
+}
+
 export type RestResult = JsonValue | undefined
 
 export interface RestApi {
   readonly request: (request: RestRequest) => Effect.Effect<RestResult, RestError>
+  /** One JSON request to `FACTORY_CONTEXT_BASE_URL`; `undefined` stands for an empty success. */
+  readonly context: (request: ContextRequest) => Effect.Effect<RestResult, RestError>
   /**
-   * Runs one SDK Context helper against `FACTORY_CONTEXT_BASE_URL`. The value
-   * it resolves with is normalized to JSON and redacted; `undefined` stands
-   * for an empty success. Helpers that return bytes must encode them first.
+   * One byte download from `FACTORY_CONTEXT_BASE_URL`. Bytes cannot be
+   * redacted without corrupting them, so a body that contains a protected
+   * value is refused instead.
    */
-  readonly context: <A>(
-    operation: string,
-    run: (options: ContextApiOptions) => Promise<A>,
-  ) => Effect.Effect<RestResult, RestError>
+  readonly contextBytes: (request: ContextBytesRequest) => Effect.Effect<Uint8Array, RestError>
 }
 
 export class RestService extends Context.Service<RestService, RestApi>()("droid-mcp/RestService") {}
@@ -95,14 +126,20 @@ interface Received {
   readonly bytes: Uint8Array
 }
 
+const FACTORY_API = "Factory API"
+const CONTEXT_API = "Context API"
+
 const BINARY_ACCEPT = "application/json, application/octet-stream;q=0.9, */*;q=0.8"
 
 /** A larger body is refused before it is buffered, and before a binary one is base64-encoded. */
 const RESPONSE_MAX_BYTES = 32 * 1024 * 1024
 
-/** The whole body, or `undefined` once it passes `RESPONSE_MAX_BYTES`. */
-const readCapped = async (response: Response): Promise<Uint8Array | undefined> => {
-  if (Number(response.headers.get("content-length") ?? "0") > RESPONSE_MAX_BYTES) {
+/** The whole body, or `undefined` once it passes `maxBytes`. */
+const readCapped = async (
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array | undefined> => {
+  if (Number(response.headers.get("content-length") ?? "0") > maxBytes) {
     await response.body?.cancel()
 
     return undefined
@@ -118,7 +155,7 @@ const readCapped = async (response: Response): Promise<Uint8Array | undefined> =
   while (!next.done) {
     total += next.value.byteLength
 
-    if (total > RESPONSE_MAX_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel()
 
       return undefined
@@ -135,37 +172,34 @@ interface RequestHeaders {
   [name: string]: string
 }
 
-const headersFor = (apiKey: string, request: RestRequest): RequestHeaders => {
-  const headers: RequestHeaders = {
-    authorization: "Bearer " + apiKey,
-    accept: request.response === "json-or-binary" ? BINARY_ACCEPT : "application/json",
-  }
-
-  if (request.body !== undefined) headers["content-type"] = "application/json"
-
-  return headers
+/** One HTTP exchange: who it is for, and everything put on the wire. */
+interface Outbound {
+  readonly api: string
+  readonly operation: string
+  readonly method: RestMethod
+  readonly url: string
+  readonly headers: RequestHeaders
+  readonly body: string | Uint8Array | undefined
+  readonly maxBytes: number
 }
 
-const urlFor = (baseUrl: string, request: RestRequest): string => {
-  const query = serializeQuery(request.query)
+const urlOf = (baseUrl: string, path: string, query: Query): string => {
+  const serialized = serializeQuery(query)
 
-  return baseUrl + request.path + (query.length === 0 ? "" : "?" + query)
+  return baseUrl + path + (serialized.length === 0 ? "" : "?" + serialized)
 }
 
-const send = (
-  config: Config,
-  apiKey: string,
-  request: RestRequest,
-): Effect.Effect<Received, RestUnavailable> =>
+/** Interrupting the calling fiber aborts the fetch and any body read still in flight. */
+const send = (config: Config, outbound: Outbound): Effect.Effect<Received, RestUnavailable> =>
   Effect.suspend(() => {
     const timeout = AbortSignal.timeout(config.requestTimeoutMs)
 
     return Effect.tryPromise({
       try: async (signal) => {
-        const response = await fetch(urlFor(config.factoryBaseUrl, request), {
-          method: request.method,
-          headers: headersFor(apiKey, request),
-          body: request.body === undefined ? undefined : JSON.stringify(request.body),
+        const response = await fetch(outbound.url, {
+          method: outbound.method,
+          headers: outbound.headers,
+          body: outbound.body,
           redirect: "manual",
           signal: AbortSignal.any([signal, timeout]),
         })
@@ -173,17 +207,18 @@ const send = (
         return {
           status: response.status,
           contentType: response.headers.get("content-type"),
-          bytes: await readCapped(response),
+          bytes: await readCapped(response, outbound.maxBytes),
         }
       },
       catch: () =>
         new RestUnavailable({
           message: timeout.aborted
-            ? request.operation +
+            ? outbound.operation +
               " timed out after " +
               String(config.requestTimeoutMs) +
-              " ms waiting for the Factory API"
-            : request.operation + " could not reach the Factory API",
+              " ms waiting for the " +
+              outbound.api
+            : outbound.operation + " could not reach the " + outbound.api,
         }),
     }).pipe(
       Effect.flatMap((read) =>
@@ -191,9 +226,9 @@ const send = (
           ? Effect.fail(
               new RestUnavailable({
                 message:
-                  request.operation +
+                  outbound.operation +
                   " returned more than " +
-                  String(RESPONSE_MAX_BYTES) +
+                  String(outbound.maxBytes) +
                   " bytes (HTTP " +
                   String(read.status) +
                   ")",
@@ -209,8 +244,54 @@ const send = (
     )
   })
 
+const textOf = (bytes: Uint8Array): string => new TextDecoder().decode(bytes)
+
+const isSuccess = (status: number): boolean => status >= 200 && status < 300
+
 const withDetail = (message: string, detail: string | undefined): string =>
   detail === undefined ? message : message + ": " + detail
+
+/** The failure for a non-2xx status; `detail` is already scrubbed. */
+const statusFailure = (
+  operation: string,
+  status: number,
+  detail: string | undefined,
+): RestRejected | RestUnavailable => {
+  const label = " (HTTP " + String(status) + ")"
+
+  if (status >= 300 && status < 400) {
+    return new RestUnavailable({
+      message: operation + " was redirected" + label + "; redirect refused",
+      status,
+    })
+  }
+
+  if (status >= 400 && status < 500) {
+    return new RestRejected({
+      message: withDetail(operation + " was rejected" + label, detail),
+      status,
+      detail,
+    })
+  }
+
+  return new RestUnavailable({
+    message: withDetail(operation + " failed upstream" + label, detail),
+    status,
+    detail,
+  })
+}
+
+/** Whether the bytes contain any protected value in its UTF-8 form. */
+const containsProtected = (bytes: Uint8Array, secrets: ReadonlyArray<string>): boolean => {
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+
+  return secrets.some((secret) => buffer.includes(secret, 0, "utf8"))
+}
+
+const protectedBytes = (operation: string): RestUnavailable =>
+  new RestUnavailable({
+    message: operation + " returned binary content containing a protected value; refused",
+  })
 
 const decodeSuccess = (
   request: RestRequest,
@@ -222,12 +303,19 @@ const decodeSuccess = (
   }
 
   if (request.response === "json-or-binary" && !isJsonContentType(received.contentType)) {
+    if (containsProtected(received.bytes, secrets)) {
+      return Effect.fail(protectedBytes(request.operation))
+    }
+
     return Effect.succeed(
-      binaryEnvelope(received.bytes, received.contentType ?? "application/octet-stream"),
+      binaryEnvelope(
+        received.bytes,
+        scrubSecrets(received.contentType ?? "application/octet-stream", secrets),
+      ),
     )
   }
 
-  const json = decodeJsonText(new TextDecoder().decode(received.bytes))
+  const json = decodeJsonText(textOf(received.bytes))
 
   if (json === undefined) {
     return Effect.fail(
@@ -251,38 +339,17 @@ const classify = (
   received: Received,
   secrets: ReadonlyArray<string>,
 ): Effect.Effect<RestResult, RestError> => {
-  const status = received.status
-  const label = " (HTTP " + String(status) + ")"
+  if (isSuccess(received.status)) return decodeSuccess(request, received, secrets)
 
-  if (status >= 200 && status < 300) return decodeSuccess(request, received, secrets)
+  const text = textOf(received.bytes)
 
-  if (status >= 300 && status < 400) {
-    return Effect.fail(
-      new RestUnavailable({
-        message: request.operation + " was redirected" + label + "; redirect refused",
-        status,
-      }),
-    )
-  }
-
-  const detail = errorDetail(new TextDecoder().decode(received.bytes), secrets)
-
-  if (status >= 400 && status < 500) {
-    return Effect.fail(
-      new RestRejected({
-        message: withDetail(request.operation + " was rejected" + label, detail),
-        status,
-        detail,
-      }),
-    )
-  }
-
+  // A key minted in a failed response is as secret as one in a success.
   return Effect.fail(
-    new RestUnavailable({
-      message: withDetail(request.operation + " failed upstream" + label, detail),
-      status,
-      detail,
-    }),
+    statusFailure(
+      request.operation,
+      received.status,
+      errorDetail(text, protectedValues(decodeJsonText(text), secrets)),
+    ),
   )
 }
 
@@ -336,89 +403,113 @@ const contextDetail = (
   return detail === undefined || detail.length === 0 ? listed : detail + " " + listed
 }
 
-/**
- * Upstream statuses keep the API's detail and conflict fields. Every other
- * failure gets a fixed message: SDK transport errors embed the underlying
- * cause, which may name hosts or echo response text.
- */
-const contextFailure = (
-  config: Config,
+/** Upstream statuses keep the Context API's detail and conflict fields, read as the SDK reads them. */
+const contextStatusFailure = (
   operation: string,
-  cause: unknown,
+  received: Received,
   secrets: ReadonlyArray<string>,
 ): RestRejected | RestUnavailable => {
-  if (cause instanceof ContextApiError) {
-    const status = cause.status
-    const label = " (HTTP " + String(status) + ")"
-    const detail = contextDetail(cause, secrets)
+  const status = received.status
 
-    if (status >= 400 && status < 500) {
-      return new RestRejected({
-        message: withDetail(operation + " was rejected" + label, detail),
-        status,
-        detail,
-      })
-    }
+  if (status >= 300 && status < 400) return statusFailure(operation, status, undefined)
 
-    return new RestUnavailable({
-      message: withDetail(operation + " failed upstream" + label, detail),
-      status,
-      detail,
-    })
-  }
+  const json = decodeJsonText(textOf(received.bytes))
 
-  const name = cause instanceof Error ? cause.name : ""
-
-  if (name === "TimeoutError") {
-    return new RestUnavailable({
-      message:
-        operation +
-        " timed out after " +
-        String(config.requestTimeoutMs) +
-        " ms waiting for the Context API",
-    })
-  }
-
-  if (name === "ConnectionError") {
-    return new RestUnavailable({ message: operation + " could not reach the Context API" })
-  }
-
-  return new RestUnavailable({
-    message: operation + " got an unexpected response from the Context API",
-  })
+  return statusFailure(
+    operation,
+    status,
+    contextDetail(new ContextApiError(status, json), protectedValues(json, secrets)),
+  )
 }
 
-/** A JSON round trip drops `undefined` members, which `Schema.Json` would reject. */
-const contextJson = <A>(
-  operation: string,
-  value: A,
+const unexpectedContext = (operation: string): RestUnavailable =>
+  new RestUnavailable({
+    message: operation + " got an unexpected response from the Context API",
+  })
+
+const contextSuccess = (
+  request: ContextRequest,
+  received: Received,
   secrets: ReadonlyArray<string>,
 ): Effect.Effect<RestResult, RestUnavailable> => {
-  if (value === undefined) return Effect.succeed(undefined)
+  if (request.response === "empty") return Effect.succeed(undefined)
 
-  const text = JSON.stringify(value)
-  const json = text === undefined ? undefined : decodeJsonText(text)
+  const json = decodeJsonText(textOf(received.bytes))
+  const parsed = json === undefined || request.parse === undefined ? json : request.parse(json)
 
-  if (json === undefined) {
+  if (parsed === undefined) return Effect.fail(unexpectedContext(request.operation))
+
+  if (request.response === "json") return Effect.succeed(redact(parsed, secrets))
+
+  const page = redactRecords(parsed, secrets)
+
+  return page === undefined
+    ? Effect.fail(unexpectedContext(request.operation))
+    : Effect.succeed(page)
+}
+
+const contextHeaders = (
+  config: Config,
+  apiKey: string,
+  accept: string,
+  body: JsonValue | Uint8Array | undefined,
+): RequestHeaders => {
+  const headers: RequestHeaders = {
+    ...config.factoryContextHeaders,
+    authorization: "Bearer " + apiKey,
+    accept,
+  }
+
+  if (body instanceof Uint8Array) {
+    headers["content-type"] = "application/octet-stream"
+  } else if (body !== undefined) {
+    headers["content-type"] = "application/json"
+  }
+
+  return headers
+}
+
+const encodeBody = (body: JsonValue | Uint8Array | undefined): string | Uint8Array | undefined =>
+  body === undefined || body instanceof Uint8Array ? body : JSON.stringify(body)
+
+const missingFactoryKey = (): FactoryApiKeyMissing =>
+  new FactoryApiKeyMissing({ message: "FACTORY_API_KEY is not set; Factory API tools need it" })
+
+interface ContextOrigin {
+  readonly apiKey: string
+  readonly baseUrl: string
+}
+
+const contextOrigin = (
+  config: Config,
+): Effect.Effect<ContextOrigin, FactoryApiKeyMissing | ContextBaseUrlMissing> => {
+  const apiKey = config.factoryApiKey
+
+  if (apiKey === undefined || apiKey.length === 0) return Effect.fail(missingFactoryKey())
+
+  const baseUrl = config.factoryContextBaseUrl
+
+  if (baseUrl === undefined) {
     return Effect.fail(
-      new RestUnavailable({
-        message: operation + " got an unexpected response from the Context API",
+      new ContextBaseUrlMissing({
+        message:
+          "FACTORY_CONTEXT_BASE_URL is not set; Context tools need the Prem origin that " +
+          "serves /api/context",
       }),
     )
   }
 
-  return Effect.succeed(redact(json, secrets))
+  return Effect.succeed({ apiKey, baseUrl })
 }
-
-const missingFactoryKey = (): FactoryApiKeyMissing =>
-  new FactoryApiKeyMissing({ message: "FACTORY_API_KEY is not set; Factory API tools need it" })
 
 /** `secrets` are server-wide values to scrub, such as the MCP bearer keys. */
 export const restLayer = (
   config: Config,
   secrets: ReadonlyArray<string> = [],
-): Layer.Layer<RestService> =>
-  Layer.succeed(RestService, {
+): Layer.Layer<RestService> => {
+  const contextScrub = secretsFor(config, secrets, [])
+
+  return Layer.succeed(RestService, {
     request: (request) => {
       const apiKey = config.factoryApiKey
 
@@ -426,38 +517,64 @@ export const restLayer = (
 
       const scrub = secretsFor(config, secrets, request.secrets)
 
-      return send(config, apiKey, request).pipe(
-        Effect.flatMap((received) => classify(request, received, scrub)),
-      )
-    },
-    context: (operation, run) => {
-      const apiKey = config.factoryApiKey
-
-      if (apiKey === undefined || apiKey.length === 0) return Effect.fail(missingFactoryKey())
-
-      const baseUrl = config.factoryContextBaseUrl
-
-      if (baseUrl === undefined) {
-        return Effect.fail(
-          new ContextBaseUrlMissing({
-            message:
-              "FACTORY_CONTEXT_BASE_URL is not set; Context tools need the Prem origin that " +
-              "serves /api/context",
-          }),
-        )
+      const headers: RequestHeaders = {
+        authorization: "Bearer " + apiKey,
+        accept: request.response === "json-or-binary" ? BINARY_ACCEPT : "application/json",
       }
 
-      const scrub = secretsFor(config, secrets, [])
+      if (request.body !== undefined) headers["content-type"] = "application/json"
 
-      return Effect.tryPromise({
-        try: () =>
-          run({
-            apiKey,
-            baseUrl,
-            headers: { ...config.factoryContextHeaders },
-            timeoutMs: config.requestTimeoutMs,
-          }),
-        catch: (cause) => contextFailure(config, operation, cause, scrub),
-      }).pipe(Effect.flatMap((value) => contextJson(operation, value, scrub)))
+      return send(config, {
+        api: FACTORY_API,
+        operation: request.operation,
+        method: request.method,
+        url: urlOf(config.factoryBaseUrl, request.path, request.query),
+        headers,
+        body: request.body === undefined ? undefined : JSON.stringify(request.body),
+        maxBytes: RESPONSE_MAX_BYTES,
+      }).pipe(Effect.flatMap((received) => classify(request, received, scrub)))
     },
+    context: (request) =>
+      contextOrigin(config).pipe(
+        Effect.flatMap(({ apiKey, baseUrl }) =>
+          send(config, {
+            api: CONTEXT_API,
+            operation: request.operation,
+            method: request.method,
+            url: urlOf(baseUrl, request.path, request.query),
+            headers: contextHeaders(config, apiKey, "application/json", request.body),
+            body: encodeBody(request.body),
+            maxBytes: RESPONSE_MAX_BYTES,
+          }),
+        ),
+        Effect.flatMap((received) =>
+          isSuccess(received.status)
+            ? contextSuccess(request, received, contextScrub)
+            : Effect.fail(contextStatusFailure(request.operation, received, contextScrub)),
+        ),
+      ),
+    contextBytes: (request) =>
+      contextOrigin(config).pipe(
+        Effect.flatMap(({ apiKey, baseUrl }) =>
+          send(config, {
+            api: CONTEXT_API,
+            operation: request.operation,
+            method: "GET",
+            url: baseUrl + request.path,
+            headers: contextHeaders(config, apiKey, "application/octet-stream", undefined),
+            body: undefined,
+            maxBytes: request.maxBytes,
+          }),
+        ),
+        Effect.flatMap((received) => {
+          if (!isSuccess(received.status)) {
+            return Effect.fail(contextStatusFailure(request.operation, received, contextScrub))
+          }
+
+          return containsProtected(received.bytes, contextScrub)
+            ? Effect.fail(protectedBytes(request.operation))
+            : Effect.succeed(received.bytes)
+        }),
+      ),
   })
+}

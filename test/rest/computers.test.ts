@@ -393,31 +393,31 @@ describe("rest computer and template tools over MCP", () => {
     )(
       await client.ok("rest_create_computer_file_upload", {
         computerId: "c-1",
-        fileName: "dir/a b.txt",
+        fileName: "a b.txt",
         body: { sizeBytes: 12, contentType: "text/plain" },
       }),
     )
 
-    expect(api.last()?.path).toBe("/api/v0/computers/c-1/files/dir%2Fa%20b.txt/create-upload")
+    expect(api.last()?.path).toBe("/api/v0/computers/c-1/files/a%20b.txt/create-upload")
     expect(bodyOf()).toEqual({ sizeBytes: 12, contentType: "text/plain" })
     expect(started.uploadUrl).toBe(api.baseUrl + "/uploads/" + started.transferId)
 
     const completed = await client.ok("rest_complete_computer_file_upload", {
       computerId: "c-1",
-      fileName: "dir/a b.txt",
-      body: { transferId: started.transferId, sessionId: "s-1", destPath: "/tmp/a b.txt" },
+      fileName: "a b.txt",
+      body: { transferId: started.transferId, sessionId: "s-1", destPath: "uploads/a b.txt" },
     })
 
     expect(completed).toEqual({
       transferId: started.transferId,
-      fileName: "dir/a b.txt",
+      fileName: "a b.txt",
       byteLength: 12,
     })
-    expect(api.last()?.path).toBe("/api/v0/computers/c-1/files/dir%2Fa%20b.txt/complete-upload")
+    expect(api.last()?.path).toBe("/api/v0/computers/c-1/files/a%20b.txt/complete-upload")
 
     const again = await client.fail("rest_complete_computer_file_upload", {
       computerId: "c-1",
-      fileName: "dir/a b.txt",
+      fileName: "a b.txt",
       body: { transferId: started.transferId, sessionId: "s-1" },
     })
 
@@ -434,6 +434,20 @@ describe("rest computer and template tools over MCP", () => {
       "POST /api/v0/computers/{computerId}/files/{fileName}/complete-upload",
       "POST /api/v0/computers/{computerId}/files/{fileName}/complete-upload",
     ])
+  })
+
+  it("sends a slash in a file name inside its one segment, for upstream to refuse", async () => {
+    const failure = await client.fail("rest_create_computer_file_upload", {
+      computerId: "c-1",
+      fileName: "dir/a b.txt",
+      body: { sizeBytes: 12, contentType: "text/plain" },
+    })
+
+    expect(api.last()?.path).toBe("/api/v0/computers/c-1/files/dir%2Fa%20b.txt/create-upload")
+    expect(failure).toEqual({
+      code: "rest_rejected",
+      message: "createComputerFileUpload was rejected (HTTP 400): fileName may not contain a slash",
+    })
   })
 
   it("rejects transfer calls missing their required body fields before I/O", async () => {

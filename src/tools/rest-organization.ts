@@ -1,7 +1,7 @@
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
-import { Cursor, DESTRUCTIVE, Id, JsonBody, PageLimit, restDomain, restTool } from "./rest-kit.ts"
+import { Cursor, DESTRUCTIVE, Id, PageLimit, openStruct, restDomain, restTool } from "./rest-kit.ts"
 import type { RestDomain, RestParams } from "./rest-kit.ts"
 
 /** Organization administration tools on the hosted API (`/api/v0/organization`). */
@@ -9,25 +9,21 @@ import type { RestDomain, RestParams } from "./rest-kit.ts"
 const ORGANIZATION = "/api/v0/organization"
 const LIMITS = ORGANIZATION + "/usage/limits"
 
-/** Keeps members upstream may add later; only the listed fields are checked. */
-const entryOf = (fields: Schema.Struct.Fields) =>
-  Schema.StructWithRest(Schema.Struct(fields), [JsonBody])
-
 const CreditLimit = Schema.NullOr(Schema.Int).annotate({
   description: "Credits limit (upstream minimum 1,000,000), or null to remove it.",
 })
 
 const Role = Schema.Literals(["user", "manager", "owner"])
 
-const GroupLimits = Schema.NonEmptyArray(entryOf({ groupId: Id, limit: CreditLimit })).annotate({
+const GroupLimits = Schema.NonEmptyArray(openStruct({ groupId: Id, limit: CreditLimit })).annotate({
   description: "Up to 100 { groupId, limit } entries, by directory group id.",
 })
 
-const UserLimits = Schema.NonEmptyArray(entryOf({ email: Id, limit: CreditLimit })).annotate({
+const UserLimits = Schema.NonEmptyArray(openStruct({ email: Id, limit: CreditLimit })).annotate({
   description: "Up to 100 { email, limit } entries, by user email.",
 })
 
-const SecretUpserts = Schema.Array(entryOf({ key: Id, value: Id })).annotate({
+const SecretUpserts = Schema.Array(openStruct({ key: Id, value: Id })).annotate({
   description:
     "Secrets to create or replace as { key, value }; `key` is an uppercase POSIX name. " +
     "Values are sent upstream and never echoed back.",

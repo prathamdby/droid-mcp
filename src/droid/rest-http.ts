@@ -4,7 +4,7 @@ import * as Option from "effect/Option"
 import * as Predicate from "effect/Predicate"
 import * as Schema from "effect/Schema"
 
-import type { JsonValue } from "./protocol.ts"
+import type { JsonFields, JsonValue } from "./protocol.ts"
 
 /** Pure helpers for the hosted REST client: no I/O, no Effect services. */
 
@@ -13,21 +13,63 @@ const PLAIN_DETAIL_MAX_LENGTH = 200
 
 export const REDACTED = "[redacted]"
 
+/** A lone UTF-16 surrogate, which has no UTF-8 encoding and makes URI encoding throw. */
+const LONE_SURROGATE = /\p{Cs}/u
+
+export const isWellFormed = (text: string): boolean => !LONE_SURROGATE.test(text)
+
 /**
  * Encodes one value as exactly one path segment. A bare `.` or `..` would be
- * resolved by URL parsing (even percent-encoded), so those are refused.
+ * resolved by URL parsing (even percent-encoded), so those are refused, as is
+ * text with a lone surrogate, which has no encoding.
  */
 export const encodePathSegment = (value: string): string | undefined =>
-  value === "." || value === ".." ? undefined : encodeURIComponent(value)
+  value === "." || value === ".." || !isWellFormed(value) ? undefined : encodeURIComponent(value)
 
 /** `a=1&a=2&b=x`, or "" when there is nothing to send. */
 export const serializeQuery = (entries: ReadonlyArray<readonly [string, string]>): string =>
   entries.map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(value)).join("&")
 
-/** Parses a body as JSON, or `undefined` when it is not JSON. */
+/**
+ * Deeper JSON is refused: decoding, redaction, and MCP encoding all recurse,
+ * and no Factory or Context payload comes close.
+ */
+export const JSON_MAX_DEPTH = 256
+
+const isFields = (value: JsonValue): value is JsonFields =>
+  Predicate.isObject(value) && !Array.isArray(value)
+
+/** The members of an array or object; `undefined` for a scalar. */
+const childrenOf = (value: JsonValue): ReadonlyArray<JsonValue> | undefined => {
+  if (Array.isArray(value)) return value
+
+  return isFields(value) ? Object.values(value) : undefined
+}
+
+/** Whether more than `limit` arrays and objects nest, checked without recursion. */
+const nestsDeeperThan = (value: JsonValue, limit: number): boolean => {
+  const pending: Array<readonly [JsonValue, number]> = [[value, 1]]
+
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [member, depth] = next
+    const children = childrenOf(member)
+
+    if (children === undefined) continue
+
+    if (depth > limit) return true
+
+    for (const child of children) pending.push([child, depth + 1])
+  }
+
+  return false
+}
+
+/** Parses a body as JSON, or `undefined` when it is not JSON or nests past `JSON_MAX_DEPTH`. */
 export const decodeJsonText = (text: string): JsonValue | undefined => {
   try {
-    return Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Json)(JSON.parse(text)))
+    const json = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Json)(JSON.parse(text)))
+
+    return json === undefined || nestsDeeperThan(json, JSON_MAX_DEPTH) ? undefined : json
   } catch {
     return undefined
   }

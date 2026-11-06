@@ -65,14 +65,12 @@ export interface ToolClient {
 
 export interface ConnectOptions {
   readonly config: Config
-  readonly keys?: ReadonlyArray<string>
 }
 
 /** An authenticated MCP client over the real `/mcp` layer, in process. */
 export const connect = async (options: ConnectOptions): Promise<ToolClient> => {
-  const keys = options.keys ?? [MCP_KEY]
-  const server = await startServer({ config: options.config, keys })
-  const authorization = "Bearer " + (keys[0] ?? "")
+  const server = await startServer({ config: options.config, keys: [MCP_KEY] })
+  const authorization = "Bearer " + MCP_KEY
   const { sessionId } = await initialize(server, PROTOCOL, { authorization })
   let id = 1
 
