@@ -102,27 +102,32 @@ const spawnDaemon = (config: Config): Effect.Effect<ChildProcess, DaemonUnavaila
     String(process.pid),
   ]
 
-  return Effect.try({
-    try: () =>
-      spawn(config.droidPath, args, {
-        detached: false,
-        stdio: "ignore",
-      }),
-    catch: () =>
-      new DaemonUnavailable({
-        message: "cannot spawn the droid daemon",
-        detail: config.droidPath,
-      }),
-  }).pipe(
-    Effect.filterOrFail(
-      (child) => child.pid !== undefined,
-      () =>
-        new DaemonUnavailable({
-          message: "cannot spawn the droid daemon",
-          detail: config.droidPath,
-        }),
-    ),
-  )
+  const unavailable = (detail: string): DaemonUnavailable =>
+    new DaemonUnavailable({ message: "cannot spawn the droid daemon", detail })
+
+  return Effect.callback<ChildProcess, DaemonUnavailable>((resume) => {
+    let child: ChildProcess
+
+    try {
+      child = spawn(config.droidPath, args, { detached: false, stdio: "ignore" })
+    } catch {
+      resume(Effect.fail(unavailable(config.droidPath)))
+
+      return
+    }
+
+    if (child.pid !== undefined) {
+      resume(Effect.succeed(child))
+
+      return
+    }
+
+    // A missing or non-executable binary reports why on the next tick as an
+    // 'error' event, which crashes the process unless a listener is already set.
+    child.once("error", (cause) => {
+      resume(Effect.fail(unavailable(cause.message)))
+    })
+  })
 }
 
 /**

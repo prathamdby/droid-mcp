@@ -37,9 +37,13 @@ describe("generated daemon tools", () => {
   it("sends the SDK method and the validated params", async () => {
     const calls: Array<DaemonRequest> = []
     const handler = surface.handlers.daemon_list_crons
-    const result = await run(handler({ sessionId: "s-1", includeInactive: true }), stub(calls))
 
-    expect(result).toEqual({ ok: true })
+    const result = await run(
+      handler({ sessionId: "s-1", includeInactive: true }),
+      stub(calls, () => Effect.succeed({ crons: [] })),
+    )
+
+    expect(result).toEqual({ crons: [] })
     expect(calls).toHaveLength(1)
     expect(calls[0]).toEqual({
       method: "daemon.list_crons",
@@ -66,6 +70,31 @@ describe("generated daemon tools", () => {
     )
 
     expect(failure).toMatchObject({ code: "daemon_unavailable", message: "no socket" })
+  })
+
+  it("rejects a reply that does not match the SDK result schema", async () => {
+    const replies: ReadonlyArray<JsonValue | undefined> = [undefined, "crons", { crons: "none" }]
+
+    for (const reply of replies) {
+      const failure = await run(
+        surface.handlers.daemon_list_crons({ sessionId: "s-1" }).pipe(Effect.flip),
+        stub([], () => Effect.succeed(reply)),
+      )
+
+      expect(failure).toEqual({
+        code: "daemon_protocol_error",
+        message: "daemon.list_crons returned a result that does not match its schema",
+      })
+    }
+  })
+
+  it("drops reply members a strict SDK result schema does not name", async () => {
+    const result = await run(
+      surface.handlers.daemon_list_crons({ sessionId: "s-1" }),
+      stub([], () => Effect.succeed({ crons: [], added: true })),
+    )
+
+    expect(result).toEqual({ crons: [] })
   })
 
   it("sends params unchanged for a method with only required fields", async () => {

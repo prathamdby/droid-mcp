@@ -42,7 +42,7 @@ const schemaOf = (value: JsonSchemaObject) =>
   SchemaRepresentation.fromJsonSchemaDocument(documentOf(value))
 
 /** Decodes against a schema whose decoding requirements are empty by construction. */
-const decode = (schema: Schema.Top, input: JsonSchemaObject): Option.Option<unknown> =>
+const decode = (schema: Schema.Top, input: JsonValue | undefined): Option.Option<unknown> =>
   // SAFETY: `fromJsonSchemaDocument` builds a schema with no decoding services;
   // `Schema.Top` types those services as `unknown`, so widen to a codec.
   Schema.decodeUnknownOption(schema as Schema.Codec<unknown>)(input)
@@ -67,16 +67,36 @@ const wireParams = (
   })
 }
 
-/** One handler: validate, send the wire request, map failures to the tool contract. */
-const handlerFor = (entry: WireEntry) => (params: JsonSchemaObject | undefined) =>
-  Effect.gen(function* () {
-    const daemon = yield* DaemonService
-    const requestParams = yield* wireParams(entry, params)
+/**
+ * One handler: validate, send the wire request, map failures to the tool
+ * contract. The reply is checked here because a reply the success schema
+ * rejects would otherwise fail in the encoder, past any failure mapping.
+ */
+const handlerFor = (entry: WireEntry) => {
+  const resultSchema = schemaOf(entry.result)
 
-    return yield* daemon
-      .request({ method: entry.method, params: requestParams })
-      .pipe(Effect.mapError((error) => ({ code: errorCode(error), message: errorMessage(error) })))
-  })
+  return (params: JsonSchemaObject | undefined) =>
+    Effect.gen(function* () {
+      const daemon = yield* DaemonService
+      const requestParams = yield* wireParams(entry, params)
+
+      const reply = yield* daemon
+        .request({ method: entry.method, params: requestParams })
+        .pipe(
+          Effect.mapError((error) => ({ code: errorCode(error), message: errorMessage(error) })),
+        )
+
+      return yield* Option.match(decode(resultSchema, reply), {
+        onNone: () =>
+          Effect.fail({
+            code: "daemon_protocol_error",
+            message: entry.method + " returned a result that does not match its schema",
+          }),
+        // SAFETY: the decoded value passed the SDK schema, so it is JSON by construction.
+        onSome: (decoded) => Effect.succeed(decoded as JsonValue),
+      })
+    })
+}
 
 export type GeneratedHandlers = Record<
   string,

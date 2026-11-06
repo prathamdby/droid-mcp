@@ -29,6 +29,7 @@ export const EVENT_TEXT_LIMIT = 4 * 1024
 export const RING_EVENT_LIMIT = 500
 export const RING_BYTE_LIMIT = 256 * 1024
 export const DEFAULT_WAIT_MS = 20_000
+export const MAX_WAIT_MS = 300_000
 export const IDLE_SESSION_MS = 30 * 60 * 1000
 export const REAPER_INTERVAL_MS = 60_000
 export const PROMPT_TIMEOUT_MS = 300_000

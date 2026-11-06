@@ -38,7 +38,12 @@ const AnswerQuestion = Tool.make("session_answer_question", {
   parameters: Schema.Struct({
     sessionId: Schema.String,
     requestId: Schema.String,
-    answers: Schema.Array(Schema.Struct({ index: Schema.Number, answer: Schema.String })),
+    answers: Schema.Array(
+      Schema.Struct({
+        index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+        answer: Schema.String,
+      }),
+    ),
   }),
   success: Schema.Struct({ resolved: Schema.Boolean }),
   failure: ToolFailure,
@@ -73,7 +78,10 @@ export const sessionPromptTools = () => {
     session_respond_permission: (params) =>
       Effect.gen(function* () {
         const hub = yield* SessionHubService
-        const view = yield* hub.pendingPrompt(params.sessionId, params.requestId)
+
+        const view = yield* hub
+          .pendingPrompt(params.sessionId, params.requestId)
+          .pipe(Effect.mapError(toolFailure))
 
         if (view === undefined || view.kind !== "permission") {
           return yield* Effect.fail(
@@ -104,7 +112,10 @@ export const sessionPromptTools = () => {
     session_answer_question: (params) =>
       Effect.gen(function* () {
         const hub = yield* SessionHubService
-        const view = yield* hub.pendingPrompt(params.sessionId, params.requestId)
+
+        const view = yield* hub
+          .pendingPrompt(params.sessionId, params.requestId)
+          .pipe(Effect.mapError(toolFailure))
 
         if (view === undefined || view.kind !== "question") {
           return yield* Effect.fail(
@@ -131,7 +142,10 @@ export const sessionPromptTools = () => {
     session_pick_options: (params) =>
       Effect.gen(function* () {
         const hub = yield* SessionHubService
-        const view = yield* hub.pendingPrompt(params.sessionId, params.requestId)
+
+        const view = yield* hub
+          .pendingPrompt(params.sessionId, params.requestId)
+          .pipe(Effect.mapError(toolFailure))
 
         if (view === undefined || view.kind !== "options") {
           return yield* Effect.fail(

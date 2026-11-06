@@ -22,7 +22,7 @@ It also serves a `droid` skill and a `droid` prompt that teach the assistant the
 A turn works like this.
 
 1. `session_create` starts a Droid child process for a working directory and an autonomy level. The server rejects any autonomy level above the cap reported by `server_info`.
-2. `session_stream` sends the prompt and waits up to `waitMs`, 20 seconds by default.
+2. `session_stream` sends the prompt and waits up to `waitMs`, 20 seconds by default and 300 seconds at most.
 3. If the turn is still running, call `session_events` with the cursor it returned. The cursor is the last event sequence number you have seen, so events do not repeat. Call it until the status is `completed`, `failed`, or `interrupted`.
 4. While the turn runs, prompts such as `pending_permission`, `pending_question`, and `pending_options` appear, each with a deadline. Answer them with the matching tool.
 5. `session_close` stops the process. Sessions idle for 30 minutes are closed automatically.

@@ -167,6 +167,24 @@ describe("daemon supervisor", () => {
     }
   })
 
+  it("fails without crashing when the droid binary is missing or not executable", async () => {
+    const plain = join(directory, "plain")
+
+    writeFileSync(plain, "#!/bin/sh\nexit 0\n")
+    chmodSync(plain, 0o644)
+
+    for (const [droidPath, cause] of [
+      [join(directory, "missing"), "ENOENT"],
+      [plain, "EACCES"],
+    ]) {
+      const host = await Effect.runPromise(daemonHost(testConfig({ ...config, droidPath }), FAST))
+      const error = await Effect.runPromise(host.ensure.pipe(Effect.flip))
+
+      expect(errorCode(error)).toBe("daemon_unavailable")
+      expect(error.detail).toContain(cause)
+    }
+  })
+
   it("never spawns when told to dial a daemon URL", async () => {
     const remote = testConfig({
       ...config,

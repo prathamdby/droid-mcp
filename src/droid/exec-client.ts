@@ -97,12 +97,20 @@ export const start = (options: ExecClientOptions): Effect.Effect<ExecClient, Exe
     })
 
     if (child.pid === undefined) {
-      return yield* Effect.fail(
-        new ExecFailed({
-          message: "cannot start droid exec",
-          detail: options.droidPath,
-        }),
-      )
+      // A missing or non-executable binary reports why on the next tick as an
+      // 'error' event, which crashes the process unless a listener is already set.
+      const failed = Deferred.makeUnsafe<never, ExecFailed>()
+
+      child.once("error", (cause) => {
+        Deferred.doneUnsafe(
+          failed,
+          Effect.fail(
+            new ExecFailed({ message: "cannot start droid exec", detail: cause.message }),
+          ),
+        )
+      })
+
+      return yield* Deferred.await(failed)
     }
 
     const pending = new Map<string, Deferred.Deferred<JsonValue | undefined, ExecError>>()
