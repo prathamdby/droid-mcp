@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomFillSync } from "node:crypto"
 import * as net from "node:net"
 
+import type * as Cause from "effect/Cause"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Queue from "effect/Queue"
@@ -21,6 +22,12 @@ export const MAX_FRAME_BYTES = 16 * 1024 * 1024
 export const MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 export const DEFAULT_KEEPALIVE_MS = 30_000
 const MAX_HANDSHAKE_BYTES = 16 * 1024
+
+/**
+ * After a local close, destroy the socket if the peer never finishes its half.
+ * The close frame is flushed first; this bound is only the backstop.
+ */
+const LOCAL_CLOSE_MS = 1_000
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 export const OPCODE = {
@@ -228,6 +235,14 @@ export const makeAssembler = (maxMessageBytes: number = MAX_MESSAGE_BYTES) => {
         return { messages: [], error: "data frame inside a fragmented message" }
       }
 
+      // The cap applies to the first fragment, finished or not. Checking only
+      // continuations let a single oversized piece through.
+      if (frame.payload.length > maxMessageBytes) {
+        reset()
+
+        return { messages: [], error: "message exceeds the size cap" }
+      }
+
       if (frame.fin) {
         return { messages: [{ kind: "text", text: new TextDecoder().decode(frame.payload) }] }
       }
@@ -314,31 +329,49 @@ const rejected = (status: number, reason: string): HandshakeCheck => ({
   reason,
 })
 
-export const parseHandshakeResponse = (head: string, key: string): HandshakeCheck => {
-  const lines = head.split("\r\n")
-  const statusLine = lines.length > 0 ? lines[0] : ""
+const headerTokens = (value: string): ReadonlyArray<string> =>
+  value
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 0)
 
-  if (!statusLine.startsWith("HTTP/1.")) return rejected(0, "malformed status line")
-  const firstSpace = statusLine.indexOf(" ")
-
-  if (firstSpace < 0) return rejected(0, "malformed status line")
-  const status = Number(statusLine.slice(firstSpace + 1, firstSpace + 4))
-
-  if (!Number.isFinite(status)) return rejected(0, "malformed status code")
-
-  if (status !== 101) return rejected(status, "expected 101 Switching Protocols")
-  let accept = ""
+const headerValues = (lines: ReadonlyArray<string>, name: string): ReadonlyArray<string> => {
+  const values: Array<string> = []
 
   for (let i = 1; i < lines.length; i++) {
-    const line = lines[i]
+    const line = lines[i] ?? ""
     const colon = line.indexOf(":")
 
     if (colon < 0) continue
 
-    if (line.slice(0, colon).trim().toLowerCase() === "sec-websocket-accept") {
-      accept = line.slice(colon + 1).trim()
-    }
+    if (line.slice(0, colon).trim().toLowerCase() !== name) continue
+
+    values.push(line.slice(colon + 1).trim())
   }
+
+  return values
+}
+
+export const parseHandshakeResponse = (head: string, key: string): HandshakeCheck => {
+  const lines = head.split("\r\n")
+  const statusLine = lines.length > 0 ? lines[0] : ""
+  // The status code is its own token. A 3-character slice treats "1011" as 101.
+  const matched = /^HTTP\/1\.[0-9] ([0-9]{3})(?: (.*))?$/.exec(statusLine ?? "")
+
+  if (matched === null) return rejected(0, "malformed status line")
+  const status = Number(matched[1])
+
+  if (status !== 101) return rejected(status, "expected 101 Switching Protocols")
+
+  const upgrade = headerValues(lines, "upgrade").flatMap((value) => headerTokens(value))
+
+  if (!upgrade.includes("websocket")) return rejected(status, "missing Upgrade header")
+
+  const connection = headerValues(lines, "connection").flatMap((value) => headerTokens(value))
+
+  if (!connection.includes("upgrade")) return rejected(status, "missing Connection header")
+
+  const accept = headerValues(lines, "sec-websocket-accept")[0] ?? ""
 
   if (accept.length === 0) return rejected(status, "missing Sec-WebSocket-Accept")
 
@@ -366,6 +399,8 @@ export interface WsConnection {
   readonly messages: Stream.Stream<WsMessage>
   /** Completes once the socket is gone. */
   readonly closed: Effect.Effect<WsCloseInfo>
+  /** True once the socket has finished. Does not wait. */
+  readonly isClosed: Effect.Effect<boolean>
   readonly sendText: (text: string) => Effect.Effect<void, WsError>
   readonly sendPong: (payload: Uint8Array) => Effect.Effect<void, WsError>
   readonly close: Effect.Effect<void>
@@ -390,7 +425,7 @@ const socketTarget = (options: WsConnectOptions): net.NetConnectOpts => {
 
 export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, WsError> =>
   Effect.gen(function* () {
-    const queue = yield* Queue.unbounded<WsMessage>()
+    const queue = yield* Queue.unbounded<WsMessage, Cause.Done>()
     const closedDeferred = yield* Deferred.make<WsCloseInfo>()
     const assembler = makeAssembler(options.maxMessageBytes ?? MAX_MESSAGE_BYTES)
     const key = makeKey()
@@ -400,16 +435,55 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
     let buffer: Uint8Array = new Uint8Array(0)
     let upgraded = false
     let closed = false
+    let releasing = false
     let pingsOutstanding = 0
     let keepalive: ReturnType<typeof setInterval> | undefined
+    let handshakeTimer: ReturnType<typeof setTimeout> | undefined
+
+    const clearHandshakeTimer = (): void => {
+      if (handshakeTimer === undefined) return
+      clearTimeout(handshakeTimer)
+      handshakeTimer = undefined
+    }
 
     const finish = (code: number, reason: string): void => {
       if (closed) return
       closed = true
+      clearHandshakeTimer()
 
       if (keepalive !== undefined) clearInterval(keepalive)
-      Queue.shutdownUnsafe(queue)
-      Deferred.doneUnsafe(closedDeferred, Effect.succeed({ code, reason }))
+      keepalive = undefined
+      buffer = new Uint8Array(0)
+      // shutdownUnsafe drops frames already offered. end keeps them so a text
+      // frame that shares a chunk with close is still readable.
+      Queue.endUnsafe(queue)
+      // The queue wakes its reader on a later scheduler turn. Completing
+      // `closed` here lets that signal win and discard the last response.
+      setImmediate(() => {
+        Deferred.doneUnsafe(closedDeferred, Effect.succeed({ code, reason }))
+      })
+    }
+
+    const releaseLocalSocket = (target: net.Socket): void => {
+      if (releasing || target.destroyed) return
+      releasing = true
+
+      const timer = setTimeout(() => {
+        if (!target.destroyed) target.destroy()
+      }, LOCAL_CLOSE_MS)
+
+      timer.unref()
+      target.once("close", () => {
+        clearTimeout(timer)
+      })
+
+      if (target.writableEnded) return
+
+      target.end(() => {
+        clearTimeout(timer)
+
+        if (!target.destroyed) target.destroy()
+      })
     }
 
     const socket = yield* Effect.callback<net.Socket, WsError>((resume) => {
@@ -417,10 +491,22 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
       let settled = false
 
       const fail = (message: string): void => {
-        if (settled) return
-        settled = true
+        clearHandshakeTimer()
+        buffer = new Uint8Array(0)
+
+        // After a successful upgrade the caller already holds the socket, so a
+        // later terminal failure is reported through `closed` and the destroy.
+        if (!settled) {
+          settled = true
+          finish(1006, message)
+          connection.destroy()
+          resume(Effect.fail(new WsError({ message })))
+
+          return
+        }
+
         finish(1006, message)
-        resume(Effect.fail(new WsError({ message })))
+        connection.destroy()
       }
 
       const write = (frame: Uint8Array): void => {
@@ -435,7 +521,7 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
           if (pingsOutstanding >= 2) {
             write(encodeFrame(OPCODE.close, new Uint8Array([0x03, 0xe9]), nextMask()))
             finish(1001, "keepalive timeout")
-            connection.end()
+            releaseLocalSocket(connection)
 
             return
           }
@@ -446,6 +532,7 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
       }
 
       const handleMessages = (chunk: Uint8Array): void => {
+        if (closed) return
         buffer = concat(buffer, chunk)
 
         if (!upgraded) {
@@ -457,28 +544,36 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
             return
           }
 
+          // `end` stops before the blank line. Bytes after it belong to the
+          // first frame and must not count toward the header cap.
+          if (end + 4 > MAX_HANDSHAKE_BYTES) {
+            fail("handshake response too large")
+
+            return
+          }
+
           const head = new TextDecoder("latin1").decode(buffer.subarray(0, end))
           buffer = buffer.subarray(end + 4)
           const check = parseHandshakeResponse(head, key)
 
           if (check.kind === "rejected") {
             fail("handshake rejected: " + check.reason)
-            connection.destroy()
 
             return
           }
 
           upgraded = true
           settled = true
+          clearHandshakeTimer()
           resume(Effect.succeed(connection))
           startKeepalive()
         }
 
+        if (closed) return
         const decoded = decodeFrames(buffer)
 
         if (decoded.error !== undefined) {
           fail(decoded.error)
-          connection.destroy()
 
           return
         }
@@ -490,7 +585,6 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
 
           if (assembled.error !== undefined) {
             fail(assembled.error)
-            connection.destroy()
 
             return
           }
@@ -503,7 +597,9 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
             } else if (message.kind === "close") {
               write(encodeFrame(OPCODE.close, new Uint8Array(0), nextMask()))
               finish(message.code, message.reason)
-              connection.end()
+              releaseLocalSocket(connection)
+
+              return
             } else {
               Queue.offerUnsafe(queue, message)
             }
@@ -512,30 +608,54 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
       }
 
       connection.on("connect", () => {
+        // Data can arrive before `connect` on a Unix socket. A destroy in that
+        // window does not stick, so a failed handshake must be torn down again
+        // here or the peer stays open and the request is still written.
+        if (closed || connection.destroyed) {
+          connection.destroy()
+
+          return
+        }
+
         connection.write(buildHandshakeRequest(key, options.path ?? "/"))
       })
       connection.on("data", (chunk: Uint8Array) => {
+        if (closed) return
         handleMessages(chunk)
       })
       connection.on("error", (cause: Error) => {
         fail("socket error: " + cause.message)
       })
       connection.on("end", () => {
+        // Clearing the handshake timer without resuming leaves connect pending
+        // until an outer timeout. EOF before upgrade is a failed acquisition.
+        if (!settled) {
+          fail("socket ended")
+
+          return
+        }
+
         finish(1006, "socket ended")
+        releaseLocalSocket(connection)
       })
       connection.on("close", () => {
+        if (!settled) {
+          fail("socket closed")
+
+          return
+        }
+
         finish(1006, "socket closed")
       })
 
-      const timer = setTimeout(() => {
-        if (!upgraded) {
-          fail("handshake timed out")
-          connection.destroy()
-        }
+      handshakeTimer = setTimeout(() => {
+        if (!upgraded) fail("handshake timed out")
       }, handshakeTimeoutMs)
 
       return Effect.sync(() => {
-        clearTimeout(timer)
+        clearHandshakeTimer()
+
+        if (keepalive !== undefined) clearInterval(keepalive)
         connection.destroy()
       })
     })
@@ -557,13 +677,18 @@ export const connect = (options: WsConnectOptions): Effect.Effect<WsConnection, 
     return {
       messages: Stream.fromQueue(queue),
       closed: Deferred.await(closedDeferred),
+      isClosed: Effect.sync(() => closed),
       sendText: (text: string) => sendFrame(OPCODE.text, new TextEncoder().encode(text)),
       sendPong: (payload: Uint8Array) => sendFrame(OPCODE.pong, payload),
       close: Effect.sync(() => {
         if (closed) return
-        socket.write(encodeFrame(OPCODE.close, new Uint8Array(0), nextMask()))
+
+        if (!socket.destroyed) {
+          socket.write(encodeFrame(OPCODE.close, new Uint8Array(0), nextMask()))
+        }
+
         finish(1000, "closed by client")
-        socket.end()
+        releaseLocalSocket(socket)
       }),
     }
   })

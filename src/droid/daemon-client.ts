@@ -1,6 +1,7 @@
 import * as Deferred from "effect/Deferred"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import * as Option from "effect/Option"
 import * as PubSub from "effect/PubSub"
@@ -60,6 +61,8 @@ export interface DaemonClient {
   readonly notifications: Stream.Stream<DaemonNotification>
   readonly requests: Stream.Stream<DaemonServerRequest>
   readonly protocolVersion: Effect.Effect<string>
+  /** False once the socket has closed, even if this client is still cached. */
+  readonly connected: Effect.Effect<boolean>
   readonly request: (
     options: DaemonRequestOptions,
   ) => Effect.Effect<JsonValue | undefined, DaemonError>
@@ -175,6 +178,32 @@ const serverRequestOf = (message: IncomingRequestEnvelope): DaemonServerRequest 
     ? { id: message.id, method: message.method }
     : { id: message.id, method: message.method, params: message.params }
 
+interface BroadcastItem<A> {
+  readonly kind: "item"
+  readonly value: A
+}
+
+interface BroadcastEnd {
+  readonly kind: "end"
+}
+
+type Broadcast<A> = BroadcastItem<A> | BroadcastEnd
+
+/** Subscribers observe events, then complete when the producer ends. */
+const broadcast = <A>(pubsub: PubSub.PubSub<Broadcast<A>>): Stream.Stream<A> =>
+  Stream.fromPubSub(pubsub).pipe(
+    Stream.takeWhile((event): event is BroadcastItem<A> => event.kind === "item"),
+    Stream.map((event) => event.value),
+  )
+
+const publishItem = <A>(pubsub: PubSub.PubSub<Broadcast<A>>, value: A): void => {
+  PubSub.publishUnsafe(pubsub, { kind: "item", value })
+}
+
+const endBroadcast = <A>(pubsub: PubSub.PubSub<Broadcast<A>>): void => {
+  PubSub.endUnsafe(pubsub, { kind: "end" })
+}
+
 export const openDaemon = (
   options: DaemonClientOptions,
 ): Effect.Effect<DaemonClient, DaemonError> =>
@@ -193,12 +222,16 @@ export const openDaemon = (
 
     const pending = new Map<string, Deferred.Deferred<ResponseEnvelope, DaemonError>>()
     const protocolVersion = yield* Ref.make(options.protocolVersion ?? SDK_PROTOCOL_VERSION)
-    const notifications = yield* PubSub.unbounded<DaemonNotification>({ replay: 1 })
-    const requests = yield* PubSub.unbounded<DaemonServerRequest>({ replay: 1 })
     const requestTimeoutMs = options.requestTimeoutMs ?? 30_000
     const initializeTimeoutMs = options.initializeTimeoutMs ?? 60_000
     let nextId = 1
     let closed = false
+    let stopped = false
+    let reader: Fiber.Fiber<void> | undefined
+    let watcher: Fiber.Fiber<void> | undefined
+
+    let notifications: PubSub.PubSub<Broadcast<DaemonNotification>> | undefined
+    let requests: PubSub.PubSub<Broadcast<DaemonServerRequest>> | undefined
 
     const failPending = (error: DaemonError): void => {
       for (const deferred of pending.values()) {
@@ -208,197 +241,258 @@ export const openDaemon = (
       pending.clear()
     }
 
-    const route = (line: string): void => {
-      const message = parseServerMessage(line)
+    const finishStreams = (): void => {
+      if (notifications !== undefined) endBroadcast(notifications)
 
-      if (message === undefined) {
-        logger?.warn("daemon.message.unparsed")
-
-        return
-      }
-
-      if (message.type === "response") {
-        if (message.id === null) {
-          logger?.warn("daemon.response.uncorrelated")
-
-          return
-        }
-
-        const deferred = pending.get(message.id)
-
-        if (deferred === undefined) {
-          logger?.warn("daemon.response.unknown_id")
-
-          return
-        }
-
-        pending.delete(message.id)
-        Deferred.doneUnsafe(deferred, Effect.succeed(message))
-
-        return
-      }
-
-      if (message.type === "notification") {
-        PubSub.publishUnsafe(notifications, notificationOf(message))
-
-        return
-      }
-
-      PubSub.publishUnsafe(requests, serverRequestOf(message))
+      if (requests !== undefined) endBroadcast(requests)
     }
 
-    const reader = yield* ws.messages.pipe(
-      Stream.runForEach((message) =>
-        Effect.sync(() => {
-          if (message.kind === "text") route(message.text)
-        }),
-      ),
-      Effect.forkDetach,
-    )
-
-    const watcher = yield* ws.closed.pipe(
-      Effect.flatMap((info) =>
-        Effect.sync(() => {
-          closed = true
-          failPending(
-            new DaemonUnavailable({
-              message: "daemon connection closed",
-              detail: String(info.code) + (info.reason.length > 0 ? ": " + info.reason : ""),
-            }),
-          )
-        }),
-      ),
-      Effect.forkDetach,
-    )
-
-    const exchange = (
-      method: string,
-      params: JsonValue | undefined,
-      version: string,
-      timeoutMs: number,
-    ): Effect.Effect<ResponseEnvelope, DaemonError> =>
+    const shutdown = Effect.uninterruptible(
       Effect.gen(function* () {
-        const id = "droid-mcp-" + String(nextId)
-        nextId += 1
-        const deferred = Deferred.makeUnsafe<ResponseEnvelope, DaemonError>()
-        pending.set(id, deferred)
-        const envelope = requestEnvelope(id, method, params, version)
-        yield* ws.sendText(JSON.stringify(envelope)).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DaemonUnavailable({
-                message: "cannot write to the daemon socket",
-                detail: cause.message,
-              }),
-          ),
-        )
+        if (stopped) return
+        stopped = true
+        closed = true
+        failPending(new DaemonUnavailable({ message: "daemon client closed" }))
+        finishStreams()
+        yield* ws.close
 
-        const waiting = Deferred.await(deferred).pipe(
-          Effect.timeout(Duration.millis(timeoutMs)),
-          Effect.catchTag("TimeoutError", () =>
-            Effect.fail(
-              new DaemonTimeout({
-                message: "daemon request timed out",
-                detail: method + " after " + String(timeoutMs) + "ms",
-              }),
-            ),
-          ),
-        )
+        if (reader !== undefined) yield* Fiber.interrupt(reader)
 
-        const closedFailure = ws.closed.pipe(
-          Effect.flatMap((info) =>
-            Effect.fail(
+        if (watcher !== undefined) yield* Fiber.interrupt(watcher)
+      }),
+    )
+
+    return yield* Effect.gen(function* () {
+      const notificationPub = yield* PubSub.unbounded<Broadcast<DaemonNotification>>({ replay: 1 })
+      const requestPub = yield* PubSub.unbounded<Broadcast<DaemonServerRequest>>({ replay: 1 })
+      notifications = notificationPub
+      requests = requestPub
+
+      const route = (line: string): void => {
+        const message = parseServerMessage(line)
+
+        if (message === undefined) {
+          logger?.warn("daemon.message.unparsed")
+
+          return
+        }
+
+        if (message.type === "response") {
+          if (message.id === null) {
+            logger?.warn("daemon.response.uncorrelated")
+
+            return
+          }
+
+          const deferred = pending.get(message.id)
+
+          if (deferred === undefined) {
+            logger?.warn("daemon.response.unknown_id")
+
+            return
+          }
+
+          pending.delete(message.id)
+          Deferred.doneUnsafe(deferred, Effect.succeed(message))
+
+          return
+        }
+
+        if (message.type === "notification") {
+          publishItem(notificationPub, notificationOf(message))
+
+          return
+        }
+
+        publishItem(requestPub, serverRequestOf(message))
+      }
+
+      reader = yield* ws.messages.pipe(
+        Stream.runForEach((message) =>
+          Effect.sync(() => {
+            if (message.kind === "text") route(message.text)
+          }),
+        ),
+        Effect.forkDetach,
+      )
+
+      watcher = yield* ws.closed.pipe(
+        Effect.flatMap((info) =>
+          Effect.sync(() => {
+            closed = true
+            failPending(
               new DaemonUnavailable({
                 message: "daemon connection closed",
-                detail: String(info.code),
+                detail: String(info.code) + (info.reason.length > 0 ? ": " + info.reason : ""),
               }),
-            ),
-          ),
-        )
+            )
+            finishStreams()
+          }),
+        ),
+        Effect.forkDetach,
+      )
 
-        return yield* Effect.raceFirst(waiting, closedFailure).pipe(
-          Effect.ensuring(Effect.sync(() => pending.delete(id))),
-        )
-      })
+      const exchange = (
+        method: string,
+        params: JsonValue | undefined,
+        version: string,
+        timeoutMs: number,
+      ): Effect.Effect<ResponseEnvelope, DaemonError> =>
+        Effect.suspend(() => {
+          const id = "droid-mcp-" + String(nextId)
+          nextId += 1
+          const deferred = Deferred.makeUnsafe<ResponseEnvelope, DaemonError>()
+          pending.set(id, deferred)
+          let handedOff = false
 
-    const request = (
-      requestOptions: DaemonRequestOptions,
-    ): Effect.Effect<JsonValue | undefined, DaemonError> =>
-      Effect.gen(function* () {
-        const timeoutMs = requestOptions.timeoutMs ?? requestTimeoutMs
-        const firstVersion = yield* Ref.get(protocolVersion)
+          const sent = Effect.gen(function* () {
+            const envelope = requestEnvelope(id, method, params, version)
+            yield* ws.sendText(JSON.stringify(envelope)).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DaemonUnavailable({
+                    message: "cannot write to the daemon socket",
+                    detail: cause.message,
+                    delivered: false,
+                  }),
+              ),
+            )
+            handedOff = true
 
-        const first = yield* exchange(
-          requestOptions.method,
-          requestOptions.params,
-          firstVersion,
-          timeoutMs,
-        )
+            const waiting = Deferred.await(deferred).pipe(
+              Effect.timeout(Duration.millis(timeoutMs)),
+              Effect.catchTag("TimeoutError", () =>
+                Effect.fail(
+                  new DaemonTimeout({
+                    message: "daemon request timed out",
+                    detail: method + " after " + String(timeoutMs) + "ms",
+                  }),
+                ),
+              ),
+            )
 
-        const mismatch = protocolMismatch(first.error)
+            const closedFailure = ws.closed.pipe(
+              Effect.flatMap((info) =>
+                Effect.fail(
+                  new DaemonUnavailable({
+                    message: "daemon connection closed",
+                    detail: String(info.code),
+                    delivered: handedOff,
+                  }),
+                ),
+              ),
+            )
 
-        if (mismatch === undefined) {
-          return yield* unwrap(first, requestOptions.method)
-        }
-
-        logger?.info("daemon.protocol.adopted", { offered: firstVersion, adopted: mismatch.local })
-        yield* Ref.set(protocolVersion, mismatch.local)
-
-        const second = yield* exchange(
-          requestOptions.method,
-          requestOptions.params,
-          mismatch.local,
-          timeoutMs,
-        )
-
-        const secondMismatch = protocolMismatch(second.error)
-
-        if (secondMismatch !== undefined) {
-          return yield* Effect.fail(
-            new DaemonProtocolError({
-              message: "daemon rejected the adopted protocol version",
-              detail:
-                "daemon wants " + secondMismatch.local + ", client offered " + secondMismatch.peer,
-            }),
-          )
-        }
-
-        return yield* unwrap(second, requestOptions.method)
-      })
-
-    return {
-      notifications: Stream.fromPubSub(notifications),
-      requests: Stream.fromPubSub(requests),
-      protocolVersion: Ref.get(protocolVersion),
-      request,
-      authenticate: (apiKey: string) =>
-        Effect.gen(function* () {
-          const result = yield* request({
-            method: METHOD.authenticate,
-            params: {
-              apiKey,
-              caller: "sdk",
-              metadata: {
-                sdk: {
-                  language: "typescript",
-                  version: options.version,
-                },
-              },
-            },
-            timeoutMs: initializeTimeoutMs,
+            return yield* Effect.raceFirst(waiting, closedFailure).pipe(
+              Effect.catchTag("DaemonUnavailable", (error) =>
+                Effect.fail(
+                  new DaemonUnavailable({
+                    message: error.message,
+                    detail: error.detail,
+                    delivered: handedOff,
+                  }),
+                ),
+              ),
+            )
           })
 
-          return yield* decodeAuthenticateResult(result)
-        }),
-      close: Effect.gen(function* () {
-        if (closed) return
-        closed = true
-        yield* Effect.sync(() =>
-          failPending(new DaemonUnavailable({ message: "daemon client closed" })),
-        )
-        yield* ws.close
-        yield* Fiber.interrupt(reader)
-        yield* Fiber.interrupt(watcher)
-      }),
-    }
+          // Drop the id on failure, success, and caller interruption.
+          return sent.pipe(Effect.ensuring(Effect.sync(() => pending.delete(id))))
+        })
+
+      const request = (
+        requestOptions: DaemonRequestOptions,
+      ): Effect.Effect<JsonValue | undefined, DaemonError> =>
+        Effect.gen(function* () {
+          const timeoutMs = requestOptions.timeoutMs ?? requestTimeoutMs
+          const firstVersion = yield* Ref.get(protocolVersion)
+
+          const first = yield* exchange(
+            requestOptions.method,
+            requestOptions.params,
+            firstVersion,
+            timeoutMs,
+          )
+
+          // A documented mismatch is a rejection, not execution. Retry that
+          // request once with the adopted version, and never a third time.
+          const mismatch = protocolMismatch(first.error)
+
+          if (mismatch === undefined) {
+            return yield* unwrap(first, requestOptions.method)
+          }
+
+          logger?.info("daemon.protocol.adopted", {
+            offered: firstVersion,
+            adopted: mismatch.local,
+          })
+          yield* Ref.set(protocolVersion, mismatch.local)
+
+          const second = yield* exchange(
+            requestOptions.method,
+            requestOptions.params,
+            mismatch.local,
+            timeoutMs,
+          )
+
+          const secondMismatch = protocolMismatch(second.error)
+
+          if (secondMismatch !== undefined) {
+            return yield* Effect.fail(
+              new DaemonProtocolError({
+                message: "daemon rejected the adopted protocol version",
+                detail:
+                  "daemon wants " +
+                  secondMismatch.local +
+                  ", client offered " +
+                  secondMismatch.peer,
+              }),
+            )
+          }
+
+          return yield* unwrap(second, requestOptions.method)
+        })
+
+      const connected = Effect.gen(function* () {
+        if (closed) return false
+
+        // The socket flag flips in the close handler. A zero timeout on the
+        // deferred would race that signal and can interrupt a waiter.
+        if (yield* ws.isClosed) {
+          closed = true
+
+          return false
+        }
+
+        return true
+      })
+
+      return {
+        notifications: broadcast(notificationPub),
+        requests: broadcast(requestPub),
+        protocolVersion: Ref.get(protocolVersion),
+        connected,
+        request,
+        authenticate: (apiKey: string) =>
+          Effect.gen(function* () {
+            const result = yield* request({
+              method: METHOD.authenticate,
+              params: {
+                apiKey,
+                caller: "sdk",
+                metadata: {
+                  sdk: {
+                    language: "typescript",
+                    version: options.version,
+                  },
+                },
+              },
+              timeoutMs: initializeTimeoutMs,
+            })
+
+            return yield* decodeAuthenticateResult(result)
+          }),
+        close: shutdown,
+      }
+    }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : shutdown)))
   })

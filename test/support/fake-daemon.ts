@@ -16,6 +16,8 @@ export interface SeenRequest {
 export interface ScriptedReply {
   readonly result?: JsonValue
   readonly error?: JsonRpcError
+  /** Record the request, then drop the socket without a reply. */
+  readonly drop?: boolean
 }
 
 export interface ScriptedHandler {
@@ -31,6 +33,8 @@ export interface FakeDaemon {
   readonly socketPath: string
   readonly requests: ReadonlyArray<SeenRequest>
   readonly push: (value: JsonValue) => void
+  readonly openSockets: () => number
+  readonly dropSockets: () => void
   readonly close: () => Promise<void>
 }
 
@@ -119,6 +123,7 @@ export const startFakeDaemon = async (
 ): Promise<FakeDaemon> => {
   const requests: Array<SeenRequest> = []
   const sockets: Array<net.Socket> = []
+  let open = 0
   const server = net.createServer()
 
   const push = (value: JsonValue): void => {
@@ -129,10 +134,20 @@ export const startFakeDaemon = async (
 
   server.on("connection", (socket) => {
     sockets.push(socket)
+    open += 1
+    socket.on("close", () => {
+      open -= 1
+    })
     let buffer: Uint8Array = new Uint8Array(0)
     let upgraded = false
 
     const reply = (id: string, response: ScriptedReply): void => {
+      if (response.drop === true) {
+        socket.destroy()
+
+        return
+      }
+
       const payload = new TextEncoder().encode(JSON.stringify(replyEnvelope(id, response)))
       socket.write(encodeServerFrame(OPCODE.text, payload))
     }
@@ -193,6 +208,10 @@ export const startFakeDaemon = async (
     socketPath,
     requests,
     push,
+    openSockets: () => open,
+    dropSockets: () => {
+      for (const socket of sockets) socket.destroy()
+    },
     close: async () => {
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))

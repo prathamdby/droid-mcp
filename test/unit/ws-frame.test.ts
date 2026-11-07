@@ -147,4 +147,14 @@ describe("message assembler", () => {
 
     expect(result.error).toBe("message exceeds the size cap")
   })
+
+  it("rejects an oversized first fragment before a continuation arrives", () => {
+    const assembler = makeAssembler(4)
+    const partial = assembler.push({ fin: false, opcode: OPCODE.text, payload: text("hello") })
+    expect(partial.error).toBe("message exceeds the size cap")
+    expect(partial.messages.length).toBe(0)
+
+    const whole = assembler.push({ fin: true, opcode: OPCODE.text, payload: text("hello") })
+    expect(whole.error).toBe("message exceeds the size cap")
+  })
 })

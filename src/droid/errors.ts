@@ -17,6 +17,12 @@ export class DaemonUnavailable extends Schema.TaggedError<DaemonUnavailable>()(
   {
     message: Schema.String,
     detail: Schema.optional(Schema.String),
+    /**
+     * True only after the socket accepted the request bytes. Callers must not
+     * send that request again unless the method is a pure read: the daemon may
+     * already have executed it. Absent or false means it was not handed off.
+     */
+    delivered: Schema.optional(Schema.Boolean),
   },
 ) {}
 
