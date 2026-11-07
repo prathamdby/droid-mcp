@@ -277,18 +277,37 @@ describe("daemon supervisor", () => {
   it("replaces a killed daemon without losing the new socket", async () => {
     const host = await Effect.runPromise(daemonHost(config, FAST))
 
-    for (let attempt = 0; attempt < 5; attempt++) {
-      await Effect.runPromise(host.ensure)
-      const pid = await Effect.runPromise(host.childPid)
+    try {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await Effect.runPromise(host.ensure)
+        const pid = await Effect.runPromise(host.childPid)
 
-      if (pid === undefined) throw new Error("no pid after ensure")
+        if (pid === undefined) throw new Error("no pid after ensure")
 
-      process.kill(pid, "SIGKILL")
-      await Effect.runPromise(host.ensure)
-      expect(await accepts(config.socketPath)).toBe(true)
+        // process.kill returns before Node's exit event. ensure reuses a
+        // socket that still accepts until that exit clears the owned pid.
+        process.kill(pid, "SIGKILL")
+        expect(await waitUntilPidCleared(host)).toBeUndefined()
+
+        await Effect.runPromise(host.ensure)
+
+        const successor = await Effect.runPromise(host.childPid)
+        const identity = statSync(config.socketPath, { bigint: true })
+
+        expect(successor).toBeDefined()
+        expect(successor).not.toBe(pid)
+        expect(alive(successor ?? 0)).toBe(true)
+        expect(await accepts(config.socketPath)).toBe(true)
+
+        const after = statSync(config.socketPath, { bigint: true })
+
+        expect(after.dev).toBe(identity.dev)
+        expect(after.ino).toBe(identity.ino)
+        expect(await accepts(config.socketPath)).toBe(true)
+      }
+    } finally {
+      await Effect.runPromise(host.stop)
     }
-
-    await Effect.runPromise(host.stop)
   })
 
   it("clears an exited child and does not unlink a replacement socket", async () => {

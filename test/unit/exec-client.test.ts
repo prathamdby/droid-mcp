@@ -193,7 +193,7 @@ describe("exec client", () => {
   })
 
   it("fails a line that grows past the stdout cap", async () => {
-    const failure = await Effect.runPromise(
+    await Effect.runPromise(
       Effect.gen(function* () {
         const client = yield* start({
           droidPath: process.execPath,
@@ -205,18 +205,23 @@ describe("exec client", () => {
           requestTimeoutMs: 2_000,
         })
 
-        const error = yield* client
-          .request({ method: "droid.initialize", params: {} })
-          .pipe(Effect.flip)
+        yield* Effect.gen(function* () {
+          const error = yield* client
+            .request({ method: "droid.initialize", params: {} })
+            .pipe(Effect.flip)
+          // Bound the wait so a missing SIGKILL fails this test instead of
+          // hanging. close() also kills, so it must run after this observation.
 
-        yield* client.close
+          const exit = yield* client.exited.pipe(Effect.timeoutOption(Duration.millis(1_000)))
 
-        return error
+          expect(error._tag).toBe("ExecFailed")
+          expect(error.message).toContain("line cap")
+          expect(Option.isSome(exit)).toBe(true)
+
+          if (Option.isSome(exit)) expect(exit.value.signal).toBe("SIGKILL")
+        }).pipe(Effect.ensuring(client.close))
       }),
     )
-
-    expect(failure._tag).toBe("ExecFailed")
-    expect(failure.message).toContain("line cap")
   })
 
   it("records the exit before close returns when SIGTERM is ignored", async () => {

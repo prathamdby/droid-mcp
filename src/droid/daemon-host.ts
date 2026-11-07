@@ -267,12 +267,21 @@ export const daemonHost = (
     const withLock = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
       Semaphore.withPermit(lock)(effect)
 
-    const waitForSocket = (): Effect.Effect<boolean> =>
+    /**
+     * Waits until `owner`'s socket accepts. Node's exit event ends the wait:
+     * a connect that lands as that child exits is not readiness, and a dead
+     * child must not consume the rest of the startup budget.
+     */
+    const waitForSocket = (owner: ChildProcess): Effect.Effect<boolean> =>
       Effect.gen(function* () {
         const deadline = Date.now() + timing.startTimeoutMs
 
         while (Date.now() < deadline) {
+          if (!isLive(owner) || owned !== owner) return false
+
           if (yield* isListening(config.socketPath, timing.connectTimeoutMs)) {
+            if (!isLive(owner) || owned !== owner) return false
+
             yield* Effect.sync(rememberSocket)
 
             return true
@@ -336,8 +345,10 @@ export const daemonHost = (
         const current = yield* Ref.get(child)
 
         if (current !== undefined && isLive(current)) {
-          if (yield* waitForSocket()) return
-          yield* abandon(current)
+          if (yield* waitForSocket(current)) return
+
+          // The exit callback already dropped this child. abandon() unlinks by path.
+          if (owned === current && isLive(current)) yield* abandon(current)
         }
 
         // A listening socket is reused before this loop. A path that is not
@@ -353,9 +364,9 @@ export const daemonHost = (
         yield* assign(started)
         noteExit(started)
 
-        if (yield* waitForSocket()) return
+        if (yield* waitForSocket(started)) return
 
-        yield* abandon(started)
+        if (owned === started && isLive(started)) yield* abandon(started)
 
         if (attempt < timing.retryAttempts) yield* backoff(attempt)
       }
@@ -378,8 +389,9 @@ export const daemonHost = (
         const current = yield* Ref.get(child)
 
         if (current !== undefined && isLive(current)) {
-          if (yield* waitForSocket()) return
-          yield* abandon(current)
+          if (yield* waitForSocket(current)) return
+
+          if (owned === current && isLive(current)) yield* abandon(current)
         }
 
         yield* spawnUntilListening
