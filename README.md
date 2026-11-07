@@ -2,6 +2,14 @@
 
 droid-mcp is an MCP server that lets an AI assistant drive Factory Droid on your machine. You connect an MCP client to it, and the assistant can start Droid sessions, run turns, answer permission prompts, manage long-running daemon sessions, and reach the hosted Factory API and the Context API through tools.
 
+## Getting Started
+
+Paste this into your coding agent:
+
+```text
+Read https://raw.githubusercontent.com/prathamdby/droid-mcp/main/SETUP.md and follow it to set up droid-mcp on this machine. Ask me the questions it lists first.
+```
+
 ## What it does
 
 The server provides 287 tools in six families. 158 are generated from the Factory Droid SDK, one per wire method, and 129 are hand-written.
