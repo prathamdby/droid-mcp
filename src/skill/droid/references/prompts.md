@@ -32,22 +32,32 @@ Answer with one of the `options` the event listed:
 { "sessionId": "3f1c...", "requestId": "droid-mcp-2", "outcome": "proceed_once" }
 ```
 
-| Outcome               | Effect                                                      |
-| --------------------- | ----------------------------------------------------------- |
-| `proceed_once`        | Allow this call only.                                       |
-| `proceed_always`      | Allow this tool for the rest of the session.                |
-| `proceed_always_file` | Allow this file for the rest of the session.                |
-| `proceed_auto_run`    | Turn on automatic approval at the current level.            |
-| `proceed_new_session` | Allow, and continue in a fresh session.                     |
-| `proceed_edit`        | Allow after editing the spec; requires `editedSpecContent`. |
-| `cancel`              | Deny and tell Droid why (add `comment`).                    |
+| Outcome               | Effect                                                                                         |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `proceed_once`        | Allow this call only.                                                                          |
+| `proceed_always`      | Allow this tool for the rest of the session.                                                   |
+| `proceed_always_file` | Allow this file for the rest of the session.                                                   |
+| `proceed_auto_run`    | Enable automatic approval without a named level. Forwarded only when the server cap is high.   |
+| `proceed_new_session` | Continue in a fresh session without a named level. Forwarded only when the server cap is high. |
+| `proceed_edit`        | Allow after editing the spec; requires `editedSpecContent`.                                    |
+| `cancel`              | Deny and tell Droid why (add `comment`).                                                       |
 
 The full list also includes `proceed_auto_run_low`, `proceed_auto_run_medium`,
 `proceed_auto_run_high`, `proceed_new_session_low`,
 `proceed_new_session_medium`, `proceed_new_session_high`, `proceed_always_tools`,
-`proceed_always_server`, and `proceed_report_false_positive`. Send only what the
-event offered: the server rejects an outcome that was not on the list, and it
-rejects `proceed_edit` without `editedSpecContent`.
+`proceed_always_server`, and `proceed_report_false_positive`.
+
+The server drops permission outcomes that would raise autonomy above
+`server_info.maxAutonomy` and does not list them in `options`. A leveled
+outcome such as `proceed_auto_run_low` is accepted only when that level is
+within the cap. `proceed_auto_run` and `proceed_new_session` do not name a
+level, so they are accepted only when the cap is `high`. `proceed_once`,
+`cancel`, `proceed_edit`, and the `proceed_always*` grants stay available.
+Sending an outcome above the cap fails with `autonomy_exceeds_cap` and is not
+forwarded.
+
+Send only what the event offered: the server rejects an outcome that was not
+on the list, and it rejects `proceed_edit` without `editedSpecContent`.
 
 A `comment` is passed through to Droid. Use it on `cancel` so the next turn is
 not a repeat.

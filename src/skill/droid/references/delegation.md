@@ -39,6 +39,25 @@ Use the daemon to look across sessions, to schedule something for later, or to
 do a git or worktree operation that is already modelled there. Do not use it to
 run a coding turn: that is what a session is for.
 
+`daemon_initialize_session` pins an omitted `autonomyLevel` or `autonomyMode`
+from one `daemon_get_default_settings` snapshot onto that request. A value
+inside `server_info.maxAutonomy` is kept, a higher value is lowered to the cap,
+a missing level is `off`, and a missing mode is `normal`. When the cap is below
+`high`, an omitted `skipPermissionsUnsafe` is sent as `false`. The snapshot is
+not written back as persistent defaults, and initialize has no
+`subagentAutonomyLevel` field. `daemon_load_session` and `droid_load_session`
+send no saved authority, and queued work can already be running. For work that
+has to stay inside the cap, use `session_create` or `session_run`.
+
+`daemon_initialize_session` copies omitted `autonomyLevel`, `autonomyMode`, and,
+when the cap is below `high`, `skipPermissionsUnsafe` from the
+`daemon_get_default_settings` snapshot it just read. A lower observed value is
+kept, and a missing field becomes `off`, `normal`, or `false`. The call does
+not change persistent defaults. `daemon_load_session` and `droid_load_session`
+open the authority stored with that saved session. Initialize has no
+`subagentAutonomyLevel` field. For work that must stay inside the cap, use
+`session_create` or `session_run`.
+
 ## Hosted sessions on Factory computers
 
 The `rest_*` tools reach the hosted Factory API at `FACTORY_BASE_URL` with
@@ -119,12 +138,12 @@ killing one.
 
 ## Choosing
 
-| The task                                 | Use                                                               |
-| ---------------------------------------- | ----------------------------------------------------------------- |
-| Change code in this repository           | A session.                                                        |
-| Answer a question about this repository  | `session_run`.                                                    |
-| Run something every morning              | `daemon_create_automation`.                                       |
-| Find a session from last week            | `daemon_search_sessions`.                                         |
-| Prepare a branch and open a pull request | Session to edit, then `daemon_git_commit` and `daemon_create_pr`. |
-| Run Droid on a Factory cloud computer    | The hosted-session steps above, one call at a time.               |
-| Keep a transcript for another agent      | `context_register_session` and `context_append_session`.          |
+| The task                                 | Use                                                                    |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| Change code in this repository           | A session.                                                             |
+| Answer a question about this repository  | `session_run`. If it returns `running`, poll and then `session_close`. |
+| Run something every morning              | `daemon_create_automation`.                                            |
+| Find a session from last week            | `daemon_search_sessions`.                                              |
+| Prepare a branch and open a pull request | Session to edit, then `daemon_git_commit` and `daemon_create_pr`.      |
+| Run Droid on a Factory cloud computer    | The hosted-session steps above, one call at a time.                    |
+| Keep a transcript for another agent      | `context_register_session` and `context_append_session`.               |
