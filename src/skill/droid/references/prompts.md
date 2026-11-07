@@ -13,7 +13,7 @@ deadline, fails with `prompt_not_found`.
 {
   "seq": 88,
   "kind": "pending_permission",
-  "requestId": "droid-mcp-2",
+  "requestId": "hub-2",
   "promptType": "request_permission",
   "deadline": 1770000000000,
   "options": ["proceed_once", "proceed_always", "cancel"],
@@ -29,7 +29,7 @@ deadline, fails with `prompt_not_found`.
 Answer with one of the `options` the event listed:
 
 ```json
-{ "sessionId": "3f1c...", "requestId": "droid-mcp-2", "outcome": "proceed_once" }
+{ "sessionId": "3f1c...", "requestId": "hub-2", "outcome": "proceed_once" }
 ```
 
 | Outcome               | Effect                                                                                         |
@@ -67,7 +67,7 @@ not a repeat.
 ```json
 {
   "kind": "pending_question",
-  "requestId": "droid-mcp-4",
+  "requestId": "hub-4",
   "promptType": "ask_user",
   "questions": [
     {
@@ -86,7 +86,7 @@ Answer each index once:
 ```json
 {
   "sessionId": "3f1c...",
-  "requestId": "droid-mcp-4",
+  "requestId": "hub-4",
   "answers": [{ "index": 0, "answer": "sqlite" }]
 }
 ```
@@ -99,7 +99,7 @@ expects. An index that was not in the event is rejected.
 ```json
 {
   "kind": "pending_options",
-  "requestId": "droid-mcp-5",
+  "requestId": "hub-5",
   "promptType": "pick_options",
   "rows": [{ "id": "app", "label": "app", "detail": "a monorepo" }],
   "multi": false
@@ -109,7 +109,7 @@ expects. An index that was not in the event is rejected.
 ```json
 {
   "sessionId": "3f1c...",
-  "requestId": "droid-mcp-5",
+  "requestId": "hub-5",
   "selectedIds": ["app"]
 }
 ```

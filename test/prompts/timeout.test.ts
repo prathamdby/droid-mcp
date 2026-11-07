@@ -47,6 +47,8 @@ describe("prompt deadlines", () => {
     const notice = outcome.settled.events.find((candidate) => candidate.kind === "prompt_resolved")
 
     expect(notice?.reason).toBe("timeout")
+    expect(notice?.requestId).toBe(outcome.event.requestId)
+    expect(notice?.requestId?.startsWith("hub-")).toBe(true)
     expect(outcome.settled.status).toBe("interrupted")
     expect(outcome.late.code).toBe("prompt_not_found")
   })

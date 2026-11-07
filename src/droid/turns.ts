@@ -36,8 +36,21 @@ export const REAPER_INTERVAL_MS = 60_000
 export const PROMPT_TIMEOUT_MS = 300_000
 
 /** One permission field stays small enough that the event itself still fits the ring. */
-const FIELD_BYTE_LIMIT = 1024
+export const FIELD_BYTE_LIMIT = 1024
 const TRUNCATION_MARK = "…[truncated]"
+
+/**
+ * Live answered permissions that can still name a public id. Dropping the
+ * oldest record does not make its keys fresh again.
+ */
+export const CORRELATION_LIMIT = 32
+
+/**
+ * CLI and tool ids already used by an answered, timed-out, or retired
+ * permission in this turn. When the set is full, public-id inference stops
+ * instead of treating an untracked id as new.
+ */
+export const SEEN_KEY_LIMIT = 96
 const CHANGE_DIRECTORY = "droid.change_working_directory"
 
 export const TurnStatusSchema = Schema.Literals(["running", "completed", "interrupted", "failed"])
@@ -261,6 +274,29 @@ interface PendingPrompt {
   owner: PromptOwner
 }
 
+/** One answered permission. `keys` are its CLI request id and tool-use ids. */
+interface PermissionCorrelation {
+  readonly publicId: string
+  readonly keys: Array<string>
+}
+
+/** Permission answers are the only ones `permission_resolved` can name. */
+const correlationKeys = (pending: PendingPrompt): Array<string> => {
+  const view = pending.view
+
+  if (view === undefined || view.kind !== "permission") return []
+
+  const keys: Array<string> = [pending.cliId]
+
+  for (const item of view.toolUses) {
+    const id = item.toolUse?.id
+
+    if (id !== undefined && !keys.includes(id)) keys.push(id)
+  }
+
+  return keys
+}
+
 interface RingItem {
   readonly event: TurnEvent
   readonly bytes: number
@@ -289,6 +325,12 @@ interface SessionState {
   readonly promptMutex: Semaphore.Semaphore
   readonly prompts: Map<string, PendingPrompt>
   readonly byCli: Map<string, string>
+  /** Answered permissions whose keys can still name one public id. */
+  readonly correlations: Array<PermissionCorrelation>
+  /** Ids that must not be treated as fresh after a collision, consume, or eviction. */
+  readonly seenKeys: Set<string>
+  /** False once `seenKeys` is full. Lookups then refuse every public id. */
+  inferPublicIds: boolean
   readonly deltas: Map<string, string>
   readonly truncatedDeltas: Set<string>
   readonly buffer: Array<RingItem>
@@ -359,6 +401,8 @@ const ErrorNote = Schema.Struct({
 const PermissionResolved = Schema.Struct({
   type: Schema.Literal("permission_resolved"),
   toolUseId: Schema.optional(Schema.String),
+  /** Real CLI notifications send every tool use; the singular field is older. */
+  toolUseIds: Schema.optional(Schema.Array(Schema.String)),
   requestId: Schema.optional(Schema.String),
 })
 
@@ -764,6 +808,8 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
         if (item.event.seq >= cursor) visible.push(item.event)
       }
 
+      // Re-attach a prompt the ring evicted. Skip one that was cancelled, or that
+      // this cursor has already moved past, so an old poll cannot resurrect it.
       for (const pending of session.prompts.values()) {
         const event = pending.event
 
@@ -821,6 +867,8 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
     }
 
     const dropPrompt = (session: SessionState, pending: PendingPrompt): void => {
+      if (pending.owner !== "none") return
+
       pending.cancelled = true
       pending.owner = "drop"
       session.prompts.delete(pending.publicId)
@@ -832,11 +880,109 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       Deferred.doneUnsafe(pending.deferred, Effect.succeed(promptCancelResult(pending.method)))
     }
 
+    /** Drop a key from live records. Absence afterwards does not make it fresh. */
+    const detachKey = (session: SessionState, key: string): void => {
+      for (const existing of session.correlations) {
+        const index = existing.keys.indexOf(key)
+
+        if (index >= 0) existing.keys.splice(index, 1)
+      }
+    }
+
+    const stopInferring = (session: SessionState): void => {
+      session.inferPublicIds = false
+      session.correlations.length = 0
+    }
+
+    /**
+     * Record a key that later prompts must not claim. A full set stops
+     * inference so an evicted id cannot be handed to a newer prompt.
+     */
+    const rememberSeen = (session: SessionState, key: string): boolean => {
+      if (!session.inferPublicIds) return false
+
+      if (session.seenKeys.has(key)) return true
+
+      if (session.seenKeys.size >= SEEN_KEY_LIMIT) {
+        stopInferring(session)
+
+        return false
+      }
+
+      session.seenKeys.add(key)
+
+      return true
+    }
+
+    const rememberCorrelation = (session: SessionState, pending: PendingPrompt): void => {
+      if (!session.inferPublicIds) return
+
+      const keys = correlationKeys(pending)
+
+      if (keys.length === 0) return
+
+      const fresh: Array<string> = []
+
+      for (const key of keys) {
+        const already = session.seenKeys.has(key)
+
+        if (!rememberSeen(session, key)) return
+
+        detachKey(session, key)
+
+        if (!already) fresh.push(key)
+      }
+
+      if (!session.inferPublicIds || fresh.length === 0) return
+
+      session.correlations.push({ publicId: pending.publicId, keys: fresh })
+
+      while (session.correlations.length > CORRELATION_LIMIT) session.correlations.shift()
+    }
+
+    /** Keep the ids, but do not leave a live mapping a later resolution can steal. */
+    const burnPromptKeys = (session: SessionState, pending: PendingPrompt): void => {
+      for (const key of correlationKeys(pending)) {
+        if (!rememberSeen(session, key)) return
+
+        detachKey(session, key)
+      }
+    }
+
+    const forgetCorrelation = (session: SessionState, publicId: string): void => {
+      const index = session.correlations.findIndex((item) => item.publicId === publicId)
+
+      if (index >= 0) session.correlations.splice(index, 1)
+    }
+
+    /**
+     * Only a key still on one live record names a public id. A consumed,
+     * collided, or evicted key stays in `seenKeys`, so a later prompt cannot
+     * claim it. Shared ids that are still outstanding together are left
+     * unnamed: the notifications are indistinguishable. A full `seenKeys`
+     * stops inference for the rest of the turn. The next turn clears both.
+     */
+    const takeCorrelation = (session: SessionState, key: string): string | undefined => {
+      if (!session.inferPublicIds) return undefined
+
+      const index = session.correlations.findIndex((item) => item.keys.includes(key))
+
+      if (index < 0) return undefined
+
+      const found = session.correlations[index]
+      session.correlations.splice(index, 1)
+
+      return found?.publicId
+    }
+
     const expirePrompts = (session: SessionState): void => {
       for (const pending of session.prompts.values()) dropPrompt(session, pending)
 
       session.prompts.clear()
       session.byCli.clear()
+      session.correlations.length = 0
+      session.seenKeys.clear()
+      session.inferPublicIds = true
     }
 
     const settleActive = (
@@ -1038,11 +1184,35 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       const resolved = Schema.decodeUnknownOption(PermissionResolved)(value)
 
       if (Option.isSome(resolved)) {
+        const requestId = resolved.value.requestId
+        const toolUseId = resolved.value.toolUseId
+        const toolUseIds = resolved.value.toolUseIds ?? []
+
+        const fromRequest =
+          requestId === undefined ? undefined : takeCorrelation(session, requestId)
+
+        let fromTool: string | undefined
+
+        if (fromRequest === undefined && toolUseId !== undefined) {
+          fromTool = takeCorrelation(session, toolUseId)
+        }
+
+        if (fromRequest === undefined && fromTool === undefined) {
+          for (const id of toolUseIds) {
+            fromTool = takeCorrelation(session, id)
+
+            if (fromTool !== undefined) break
+          }
+        }
+
+        const publicId = fromRequest ?? fromTool
         const draft: EventDraft = { kind: "prompt_resolved" }
 
-        if (resolved.value.toolUseId !== undefined) draft.toolUseId = resolved.value.toolUseId
+        if (publicId !== undefined) draft.requestId = publicId
 
-        if (resolved.value.requestId !== undefined) draft.requestId = resolved.value.requestId
+        const shownToolId = toolUseId ?? (toolUseIds.length === 1 ? toolUseIds[0] : undefined)
+
+        if (shownToolId !== undefined) draft.toolUseId = shownToolId
 
         publish(session, draft)
 
@@ -1235,6 +1405,8 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
           ) {
             return
           }
+
+          burnPromptKeys(session, pending)
 
           yield* session.exec
             .respond(pending.cliId, promptCancelResult(pending.method))
@@ -1480,6 +1652,9 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
             promptMutex: yield* Semaphore.make(1),
             prompts: new Map(),
             byCli: new Map(),
+            correlations: [],
+            seenKeys: new Set(),
+            inferPublicIds: true,
             deltas: new Map(),
             truncatedDeltas: new Set(),
             buffer: [],
@@ -1821,9 +1996,15 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
           )
         }
 
-        yield* session.exec
-          .respond(claimed.cliId, answerOptions.result)
-          .pipe(Effect.mapError((cause) => problem("exec_failed", cause.message)))
+        rememberCorrelation(session, claimed)
+
+        yield* session.exec.respond(claimed.cliId, answerOptions.result).pipe(
+          Effect.mapError((cause) => {
+            forgetCorrelation(session, claimed.publicId)
+
+            return problem("exec_failed", cause.message)
+          }),
+        )
 
         return { resolved: true }
       })
