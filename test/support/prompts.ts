@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect"
 
+import type { AutonomyLevel } from "../../src/config.ts"
 import { SessionHubService } from "../../src/droid/turns.ts"
 import type { SessionProblem, TurnResult } from "../../src/droid/turns.ts"
 import type { SessionHub } from "../../src/droid/turns.ts"
@@ -71,13 +72,16 @@ export const settle = (
 export const withPrompts = <A, E>(
   run: (harness: PromptHarness) => Effect.Effect<A, E, never>,
   promptTimeoutMs = 5_000,
+  maxAutonomy?: AutonomyLevel,
 ): Effect.Effect<A, E | SessionProblem, never> =>
   Effect.scoped(
     Effect.acquireRelease(fakeHub({ promptTimeoutMs }), (hub) => hub.closeAll).pipe(
       Effect.flatMap((hub) =>
         Effect.gen(function* () {
-          const sessionId = yield* createSession(hub)
-          const prompts = sessionPromptTools()
+          const sessionId = yield* createSession(hub, undefined, maxAutonomy)
+
+          const prompts =
+            maxAutonomy === undefined ? sessionPromptTools() : sessionPromptTools({ maxAutonomy })
 
           const provide = <A, E>(
             effect: Effect.Effect<A, E, SessionHubService>,

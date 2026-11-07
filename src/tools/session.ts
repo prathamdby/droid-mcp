@@ -42,8 +42,9 @@ const Create = Tool.make("session_create", {
 
 const Stream = Tool.make("session_stream", {
   description:
-    "Send a prompt to a session and wait for the turn. Returns running with a cursor when " +
-    "waitMs expires; poll session_events from that cursor.",
+    "Send a prompt to a session and wait for the turn. A running result keeps the session; " +
+    "poll session_events with the returned cursor, which is the next sequence number, until " +
+    "status is completed, failed, or interrupted.",
   parameters: Schema.Struct({
     sessionId: Schema.String,
     prompt: Schema.String,
@@ -56,8 +57,10 @@ const Stream = Tool.make("session_stream", {
 
 const Events = Tool.make("session_events", {
   description:
-    "Read a session's events from a cursor. Pass the cursor a previous call returned; no event " +
-    "is repeated. Set truncated when the cursor is older than the retained buffer.",
+    "Read events since a cursor. The cursor is the next sequence number, not the last seq; " +
+    "pass a previous call's cursor back unchanged so no event is repeated. truncated is set " +
+    "when that cursor is older than the retained buffer. Poll until status is completed, " +
+    "failed, or interrupted.",
   parameters: Schema.Struct({
     sessionId: Schema.String,
     cursor: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -98,6 +101,7 @@ export const sessionTools = (config: Config) => {
           .create({
             cwd,
             autonomyLevel,
+            maxAutonomy: config.maxAutonomy,
             modelId: params.modelId,
             reasoningEffort: params.reasoningEffort,
             restrictToolIds: params.restrictToolIds,

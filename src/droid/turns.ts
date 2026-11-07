@@ -5,10 +5,12 @@ import * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
+import * as Scope from "effect/Scope"
 import * as Semaphore from "effect/Semaphore"
 import * as Stream from "effect/Stream"
 
@@ -18,11 +20,10 @@ import { ExecTimeout } from "./errors.ts"
 import { start } from "./exec-client.ts"
 import type { ExecClient, ExecRequest } from "./exec-client.ts"
 import { EXEC_METHOD } from "./exec-protocol.ts"
-import { promptEvent, viewOf } from "./prompts.ts"
-import type { Prompt } from "./prompts.ts"
-import type { PromptView } from "./prompts.ts"
+import { capPermissionOptions, promptEvent, viewOf } from "./prompts.ts"
+import type { Prompt, PromptView } from "./prompts.ts"
 import type { JsonValue } from "./protocol.ts"
-import { toJsonValue } from "./protocol.ts"
+import { presentFields, toJsonValue } from "./protocol.ts"
 
 /** Text in an event is capped so one long block cannot bloat every poll. */
 export const EVENT_TEXT_LIMIT = 4 * 1024
@@ -33,6 +34,11 @@ export const MAX_WAIT_MS = 300_000
 export const IDLE_SESSION_MS = 30 * 60 * 1000
 export const REAPER_INTERVAL_MS = 60_000
 export const PROMPT_TIMEOUT_MS = 300_000
+
+/** One permission field stays small enough that the event itself still fits the ring. */
+const FIELD_BYTE_LIMIT = 1024
+const TRUNCATION_MARK = "…[truncated]"
+const CHANGE_DIRECTORY = "droid.change_working_directory"
 
 export const TurnStatusSchema = Schema.Literals(["running", "completed", "interrupted", "failed"])
 
@@ -114,6 +120,8 @@ export interface CreateSessionOptions {
   readonly reasoningEffort?: string
   readonly restrictToolIds?: ReadonlyArray<string>
   readonly disabledToolIds?: ReadonlyArray<string>
+  /** Server ceiling applied to permission prompts raised in this session. */
+  readonly maxAutonomy?: AutonomyLevel
 }
 
 export interface CreateSessionResult {
@@ -150,6 +158,7 @@ export interface CommandOptions {
 export interface SessionSummary {
   readonly sessionId: string
   readonly cwd: string
+  readonly settings: SessionSettings
   readonly status: TurnStatus
   readonly cursor: number
 }
@@ -231,38 +240,73 @@ interface TurnResultDraft {
 }
 
 interface ActiveTurn {
+  readonly epoch: number
   readonly startedAt: number
   readonly firstSeq: number
   readonly completion: Deferred.Deferred<Completion>
+  structuredOutput: JsonValue | undefined
 }
 
+type PromptOwner = "none" | "answer" | "timeout" | "drop"
+
 interface PendingPrompt {
-  readonly id: string
+  readonly publicId: string
+  readonly cliId: string
   readonly method: string
-  readonly view: PromptView | undefined
+  readonly epoch: number
   readonly deferred: Deferred.Deferred<JsonValue>
+  readonly event: TurnEvent | undefined
+  view: PromptView | undefined
+  cancelled: boolean
+  owner: PromptOwner
+}
+
+interface RingItem {
+  readonly event: TurnEvent
+  readonly bytes: number
+}
+
+/**
+ * A child acquired from `start`. It stays in `owned` until `exec.close` settles,
+ * whether or not it was registered on a session.
+ */
+interface OwnedExec {
+  readonly exec: ExecClient
+  released: boolean
+  /**
+   * Claimed synchronously by the first shutdown. Completed only after `exec.close`
+   * settles and this record has been dropped from `owned`.
+   */
+  shutdown?: Deferred.Deferred<void>
 }
 
 interface SessionState {
   readonly id: string
-  readonly cwd: string
   readonly exec: ExecClient
+  readonly owned: OwnedExec
+  readonly scope: Scope.Closeable
   readonly mutex: Semaphore.Semaphore
   readonly promptMutex: Semaphore.Semaphore
   readonly prompts: Map<string, PendingPrompt>
+  readonly byCli: Map<string, string>
   readonly deltas: Map<string, string>
-  readonly buffer: Array<TurnEvent>
+  readonly truncatedDeltas: Set<string>
+  readonly buffer: Array<RingItem>
+  cwd: string
   settings: SessionSettings
   models: ReadonlyArray<JsonValue>
   lastStatus: TurnStatus
   nextSeq: number
   bytes: number
   active: ActiveTurn | undefined
-  /** The last turn's outcome, so a poll after completion still reports it. */
   lastCompletion: Completion | undefined
-  structuredOutput: JsonValue | undefined
   signal: Deferred.Deferred<void>
   lastUsed: number
+  phase: "open" | "closing" | "closed"
+  alive: boolean
+  turnEpoch: number
+  promptSeq: number
+  readonly cap: AutonomyLevel | undefined
 }
 
 const InitializeResult = Schema.Struct({
@@ -345,8 +389,177 @@ const TextBlock = Schema.Struct({
   text: Schema.optional(Schema.String),
 })
 
-const cap = (text: string, limit: number = EVENT_TEXT_LIMIT): string =>
-  text.length <= limit ? text : text.slice(0, limit) + "…[truncated]"
+const SettingsUpdated = Schema.Struct({
+  type: Schema.Literal("settings_updated"),
+  settings: Schema.optional(Schema.Json),
+})
+
+const SettingsFields = Schema.Struct({
+  autonomyLevel: Schema.optional(Schema.String),
+  interactionMode: Schema.optional(Schema.String),
+  modelId: Schema.optional(Schema.String),
+  reasoningEffort: Schema.optional(Schema.String),
+  workingDirectory: Schema.optional(Schema.String),
+})
+
+/** Cuts on a UTF-8 boundary and keeps the truncation mark inside `limit`. */
+const truncateUtf8 = (text: string, limit: number = EVENT_TEXT_LIMIT): string => {
+  if (Buffer.byteLength(text, "utf8") <= limit) return text
+
+  const markBytes = Buffer.byteLength(TRUNCATION_MARK, "utf8")
+  let budget = limit - markBytes
+
+  if (budget < 0) budget = 0
+
+  const bytes = Buffer.from(text, "utf8")
+  let end = budget
+
+  if (end > bytes.length) end = bytes.length
+
+  if (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) {
+    while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1
+  }
+
+  return bytes.subarray(0, end).toString("utf8") + TRUNCATION_MARK
+}
+
+const boundJson = (value: JsonValue, limit: number = FIELD_BYTE_LIMIT): JsonValue => {
+  const encoded = JSON.stringify(value)
+
+  if (Buffer.byteLength(encoded, "utf8") <= limit) return value
+
+  return truncateUtf8(encoded, limit)
+}
+
+const ToolUseBody = Schema.Struct({
+  type: Schema.optional(Schema.String),
+  id: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+  input: Schema.optional(Schema.Json),
+  thoughtSignature: Schema.optional(Schema.String),
+})
+
+const ToolUseEnvelope = Schema.Struct({
+  toolUse: Schema.optional(ToolUseBody),
+  confirmationType: Schema.optional(Schema.String),
+  details: Schema.optional(Schema.Json),
+})
+
+/** Keeps names and ids; a huge tool input becomes a short string instead of evicting the event. */
+const boundToolUse = (value: JsonValue): JsonValue => {
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") <= FIELD_BYTE_LIMIT) return value
+
+  const decoded = Schema.decodeUnknownOption(ToolUseEnvelope)(value)
+
+  if (Option.isNone(decoded) || decoded.value.toolUse === undefined) return boundJson(value)
+
+  const toolUse = decoded.value.toolUse
+  const input = toolUse.input === undefined ? undefined : boundJson(toolUse.input)
+  const details = decoded.value.details === undefined ? undefined : boundJson(decoded.value.details)
+
+  return presentFields({
+    toolUse: presentFields({
+      type: toolUse.type,
+      id: toolUse.id,
+      name: toolUse.name,
+      input,
+      thoughtSignature: toolUse.thoughtSignature,
+    }),
+    confirmationType: decoded.value.confirmationType,
+    details,
+  })
+}
+
+const jsonItems = (value: JsonValue): Array<JsonValue> | undefined => {
+  if (!Array.isArray(value)) return undefined
+
+  const items: Array<JsonValue> = []
+
+  for (const item of value) items.push(item)
+
+  return items
+}
+
+const QuestionFields = Schema.Struct({
+  index: Schema.optional(Schema.Number),
+  topic: Schema.optional(Schema.String),
+  question: Schema.optional(Schema.String),
+  options: Schema.optional(Schema.Array(Schema.Json)),
+  multiSelect: Schema.optional(Schema.Boolean),
+})
+
+const RowFields = Schema.Struct({
+  id: Schema.String,
+  label: Schema.optional(Schema.String),
+  detail: Schema.optional(Schema.String),
+})
+
+const boundQuestions = (value: JsonValue): Array<JsonValue> | undefined => {
+  const items = jsonItems(value)
+
+  if (items === undefined) return undefined
+
+  if (Buffer.byteLength(JSON.stringify(items), "utf8") <= FIELD_BYTE_LIMIT) return items
+
+  const bounded: Array<JsonValue> = []
+
+  for (const item of items) {
+    const decoded = Schema.decodeUnknownOption(QuestionFields)(item)
+
+    if (Option.isNone(decoded)) {
+      bounded.push(boundJson(item))
+
+      continue
+    }
+
+    const question = decoded.value.question
+
+    bounded.push(
+      presentFields({
+        index: decoded.value.index,
+        topic: decoded.value.topic,
+        question: question === undefined ? undefined : truncateUtf8(question, FIELD_BYTE_LIMIT),
+        options: decoded.value.options,
+        multiSelect: decoded.value.multiSelect,
+      }),
+    )
+  }
+
+  return bounded
+}
+
+const boundRows = (value: JsonValue): Array<JsonValue> | undefined => {
+  const items = jsonItems(value)
+
+  if (items === undefined) return undefined
+
+  if (Buffer.byteLength(JSON.stringify(items), "utf8") <= FIELD_BYTE_LIMIT) return items
+
+  const bounded: Array<JsonValue> = []
+
+  for (const item of items) {
+    const decoded = Schema.decodeUnknownOption(RowFields)(item)
+
+    if (Option.isNone(decoded)) {
+      bounded.push(boundJson(item))
+
+      continue
+    }
+
+    const label = decoded.value.label
+    const detail = decoded.value.detail
+
+    bounded.push(
+      presentFields({
+        id: decoded.value.id,
+        label: label === undefined ? undefined : truncateUtf8(label, FIELD_BYTE_LIMIT),
+        detail: detail === undefined ? undefined : truncateUtf8(detail, FIELD_BYTE_LIMIT),
+      }),
+    )
+  }
+
+  return bounded
+}
 
 const stringify = (value: JsonValue | undefined): string => {
   if (value === undefined) return ""
@@ -390,6 +603,54 @@ const promptCancelResult = (method: string): JsonValue => {
   return { selectedOption: "cancel" }
 }
 
+interface SettingsDraft {
+  autonomyLevel?: string
+  interactionMode?: string
+  modelId?: string
+  reasoningEffort?: string
+}
+
+const settingsDraft = (settings: SessionSettings): SettingsDraft => {
+  const draft: SettingsDraft = {}
+
+  if (settings.autonomyLevel !== undefined) draft.autonomyLevel = settings.autonomyLevel
+
+  if (settings.interactionMode !== undefined) draft.interactionMode = settings.interactionMode
+
+  if (settings.modelId !== undefined) draft.modelId = settings.modelId
+
+  if (settings.reasoningEffort !== undefined) draft.reasoningEffort = settings.reasoningEffort
+
+  return draft
+}
+
+const applySettings = (session: SessionState, value: JsonValue | undefined): void => {
+  const decoded = Schema.decodeUnknownOption(SettingsFields)(value)
+
+  if (Option.isNone(decoded)) return
+
+  const patch = decoded.value
+  const next = settingsDraft(session.settings)
+
+  if (patch.autonomyLevel !== undefined) next.autonomyLevel = patch.autonomyLevel
+
+  if (patch.interactionMode !== undefined) next.interactionMode = patch.interactionMode
+
+  if (patch.modelId !== undefined) next.modelId = patch.modelId
+
+  if (patch.reasoningEffort !== undefined) next.reasoningEffort = patch.reasoningEffort
+
+  session.settings = next
+}
+
+const applyCwd = (session: SessionState, value: JsonValue | undefined): void => {
+  const decoded = Schema.decodeUnknownOption(SettingsFields)(value)
+
+  if (Option.isNone(decoded) || decoded.value.workingDirectory === undefined) return
+
+  session.cwd = decoded.value.workingDirectory
+}
+
 export interface SessionHubOptions {
   readonly droidPath: string
   readonly version: string
@@ -424,17 +685,20 @@ export const sessionHubLayer = (options: SessionHubOptions): Layer.Layer<Session
     }),
   )
 
+const problem = (code: string, message: string): SessionProblem =>
+  new SessionProblem({ code, message })
+
 const notFound = (sessionId: string): SessionProblem =>
-  new SessionProblem({
-    code: "session_not_found",
-    message: "no session " + sessionId + "; call session_create first",
-  })
+  problem("session_not_found", "no session " + sessionId + "; call session_create first")
+
+const closedProblem = (sessionId: string): SessionProblem =>
+  problem("session_closed", "session " + sessionId + " is closed")
+
+const shuttingDown = (): SessionProblem => problem("exec_failed", "session hub is shutting down")
 
 export const checkCwd = (cwd: string): Effect.Effect<string, SessionProblem> => {
   if (!isAbsolute(cwd)) {
-    return Effect.fail(
-      new SessionProblem({ code: "invalid_cwd", message: "cwd must be an absolute path" }),
-    )
+    return Effect.fail(problem("invalid_cwd", "cwd must be an absolute path"))
   }
 
   return Effect.sync(() => {
@@ -447,12 +711,7 @@ export const checkCwd = (cwd: string): Effect.Effect<string, SessionProblem> => 
     Effect.flatMap((ok) =>
       ok
         ? Effect.succeed(cwd)
-        : Effect.fail(
-            new SessionProblem({
-              code: "invalid_cwd",
-              message: "cwd does not exist or is not a directory: " + cwd,
-            }),
-          ),
+        : Effect.fail(problem("invalid_cwd", "cwd does not exist or is not a directory: " + cwd)),
     ),
   )
 }
@@ -460,40 +719,69 @@ export const checkCwd = (cwd: string): Effect.Effect<string, SessionProblem> => 
 export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub> =>
   Effect.gen(function* () {
     const sessions = new Map<string, SessionState>()
+    const owned: Array<OwnedExec> = []
     const logger = options.logger
     const waitMs = options.waitMs ?? DEFAULT_WAIT_MS
     const idleMs = options.idleMs ?? IDLE_SESSION_MS
     const reaperIntervalMs = options.reaperIntervalMs ?? REAPER_INTERVAL_MS
     const promptTimeoutMs = options.promptTimeoutMs ?? PROMPT_TIMEOUT_MS
-    const fibers: Array<Fiber.Fiber<unknown>> = []
+    let closing = false
 
-    const publish = (session: SessionState, draft: EventDraft): void => {
-      const full: TurnEvent = { ...draft, seq: session.nextSeq }
+    const listedStatus = (session: SessionState): TurnStatus => {
+      if (!session.alive) return "failed"
+
+      if (session.active !== undefined) return "running"
+
+      return session.lastStatus
+    }
+
+    const publish = (session: SessionState, draft: EventDraft): TurnEvent => {
+      const event: TurnEvent = { ...draft, seq: session.nextSeq }
       session.nextSeq += 1
-      session.buffer.push(full)
-      session.bytes += JSON.stringify(full).length
+      const bytes = Buffer.byteLength(JSON.stringify(event), "utf8")
+      session.buffer.push({ event, bytes })
+      session.bytes += bytes
 
       while (session.buffer.length > RING_EVENT_LIMIT || session.bytes > RING_BYTE_LIMIT) {
         const removed = session.buffer.shift()
 
         if (removed === undefined) break
 
-        session.bytes -= JSON.stringify(removed).length
+        session.bytes -= removed.bytes
       }
 
       const waiting = session.signal
       session.signal = Deferred.makeUnsafe<void>()
       Deferred.doneUnsafe(waiting, Effect.void)
+
+      return event
     }
 
     const snapshot = (session: SessionState, cursor: number) => {
-      const oldest = session.buffer[0]?.seq ?? session.nextSeq
+      const visible: Array<TurnEvent> = []
 
-      return {
-        events: session.buffer.filter((event) => event.seq >= cursor),
-        truncated: cursor < oldest,
-        next: session.nextSeq,
+      for (const item of session.buffer) {
+        if (item.event.seq >= cursor) visible.push(item.event)
       }
+
+      for (const pending of session.prompts.values()) {
+        const event = pending.event
+
+        if (event === undefined || pending.cancelled || event.seq < cursor) continue
+
+        let present = false
+
+        for (const existing of visible) {
+          if (existing.seq === event.seq) present = true
+        }
+
+        if (!present) visible.push(event)
+      }
+
+      visible.sort((left, right) => left.seq - right.seq)
+      const oldest = session.buffer[0]?.event.seq ?? session.nextSeq
+
+      return { events: visible, truncated: cursor < oldest, next: session.nextSeq }
     }
 
     const resultOf = (
@@ -532,6 +820,54 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       return draft
     }
 
+    const dropPrompt = (session: SessionState, pending: PendingPrompt): void => {
+      pending.cancelled = true
+      pending.owner = "drop"
+      session.prompts.delete(pending.publicId)
+
+      if (session.byCli.get(pending.cliId) === pending.publicId) {
+        session.byCli.delete(pending.cliId)
+      }
+
+      Deferred.doneUnsafe(pending.deferred, Effect.succeed(promptCancelResult(pending.method)))
+    }
+
+    const expirePrompts = (session: SessionState): void => {
+      for (const pending of session.prompts.values()) dropPrompt(session, pending)
+
+      session.prompts.clear()
+      session.byCli.clear()
+    }
+
+    const settleActive = (
+      session: SessionState,
+      active: ActiveTurn,
+      completion: Completion,
+      error?: { readonly code: string; readonly message: string },
+    ): boolean => {
+      if (session.active !== active) return false
+
+      session.active = undefined
+      session.deltas.clear()
+      session.truncatedDeltas.clear()
+      expirePrompts(session)
+      session.lastCompletion = completion
+      session.lastStatus = statusOf(completion.reason)
+
+      if (error !== undefined) {
+        publish(session, { kind: "error", code: error.code, message: error.message })
+      }
+
+      publish(session, {
+        kind: "turn_completed",
+        status: session.lastStatus,
+        reason: completion.reason,
+      })
+      Deferred.doneUnsafe(active.completion, Effect.succeed(completion))
+
+      return true
+    }
+
     const completeTurn = (session: SessionState, notification: typeof TurnCompleted.Type): void => {
       const active = session.active
 
@@ -550,20 +886,53 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
         completion.structuredOutput = notification.structuredOutput
       }
 
-      if (session.structuredOutput !== undefined) {
-        completion.structuredOutput = session.structuredOutput
+      if (active.structuredOutput !== undefined) {
+        completion.structuredOutput = active.structuredOutput
       }
 
-      session.active = undefined
-      session.lastCompletion = completion
-      session.structuredOutput = undefined
-      session.lastStatus = statusOf(completion.reason)
-      publish(session, {
-        kind: "turn_completed",
-        status: session.lastStatus,
-        reason: completion.reason,
-      })
-      Deferred.doneUnsafe(active.completion, Effect.succeed(completion))
+      settleActive(session, active, completion)
+    }
+
+    const markDead = (session: SessionState, message: string): void => {
+      session.alive = false
+
+      if (session.phase !== "open") return
+
+      const active = session.active
+
+      if (active !== undefined) {
+        settleActive(
+          session,
+          active,
+          { reason: "process_exit", durationMs: Date.now() - active.startedAt },
+          { code: "process_exit", message },
+        )
+
+        return
+      }
+
+      expirePrompts(session)
+      session.deltas.clear()
+      session.truncatedDeltas.clear()
+      session.lastStatus = "failed"
+      session.lastCompletion = { reason: "process_exit", durationMs: 0 }
+      publish(session, { kind: "error", code: "process_exit", message })
+      publish(session, { kind: "turn_completed", status: "failed", reason: "process_exit" })
+    }
+
+    const appendDelta = (session: SessionState, key: string, chunk: string): void => {
+      if (session.truncatedDeltas.has(key)) return
+
+      const next = (session.deltas.get(key) ?? "") + chunk
+
+      if (Buffer.byteLength(next, "utf8") <= EVENT_TEXT_LIMIT) {
+        session.deltas.set(key, next)
+
+        return
+      }
+
+      session.deltas.set(key, truncateUtf8(next))
+      session.truncatedDeltas.add(key)
     }
 
     const onNotification = (session: SessionState, params: JsonValue | undefined): void => {
@@ -574,11 +943,23 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       if (Option.isNone(envelope)) return
 
       const value = envelope.value.notification
+      const settings = Schema.decodeUnknownOption(SettingsUpdated)(value)
+
+      if (Option.isSome(settings)) {
+        applySettings(session, settings.value.settings ?? {})
+
+        return
+      }
+
+      const active = session.active
+
+      if (active === undefined) return
+
       const delta = Schema.decodeUnknownOption(TextDelta)(value)
 
       if (Option.isSome(delta)) {
         const key = delta.value.messageId + ":" + String(delta.value.blockIndex)
-        session.deltas.set(key, (session.deltas.get(key) ?? "") + delta.value.textDelta)
+        appendDelta(session, key, delta.value.textDelta)
 
         return
       }
@@ -589,9 +970,10 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
         const key = complete.value.messageId + ":" + String(complete.value.blockIndex)
         const text = session.deltas.get(key) ?? ""
         session.deltas.delete(key)
+        session.truncatedDeltas.delete(key)
         publish(session, {
           kind: "assistant_text",
-          text: cap(text),
+          text: truncateUtf8(text),
           messageId: complete.value.messageId,
         })
 
@@ -601,7 +983,7 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       const thinking = Schema.decodeUnknownOption(ThinkingComplete)(value)
 
       if (Option.isSome(thinking)) {
-        publish(session, { kind: "thinking", text: cap(thinking.value.text) })
+        publish(session, { kind: "thinking", text: truncateUtf8(thinking.value.text) })
 
         return
       }
@@ -615,7 +997,8 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
           name: call.value.name,
         }
 
-        if (call.value.input !== undefined) draft.input = call.value.input
+        if (call.value.input !== undefined) draft.input = boundJson(call.value.input)
+
         publish(session, draft)
 
         return
@@ -627,10 +1010,11 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
         const draft: EventDraft = {
           kind: "tool_result",
           toolUseId: toolResult.value.toolUseId,
-          output: cap(stringify(toolResult.value.result)),
+          output: truncateUtf8(stringify(toolResult.value.result)),
         }
 
         if (toolResult.value.isError !== undefined) draft.isError = toolResult.value.isError
+
         publish(session, draft)
 
         return
@@ -639,9 +1023,13 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       const failure = Schema.decodeUnknownOption(ErrorNote)(value)
 
       if (Option.isSome(failure)) {
-        const draft: EventDraft = { kind: "error", message: cap(failure.value.message) }
+        const draft: EventDraft = {
+          kind: "error",
+          message: truncateUtf8(failure.value.message),
+        }
 
         if (failure.value.errorType !== undefined) draft.code = failure.value.errorType
+
         publish(session, draft)
 
         return
@@ -655,6 +1043,7 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
         if (resolved.value.toolUseId !== undefined) draft.toolUseId = resolved.value.toolUseId
 
         if (resolved.value.requestId !== undefined) draft.requestId = resolved.value.requestId
+
         publish(session, draft)
 
         return
@@ -666,7 +1055,7 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
         const text = textOfMessage(assistant.value.message.content)
 
         if (text.length > 0) {
-          const draft: EventDraft = { kind: "assistant_text", text: cap(text) }
+          const draft: EventDraft = { kind: "assistant_text", text: truncateUtf8(text) }
 
           if (assistant.value.message.id !== undefined) {
             draft.messageId = assistant.value.message.id
@@ -681,7 +1070,7 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       const structured = Schema.decodeUnknownOption(StructuredOutput)(value)
 
       if (Option.isSome(structured)) {
-        session.structuredOutput = structured.value.data
+        active.structuredOutput = structured.value.data
 
         return
       }
@@ -691,73 +1080,248 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       if (Option.isSome(completed)) completeTurn(session, completed.value)
     }
 
-    const answerPrompt = (session: SessionState, requestId: string, result: JsonValue): boolean => {
-      const pending = session.prompts.get(requestId)
+    const promptDraft = (session: SessionState, prompt: Prompt, deadline: number): EventDraft => {
+      const event = promptEvent(prompt, deadline)
 
-      if (pending === undefined) return false
+      const draft: EventDraft = {
+        kind: event.kind,
+        requestId: event.requestId,
+        deadline: event.deadline,
+        promptType: prompt.method,
+      }
 
-      session.prompts.delete(requestId)
-      Deferred.doneUnsafe(pending.deferred, Effect.succeed(result))
+      if (event.options !== undefined) draft.options = event.options
 
-      return true
+      if (event.multi !== undefined) draft.multi = event.multi
+
+      if (event.toolUses !== undefined) {
+        const parsed = toJsonValue(event.toolUses)
+        const items = jsonItems(parsed)
+
+        if (items !== undefined) {
+          const bounded: Array<JsonValue> = []
+
+          for (const item of items) bounded.push(boundToolUse(item))
+
+          draft.toolUses = bounded
+        }
+      }
+
+      if (event.questions !== undefined) {
+        const questions = boundQuestions(toJsonValue(event.questions))
+
+        if (questions !== undefined) draft.questions = questions
+      }
+
+      if (event.rows !== undefined) {
+        const rows = boundRows(toJsonValue(event.rows))
+
+        if (rows !== undefined) draft.rows = rows
+      }
+
+      return draft
     }
 
     const onPrompt = (session: SessionState, request: ExecRequest): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const prompt: Prompt = { id: request.id, method: request.method }
-        const view = viewOf(request.method, request.params)
-        const deadline = Date.now() + promptTimeoutMs
+        const registered = yield* Semaphore.withPermit(
+          session.promptMutex,
+          Effect.sync(() => {
+            if (session.phase !== "open" || !session.alive || session.active === undefined) {
+              return undefined
+            }
 
-        const event = promptEvent(
-          view === undefined ? prompt : { id: request.id, method: request.method, view },
-          deadline,
+            const previousId = session.byCli.get(request.id)
+
+            if (previousId !== undefined) {
+              const previous = session.prompts.get(previousId)
+
+              if (previous !== undefined) dropPrompt(session, previous)
+            }
+
+            const view = viewOf(request.method, request.params)
+            let stored = view
+
+            if (stored?.kind === "permission" && session.cap !== undefined) {
+              stored = {
+                ...stored,
+                options: capPermissionOptions(stored.options, session.cap),
+              }
+            }
+
+            const publicId = "hub-" + String(session.promptSeq)
+            session.promptSeq += 1
+            const epoch = session.turnEpoch
+            const deadline = Date.now() + promptTimeoutMs
+            const prompt: Prompt = { id: publicId, method: request.method, view: stored }
+            const event = publish(session, promptDraft(session, prompt, deadline))
+
+            const pending: PendingPrompt = {
+              publicId,
+              cliId: request.id,
+              method: request.method,
+              epoch,
+              deferred: Deferred.makeUnsafe<JsonValue>(),
+              event,
+              view: stored,
+              cancelled: false,
+              owner: "none",
+            }
+
+            session.byCli.set(request.id, publicId)
+            session.prompts.set(publicId, pending)
+
+            return pending
+          }),
         )
 
-        const draft: EventDraft = {
-          kind: event.kind,
-          requestId: event.requestId,
-          deadline: event.deadline,
-          promptType: request.method,
-        }
-
-        if (event.options !== undefined) draft.options = event.options
-
-        if (event.toolUses !== undefined) draft.toolUses = event.toolUses
-
-        if (event.questions !== undefined) draft.questions = event.questions
-
-        if (event.rows !== undefined) draft.rows = event.rows.map((row) => ({ ...row }))
-
-        if (event.multi !== undefined) draft.multi = event.multi
-        publish(session, draft)
-
-        const deferred = Deferred.makeUnsafe<JsonValue>()
-        session.prompts.set(request.id, { id: request.id, method: request.method, view, deferred })
-
-        const waiter = Effect.gen(function* () {
-          const answered = yield* Deferred.await(deferred).pipe(
-            Effect.timeoutOption(Duration.millis(promptTimeoutMs)),
-          )
-
-          if (Option.isSome(answered)) {
-            yield* session.exec.respond(request.id, answered.value).pipe(Effect.ignore)
-
-            return
-          }
-
-          session.prompts.delete(request.id)
+        if (registered === undefined) {
           yield* session.exec
             .respond(request.id, promptCancelResult(request.method))
             .pipe(Effect.ignore)
+
+          return
+        }
+
+        const pending = registered
+
+        const waiter = Effect.gen(function* () {
+          const answered = yield* Deferred.await(pending.deferred).pipe(
+            Effect.timeoutOption(Duration.millis(promptTimeoutMs)),
+          )
+
+          if (pending.cancelled || pending.owner === "drop" || pending.owner === "answer") {
+            return
+          }
+
+          if (Option.isSome(answered)) return
+
+          const claimed = yield* Semaphore.withPermit(
+            session.promptMutex,
+            Effect.sync(() => {
+              if (pending.cancelled || pending.owner !== "none") return false
+
+              if (
+                session.phase !== "open" ||
+                !session.alive ||
+                session.turnEpoch !== pending.epoch ||
+                session.active === undefined ||
+                session.byCli.get(pending.cliId) !== pending.publicId
+              ) {
+                dropPrompt(session, pending)
+
+                return false
+              }
+
+              pending.owner = "timeout"
+              pending.cancelled = true
+              session.prompts.delete(pending.publicId)
+
+              if (session.byCli.get(pending.cliId) === pending.publicId) {
+                session.byCli.delete(pending.cliId)
+              }
+
+              return true
+            }),
+          )
+
+          if (!claimed) return
+
+          if (
+            session.phase !== "open" ||
+            !session.alive ||
+            session.turnEpoch !== pending.epoch ||
+            session.byCli.has(pending.cliId)
+          ) {
+            return
+          }
+
+          yield* session.exec
+            .respond(pending.cliId, promptCancelResult(pending.method))
+            .pipe(Effect.ignore)
+
+          if (session.phase !== "open" || session.turnEpoch !== pending.epoch) return
+
           publish(session, {
             kind: "prompt_resolved",
-            requestId: request.id,
+            requestId: pending.publicId,
             reason: "timeout",
             message: "no answer within " + String(promptTimeoutMs) + " ms",
           })
         })
 
-        fibers.push(yield* Effect.forkDetach(waiter))
+        yield* Effect.forkIn(waiter, session.scope)
+      })
+
+    // The first caller owns `exec.close`. Everyone else waits on the same deferred.
+    // `released` and removal happen only after that close settles, so a concurrent
+    // `closeAll` cannot observe a dropped record and skip a child that is still alive.
+    const shutdownOwned = (record: OwnedExec): Effect.Effect<void> =>
+      Effect.uninterruptible(
+        Effect.suspend(() => {
+          if (record.shutdown !== undefined) return Deferred.await(record.shutdown)
+
+          const gate = Deferred.makeUnsafe<void>()
+          record.shutdown = gate
+
+          return record.exec.close.pipe(
+            Effect.ignore,
+            Effect.ensuring(
+              Effect.sync(() => {
+                record.released = true
+                const index = owned.indexOf(record)
+
+                if (index >= 0) owned.splice(index, 1)
+
+                Deferred.doneUnsafe(gate, Effect.void)
+              }),
+            ),
+          )
+        }),
+      )
+
+    // Bookkeeping is synchronous. The close RPC stays interruptible so cancellation does
+    // not wait out its timeout; `ensuring` still tears the child down.
+    const closeSession = (session: SessionState): Effect.Effect<{ readonly closed: boolean }> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          session.phase = "closing"
+          session.alive = false
+          sessions.delete(session.id)
+          const active = session.active
+
+          if (active !== undefined) {
+            settleActive(session, active, {
+              reason: "cancelled",
+              durationMs: Date.now() - active.startedAt,
+            })
+          } else {
+            expirePrompts(session)
+            session.deltas.clear()
+            session.truncatedDeltas.clear()
+          }
+
+          yield* Scope.close(session.scope, Exit.void).pipe(Effect.ignore)
+          yield* restore(
+            session.exec
+              .request({ method: EXEC_METHOD.close, params: { sessionId: session.id } })
+              .pipe(Effect.ignore),
+          )
+          session.phase = "closed"
+
+          return { closed: true }
+        }).pipe(Effect.ensuring(shutdownOwned(session.owned))),
+      )
+
+    const close = (
+      sessionId: string,
+    ): Effect.Effect<{ readonly closed: boolean }, SessionProblem> =>
+      Effect.suspend(() => {
+        const session = sessions.get(sessionId)
+
+        if (session === undefined) return Effect.fail(notFound(sessionId))
+
+        return closeSession(session)
       })
 
     const attach = (session: SessionState): Effect.Effect<void> =>
@@ -786,157 +1350,187 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
         const exitWatcher = session.exec.exited.pipe(
           Effect.flatMap((info) =>
             Effect.sync(() => {
-              const active = session.active
-
-              if (active === undefined) return
-
-              const completion: Completion = {
-                reason: "process_exit",
-                durationMs: Date.now() - active.startedAt,
-              }
-
-              session.active = undefined
-              session.lastCompletion = completion
-              session.lastStatus = "failed"
-              publish(session, {
-                kind: "error",
-                code: "process_exit",
-                message: "droid exec exited with code " + String(info.code),
-              })
-              publish(session, {
-                kind: "turn_completed",
-                status: "failed",
-                reason: "process_exit",
-              })
-              Deferred.doneUnsafe(active.completion, Effect.succeed(completion))
+              markDead(session, "droid exec exited with code " + String(info.code))
             }),
           ),
         )
 
-        fibers.push(yield* Effect.forkDetach(notifications))
-        fibers.push(yield* Effect.forkDetach(requests))
-        fibers.push(yield* Effect.forkDetach(exitWatcher))
+        yield* Effect.forkIn(notifications, session.scope)
+        yield* Effect.forkIn(requests, session.scope)
+        yield* Effect.forkIn(exitWatcher, session.scope)
       })
 
     const create = (
       createOptions: CreateSessionOptions,
     ): Effect.Effect<CreateSessionResult, SessionProblem> =>
       Effect.gen(function* () {
-        const cwd = yield* checkCwd(createOptions.cwd)
+        // Per run. The effect value is reusable, and these must not be shared across fibers.
+        let registeredId: string | undefined
+        let record: OwnedExec | undefined
 
-        const exec = yield* start({
-          droidPath: options.droidPath,
-          cwd,
-          version: options.version,
-          env: options.env,
-          args: options.args,
-          requestTimeoutMs: options.requestTimeoutMs,
-          logger,
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new SessionProblem({
-                code: "exec_failed",
-                message: cause.message + (cause.detail === undefined ? "" : ": " + cause.detail),
-              }),
-          ),
-        )
+        const work = Effect.gen(function* () {
+          if (closing) return yield* Effect.fail(shuttingDown())
 
-        const initialized = yield* exec
-          .request({
-            method: EXEC_METHOD.initialize,
-            params: { machineId: "local", cwd },
-            timeoutMs: options.requestTimeoutMs ?? 60_000,
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new SessionProblem({
-                  code: Schema.is(ExecTimeout)(cause) ? "exec_timeout" : "exec_failed",
-                  message: cause.message,
-                }),
+          const cwd = yield* checkCwd(createOptions.cwd)
+
+          if (closing) return yield* Effect.fail(shuttingDown())
+
+          const exec = yield* start({
+            droidPath: options.droidPath,
+            cwd,
+            version: options.version,
+            env: options.env,
+            args: options.args,
+            requestTimeoutMs: options.requestTimeoutMs,
+            logger,
+          }).pipe(
+            Effect.mapError((cause) =>
+              problem(
+                "exec_failed",
+                cause.message + (cause.detail === undefined ? "" : ": " + cause.detail),
+              ),
             ),
           )
 
-        const decoded = Option.getOrUndefined(
-          Schema.decodeUnknownOption(InitializeResult)(initialized),
-        )
+          record = { exec, released: false }
+          owned.push(record)
 
-        if (decoded === undefined) {
-          yield* exec.close
+          if (closing) return yield* Effect.fail(shuttingDown())
 
-          return yield* Effect.fail(
-            new SessionProblem({
-              code: "exec_failed",
-              message: "droid exec did not return a session id",
-            }),
-          )
-        }
+          const initialized = yield* exec
+            .request({
+              method: EXEC_METHOD.initialize,
+              params: { machineId: "local", cwd },
+              timeoutMs: options.requestTimeoutMs ?? 60_000,
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                problem(
+                  Schema.is(ExecTimeout)(cause) ? "exec_timeout" : "exec_failed",
+                  cause.message,
+                ),
+              ),
+            )
 
-        const settings: SessionSettings = {
-          autonomyLevel: createOptions.autonomyLevel,
-          interactionMode: "auto",
-          modelId: createOptions.modelId,
-          reasoningEffort: createOptions.reasoningEffort,
-        }
-
-        const settingsParams: UpdateSettingsParams = {
-          sessionId: decoded.sessionId,
-          autonomyLevel: createOptions.autonomyLevel,
-          interactionMode: "auto",
-        }
-
-        if (createOptions.modelId !== undefined) settingsParams.modelId = createOptions.modelId
-
-        if (createOptions.reasoningEffort !== undefined) {
-          settingsParams.reasoningEffort = createOptions.reasoningEffort
-        }
-
-        if (createOptions.restrictToolIds !== undefined) {
-          settingsParams.restrictToolIds = [...createOptions.restrictToolIds]
-        }
-
-        if (createOptions.disabledToolIds !== undefined) {
-          settingsParams.disabledToolIds = [...createOptions.disabledToolIds]
-        }
-
-        yield* exec
-          .request({
-            method: EXEC_METHOD.updateSettings,
-            params: toJsonValue(settingsParams),
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) => new SessionProblem({ code: "exec_failed", message: cause.message }),
-            ),
+          const decoded = Option.getOrUndefined(
+            Schema.decodeUnknownOption(InitializeResult)(initialized),
           )
 
-        const session: SessionState = {
-          id: decoded.sessionId,
-          cwd,
-          exec,
-          mutex: yield* Semaphore.make(1),
-          promptMutex: yield* Semaphore.make(1),
-          prompts: new Map(),
-          deltas: new Map(),
-          buffer: [],
-          settings,
-          models: decoded.availableModels ?? [],
-          lastStatus: "completed",
-          nextSeq: 1,
-          bytes: 0,
-          active: undefined,
-          lastCompletion: undefined,
-          structuredOutput: undefined,
-          signal: Deferred.makeUnsafe<void>(),
-          lastUsed: Date.now(),
-        }
+          if (decoded === undefined) {
+            return yield* Effect.fail(
+              problem("exec_failed", "droid exec did not return a session id"),
+            )
+          }
 
-        sessions.set(session.id, session)
-        yield* attach(session)
+          if (closing) return yield* Effect.fail(shuttingDown())
 
-        return { sessionId: session.id, cwd, settings }
+          const settings: SettingsDraft = {
+            autonomyLevel: createOptions.autonomyLevel,
+            interactionMode: "auto",
+          }
+
+          if (createOptions.modelId !== undefined) settings.modelId = createOptions.modelId
+
+          if (createOptions.reasoningEffort !== undefined) {
+            settings.reasoningEffort = createOptions.reasoningEffort
+          }
+
+          const settingsParams: UpdateSettingsParams = {
+            sessionId: decoded.sessionId,
+            autonomyLevel: createOptions.autonomyLevel,
+            interactionMode: "auto",
+          }
+
+          if (createOptions.modelId !== undefined) settingsParams.modelId = createOptions.modelId
+
+          if (createOptions.reasoningEffort !== undefined) {
+            settingsParams.reasoningEffort = createOptions.reasoningEffort
+          }
+
+          if (createOptions.restrictToolIds !== undefined) {
+            settingsParams.restrictToolIds = [...createOptions.restrictToolIds]
+          }
+
+          if (createOptions.disabledToolIds !== undefined) {
+            settingsParams.disabledToolIds = [...createOptions.disabledToolIds]
+          }
+
+          yield* exec
+            .request({
+              method: EXEC_METHOD.updateSettings,
+              params: toJsonValue(settingsParams),
+            })
+            .pipe(Effect.mapError((cause) => problem("exec_failed", cause.message)))
+
+          if (closing) return yield* Effect.fail(shuttingDown())
+
+          const previous = sessions.get(decoded.sessionId)
+
+          if (previous !== undefined) yield* close(previous.id).pipe(Effect.ignore)
+
+          if (closing) return yield* Effect.fail(shuttingDown())
+
+          const session: SessionState = {
+            id: decoded.sessionId,
+            cwd,
+            exec,
+            owned: record,
+            scope: Scope.makeUnsafe(),
+            mutex: yield* Semaphore.make(1),
+            promptMutex: yield* Semaphore.make(1),
+            prompts: new Map(),
+            byCli: new Map(),
+            deltas: new Map(),
+            truncatedDeltas: new Set(),
+            buffer: [],
+            settings,
+            models: decoded.availableModels ?? [],
+            lastStatus: "completed",
+            nextSeq: 1,
+            bytes: 0,
+            active: undefined,
+            lastCompletion: undefined,
+            signal: Deferred.makeUnsafe<void>(),
+            lastUsed: Date.now(),
+            phase: "open",
+            alive: true,
+            turnEpoch: 0,
+            promptSeq: 1,
+            cap: createOptions.maxAutonomy,
+          }
+
+          if (closing) return yield* Effect.fail(shuttingDown())
+
+          sessions.set(session.id, session)
+          registeredId = session.id
+
+          if (closing) return yield* Effect.fail(shuttingDown())
+
+          yield* attach(session)
+
+          if (closing) return yield* Effect.fail(shuttingDown())
+
+          return { sessionId: session.id, cwd, settings }
+        })
+
+        return yield* Effect.onExit(work, (exit) => {
+          if (Exit.isSuccess(exit)) return Effect.void
+
+          if (registeredId !== undefined) return close(registeredId).pipe(Effect.ignore)
+
+          if (record !== undefined) return shutdownOwned(record)
+
+          return Effect.void
+        })
       })
+
+    const requireLive = (session: SessionState): SessionProblem | undefined => {
+      if (session.phase !== "open") return notFound(session.id)
+
+      if (!session.alive) return closedProblem(session.id)
+
+      return undefined
+    }
 
     const stream = (streamOptions: StreamOptions): Effect.Effect<TurnResult, SessionProblem> =>
       Effect.gen(function* () {
@@ -944,21 +1538,19 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
 
         if (session === undefined) return yield* Effect.fail(notFound(streamOptions.sessionId))
 
+        const unavailable = requireLive(session)
+
+        if (unavailable !== undefined) return yield* Effect.fail(unavailable)
+
         if (streamOptions.prompt.trim().length === 0) {
           return yield* Effect.fail(
-            new SessionProblem({
-              code: "invalid_prompt",
-              message: "prompt must contain at least one non-whitespace character",
-            }),
+            problem("invalid_prompt", "prompt must contain at least one non-whitespace character"),
           )
         }
 
         if (session.active !== undefined) {
           return yield* Effect.fail(
-            new SessionProblem({
-              code: "session_busy",
-              message: "session " + session.id + " already has a running turn",
-            }),
+            problem("session_busy", "session " + session.id + " already has a running turn"),
           )
         }
 
@@ -966,21 +1558,36 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
 
         if (!acquired) {
           return yield* Effect.fail(
-            new SessionProblem({
-              code: "session_busy",
-              message: "session " + session.id + " already has a running turn",
-            }),
+            problem("session_busy", "session " + session.id + " already has a running turn"),
           )
-        }
-
-        const active: ActiveTurn = {
-          startedAt: Date.now(),
-          firstSeq: session.nextSeq,
-          completion: Deferred.makeUnsafe<Completion>(),
         }
 
         return yield* Effect.ensuring(
           Effect.gen(function* () {
+            const blocked = requireLive(session)
+
+            if (blocked !== undefined) return yield* Effect.fail(blocked)
+
+            if (session.active !== undefined) {
+              return yield* Effect.fail(
+                problem("session_busy", "session " + session.id + " already has a running turn"),
+              )
+            }
+
+            expirePrompts(session)
+            session.turnEpoch += 1
+            session.deltas.clear()
+            session.truncatedDeltas.clear()
+            session.lastCompletion = undefined
+
+            const active: ActiveTurn = {
+              epoch: session.turnEpoch,
+              startedAt: Date.now(),
+              firstSeq: session.nextSeq,
+              completion: Deferred.makeUnsafe<Completion>(),
+              structuredOutput: undefined,
+            }
+
             session.active = active
             session.lastStatus = "running"
             session.lastUsed = Date.now()
@@ -998,8 +1605,6 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
             )
 
             if (sent !== undefined) {
-              // The child may have exited while the message was in flight; the
-              // exit watcher owns the turn and has published the reason.
               const settled = yield* Deferred.await(active.completion).pipe(
                 Effect.timeoutOption(Duration.millis(100)),
               )
@@ -1013,30 +1618,28 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
                 )
               }
 
-              session.active = undefined
-              session.lastStatus = "failed"
-              publish(session, { kind: "error", code: "exec_failed", message: sent.message })
-              publish(session, {
-                kind: "turn_completed",
-                status: "failed",
-                reason: "process_exit",
+              const completion: Completion = {
+                reason: "exec_failed",
+                durationMs: Date.now() - active.startedAt,
+              }
+
+              settleActive(session, active, completion, {
+                code: "exec_failed",
+                message: sent.message,
               })
 
-              return resultOf(session, "failed", active.firstSeq, {
-                reason: "process_exit",
-                durationMs: Date.now() - active.startedAt,
-              })
+              return resultOf(session, "failed", active.firstSeq, completion)
             }
 
             const waited = yield* Deferred.await(active.completion).pipe(
               Effect.timeoutOption(Duration.millis(streamOptions.waitMs ?? waitMs)),
             )
 
-            return Option.match(waited, {
-              onNone: () => resultOf(session, "running", active.firstSeq, undefined),
-              onSome: (completion) =>
-                resultOf(session, statusOf(completion.reason), active.firstSeq, completion),
-            })
+            if (Option.isNone(waited)) {
+              return resultOf(session, "running", active.firstSeq, undefined)
+            }
+
+            return resultOf(session, statusOf(waited.value.reason), active.firstSeq, waited.value)
           }),
           Semaphore.release(session.mutex, 1),
         )
@@ -1048,16 +1651,14 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
 
         if (session === undefined) return yield* Effect.fail(notFound(eventsOptions.sessionId))
 
-        session.lastUsed = Date.now()
+        if (session.alive) session.lastUsed = Date.now()
+
         const current = snapshot(session, eventsOptions.cursor)
 
-        if (session.active === undefined || current.events.length > 0) {
-          return resultOf(
-            session,
-            session.active === undefined ? session.lastStatus : "running",
-            eventsOptions.cursor,
-            session.active === undefined ? session.lastCompletion : undefined,
-          )
+        const completion = () => (session.active === undefined ? session.lastCompletion : undefined)
+
+        if (!session.alive || session.active === undefined || current.events.length > 0) {
+          return resultOf(session, listedStatus(session), eventsOptions.cursor, completion())
         }
 
         const signal = session.signal
@@ -1066,12 +1667,7 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
           Effect.sleep(Duration.millis(eventsOptions.waitMs ?? waitMs)),
         )
 
-        return resultOf(
-          session,
-          session.active === undefined ? session.lastStatus : "running",
-          eventsOptions.cursor,
-          session.active === undefined ? session.lastCompletion : undefined,
-        )
+        return resultOf(session, listedStatus(session), eventsOptions.cursor, completion())
       })
 
     const interrupt = (
@@ -1082,38 +1678,16 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
 
         if (session === undefined) return yield* Effect.fail(notFound(sessionId))
 
-        // The CLI accepts an interrupt at any time; the boolean reports whether
-        // there was a turn for it to stop.
-        const interrupted = session.active !== undefined
+        const unavailable = requireLive(session)
 
+        if (unavailable !== undefined) return yield* Effect.fail(unavailable)
+
+        const interrupted = session.active !== undefined
         yield* session.exec
           .request({ method: EXEC_METHOD.interrupt, params: { sessionId } })
           .pipe(Effect.ignore)
 
         return { interrupted }
-      })
-
-    const close = (
-      sessionId: string,
-    ): Effect.Effect<{ readonly closed: boolean }, SessionProblem> =>
-      Effect.gen(function* () {
-        const session = sessions.get(sessionId)
-
-        if (session === undefined) return yield* Effect.fail(notFound(sessionId))
-
-        sessions.delete(sessionId)
-
-        for (const pending of session.prompts.values()) {
-          Deferred.doneUnsafe(pending.deferred, Effect.succeed(promptCancelResult(pending.method)))
-        }
-
-        session.prompts.clear()
-        yield* session.exec
-          .request({ method: EXEC_METHOD.close, params: { sessionId } })
-          .pipe(Effect.ignore)
-        yield* session.exec.close
-
-        return { closed: true }
       })
 
     const command = (
@@ -1124,23 +1698,34 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
 
         if (session === undefined) return yield* Effect.fail(notFound(commandOptions.sessionId))
 
+        const unavailable = requireLive(session)
+
+        if (unavailable !== undefined) return yield* Effect.fail(unavailable)
+
         session.lastUsed = Date.now()
 
-        return yield* session.exec
+        const value = yield* session.exec
           .request({
             method: commandOptions.method,
             params: commandOptions.params,
             timeoutMs: commandOptions.timeoutMs ?? options.requestTimeoutMs ?? 30_000,
           })
           .pipe(
-            Effect.mapError(
-              (cause) =>
-                new SessionProblem({
-                  code: Schema.is(ExecTimeout)(cause) ? "exec_timeout" : "exec_failed",
-                  message: cause.message,
-                }),
+            Effect.mapError((cause) =>
+              problem(
+                Schema.is(ExecTimeout)(cause) ? "exec_timeout" : "exec_failed",
+                cause.message,
+              ),
             ),
           )
+
+        if (commandOptions.method === EXEC_METHOD.updateSettings) {
+          applySettings(session, commandOptions.params)
+        }
+
+        if (commandOptions.method === CHANGE_DIRECTORY) applyCwd(session, commandOptions.params)
+
+        return value
       })
 
     const models = (sessionId: string): Effect.Effect<ReadonlyArray<JsonValue>, SessionProblem> =>
@@ -1161,7 +1746,17 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
 
         if (session === undefined) return yield* Effect.fail(notFound(sessionId))
 
-        return session.prompts.get(requestId)?.view
+        const unavailable = requireLive(session)
+
+        if (unavailable !== undefined) return yield* Effect.fail(unavailable)
+
+        const pending = session.prompts.get(requestId)
+
+        if (pending === undefined || pending.cancelled) return undefined
+
+        if (session.turnEpoch !== pending.epoch || session.active === undefined) return undefined
+
+        return pending.view
       })
 
     const answer = (
@@ -1172,21 +1767,65 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
 
         if (session === undefined) return yield* Effect.fail(notFound(answerOptions.sessionId))
 
-        const resolved = yield* Semaphore.withPermit(
+        const unavailable = requireLive(session)
+
+        if (unavailable !== undefined) return yield* Effect.fail(unavailable)
+
+        const claimed = yield* Semaphore.withPermit(
           session.promptMutex,
-          Effect.sync(() => answerPrompt(session, answerOptions.requestId, answerOptions.result)),
+          Effect.sync(() => {
+            const pending = session.prompts.get(answerOptions.requestId)
+
+            if (pending === undefined || pending.cancelled || pending.owner !== "none") {
+              return undefined
+            }
+
+            if (
+              session.phase !== "open" ||
+              !session.alive ||
+              session.turnEpoch !== pending.epoch ||
+              session.active === undefined ||
+              session.byCli.get(pending.cliId) !== pending.publicId
+            ) {
+              return undefined
+            }
+
+            pending.owner = "answer"
+            pending.cancelled = true
+            session.prompts.delete(pending.publicId)
+
+            if (session.byCli.get(pending.cliId) === pending.publicId) {
+              session.byCli.delete(pending.cliId)
+            }
+
+            Deferred.doneUnsafe(pending.deferred, Effect.succeed(answerOptions.result))
+
+            return pending
+          }),
         )
 
-        if (!resolved) {
+        if (claimed === undefined) {
           return yield* Effect.fail(
-            new SessionProblem({
-              code: "prompt_not_found",
-              message: "no pending prompt " + answerOptions.requestId,
-            }),
+            problem("prompt_not_found", "no pending prompt " + answerOptions.requestId),
           )
         }
 
-        return { resolved }
+        if (
+          session.phase !== "open" ||
+          !session.alive ||
+          session.turnEpoch !== claimed.epoch ||
+          session.byCli.has(claimed.cliId)
+        ) {
+          return yield* Effect.fail(
+            problem("prompt_not_found", "no pending prompt " + answerOptions.requestId),
+          )
+        }
+
+        yield* session.exec
+          .respond(claimed.cliId, answerOptions.result)
+          .pipe(Effect.mapError((cause) => problem("exec_failed", cause.message)))
+
+        return { resolved: true }
       })
 
     const reap = (): Effect.Effect<void> =>
@@ -1219,27 +1858,37 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       command,
       models,
       pendingPrompt,
-      sessions: Effect.sync(() =>
-        Array.from(sessions.values()).map((session) => ({
-          sessionId: session.id,
-          cwd: session.cwd,
-          status: session.active === undefined ? session.lastStatus : "running",
-          cursor: session.nextSeq,
-        })),
-      ),
+      sessions: Effect.sync(() => {
+        const listed: Array<SessionSummary> = []
+
+        for (const session of sessions.values()) {
+          listed.push({
+            sessionId: session.id,
+            cwd: session.cwd,
+            settings: session.settings,
+            status: listedStatus(session),
+            cursor: session.nextSeq,
+          })
+        }
+
+        return listed
+      }),
     }
 
     return {
       api,
       closeAll: Effect.gen(function* () {
+        closing = true
         yield* Fiber.interrupt(reaper)
 
         for (const session of Array.from(sessions.values())) {
           yield* close(session.id).pipe(Effect.ignore)
         }
 
-        for (const fiber of fibers) {
-          yield* Fiber.interrupt(fiber)
+        // `close` drops the public session before teardown. Children already closing,
+        // and children not registered yet, are still in `owned` until `exec.close` settles.
+        for (const record of Array.from(owned)) {
+          yield* shutdownOwned(record)
         }
       }),
     }

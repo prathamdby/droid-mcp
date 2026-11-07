@@ -18,10 +18,31 @@
  *   "interrupt"   stays running until `droid.interrupt_session`
  *   "echo:<text>" completes with <text> as structured output
  *
+ * Environment:
+ *   FAKE_DROID_INIT=hang       never answer initialize
+ *   FAKE_DROID_SETTINGS=reject reject the settings update
+ *   FAKE_DROID_CLOSE=hang      ignore droid.close_session and stay up
+ *   FAKE_DROID_CLOSE_MARKER    file written when that ignored close arrives
+ *   FAKE_DROID_PIDFILE         write this process's pid
+ *   FAKE_DROID_PIDDIR          one file per pid, so concurrent children stay visible
+ *
  * Every answered prompt is echoed back as the turn's `structuredOutput`, so a
  * test can assert exactly what reached the CLI.
  */
+import { mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { createInterface } from "node:readline"
+
+const pidfile = process.env.FAKE_DROID_PIDFILE
+
+if (pidfile !== undefined && pidfile.length > 0) writeFileSync(pidfile, String(process.pid))
+
+const piddir = process.env.FAKE_DROID_PIDDIR
+
+if (piddir !== undefined && piddir.length > 0) {
+  mkdirSync(piddir, { recursive: true })
+  writeFileSync(join(piddir, String(process.pid)), "")
+}
 
 const PROTOCOL = "1.299.0"
 const SESSION_ID = "fake-session"
@@ -191,6 +212,48 @@ const handlePrompt = (text) => {
     return true
   }
 
+  if (text === "permission:huge") {
+    request(id, "droid.request_permission", {
+      toolUses: [toolUse("tool-1", "Write", { path: "a.txt", content: "x".repeat(300_000) })],
+      options: permissionOptions(["proceed_once", "cancel"]),
+    })
+
+    return true
+  }
+
+  if (text === "permission:reuse") {
+    pendingPermission("prompt-same")
+
+    return true
+  }
+
+  if (text === "permission:dup") {
+    request("prompt-dup", "droid.request_permission", {
+      toolUses: [toolUse("tool-1", "First", { path: "a.txt", content: "hi" })],
+      options: permissionOptions(["proceed_once", "cancel"]),
+    })
+    request("prompt-dup", "droid.request_permission", {
+      toolUses: [toolUse("tool-2", "Second", { path: "b.txt", content: "hi" })],
+      options: permissionOptions(["proceed_once", "cancel"]),
+    })
+
+    return true
+  }
+
+  if (text === "permission:levels") {
+    pendingPermission(id, [
+      "proceed_once",
+      "proceed_edit",
+      "cancel",
+      "proceed_auto_run",
+      "proceed_auto_run_high",
+      "proceed_new_session",
+      "proceed_new_session_low",
+    ])
+
+    return true
+  }
+
   return false
 }
 
@@ -200,7 +263,72 @@ const handleMessage = (text, id) => {
     process.exit(3)
   }
 
+  if (text === "reject") {
+    write({ type: "response", id, error: { code: -32000, message: "message rejected" } })
+
+    return
+  }
+
+  if (text === "structured") {
+    respond(id, {})
+    notify({ type: "structured_output", data: { old: true } })
+    notify({
+      type: "agent_turn_completed",
+      reason: "completed",
+      turnId: "turn-a",
+      structuredOutput: { old: true },
+    })
+
+    return
+  }
+
   respond(id, {})
+
+  if (text === "done-exit") {
+    notify({
+      type: "agent_turn_completed",
+      reason: "completed",
+      turnId: "turn-done",
+    })
+    setTimeout(() => process.exit(0), 40)
+
+    return
+  }
+
+  if (text.startsWith("deltas:")) {
+    const count = Number(text.slice("deltas:".length))
+
+    for (let index = 0; index < count; index += 1) {
+      notify({
+        type: "assistant_text_delta",
+        messageId: "m-delta",
+        blockIndex: 0,
+        textDelta: "😀",
+      })
+    }
+
+    notify({ type: "assistant_text_complete", messageId: "m-delta", blockIndex: 0 })
+    complete("completed")
+
+    return
+  }
+
+  if (text.startsWith("bulk:")) {
+    const count = Number(text.slice("bulk:".length))
+
+    for (let index = 0; index < count; index += 1) {
+      notify({
+        type: "tool_result",
+        toolUseId: "t" + String(index),
+        isError: false,
+        result: "y".repeat(8000),
+      })
+    }
+
+    complete("completed")
+
+    return
+  }
 
   if (text === "hang") return
 
@@ -353,6 +481,16 @@ const router = (message) => {
   }
 
   if (message.method === "droid.update_session_settings") {
+    if (process.env.FAKE_DROID_SETTINGS === "reject") {
+      write({
+        type: "response",
+        id: message.id,
+        error: { code: -32000, message: "settings rejected" },
+      })
+
+      return
+    }
+
     respond(message.id, { method: message.method, params: message.params ?? null })
     notify({ type: "settings_updated", settings: message.params ?? {} })
 
@@ -366,6 +504,8 @@ const router = (message) => {
   }
 
   if (message.method === "droid.initialize_session") {
+    if (process.env.FAKE_DROID_INIT === "hang") return
+
     respond(message.id, {
       sessionId: SESSION_ID,
       hostId: "fake-host",
@@ -397,6 +537,14 @@ const router = (message) => {
   }
 
   if (message.method === "droid.close_session") {
+    if (process.env.FAKE_DROID_CLOSE === "hang") {
+      const marker = process.env.FAKE_DROID_CLOSE_MARKER
+
+      if (marker !== undefined && marker.length > 0) writeFileSync(marker, "hung")
+
+      return
+    }
+
     respond(message.id, {})
     setTimeout(() => process.exit(0), 10)
 

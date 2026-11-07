@@ -3,6 +3,7 @@ import * as Toolkit from "effect/ai/Toolkit"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
+import type { AutonomyLevel } from "../config.ts"
 import {
   PermissionOutcomeSchema,
   answersResult,
@@ -17,7 +18,8 @@ import { toolFailure } from "./guards.ts"
 
 const RespondPermission = Tool.make("session_respond_permission", {
   description:
-    "Answer a pending_permission event. The outcome must be one the event offered; " +
+    "Answer a pending_permission event. The outcome must be one the event offered. " +
+    "Outcomes that would raise autonomy above the server cap are rejected. " +
     "proceed_edit also needs editedSpecContent.",
   parameters: Schema.Struct({
     sessionId: Schema.String,
@@ -70,7 +72,7 @@ const missingPrompt: ToolFailure = {
   message: "that prompt is no longer pending; read session_events for the current state",
 }
 
-export const sessionPromptTools = () => {
+export const sessionPromptTools = (config?: { readonly maxAutonomy: AutonomyLevel }) => {
   const tools: Array<Tool.Any> = [RespondPermission, AnswerQuestion, PickOptions]
   const PromptTools = Toolkit.make(RespondPermission, AnswerQuestion, PickOptions)
 
@@ -91,11 +93,15 @@ export const sessionPromptTools = () => {
           )
         }
 
-        const result = permissionResult(view, {
-          outcome: params.outcome,
-          comment: params.comment,
-          editedSpecContent: params.editedSpecContent,
-        })
+        const result = permissionResult(
+          view,
+          {
+            outcome: params.outcome,
+            comment: params.comment,
+            editedSpecContent: params.editedSpecContent,
+          },
+          config?.maxAutonomy,
+        )
 
         if (isPromptProblem(result)) {
           return yield* Effect.fail({ code: result.code, message: result.message })

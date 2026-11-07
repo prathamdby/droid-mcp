@@ -20,7 +20,7 @@ import { sessionTools } from "./session.ts"
 export const toolsFor = (config: Config) => {
   const generated = generatedSurface()
   const session = sessionTools(config)
-  const prompts = sessionPromptTools()
+  const prompts = sessionPromptTools(config)
   const admin = sessionAdminTools(config)
   const mcp = sessionMcpTools()
   const history = sessionHistoryTools()

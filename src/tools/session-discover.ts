@@ -64,8 +64,10 @@ const Models = Tool.make("session_models", {
 
 const Run = Tool.make("session_run", {
   description:
-    "Create a session, run one turn, and close it. Use session_create plus session_stream " +
-    "when you need more than one turn.",
+    "Create a session and run one turn. The session is closed when the turn completes, fails, " +
+    "or is interrupted. A running result keeps the session: poll session_events with the " +
+    "returned cursor, answer prompts, then call session_close. Use session_create when you " +
+    "need more than one turn.",
   parameters: Schema.Struct({
     cwd: Schema.String,
     prompt: Schema.String,
@@ -108,9 +110,12 @@ export const sessionDiscoverTools = (config: Config) => {
           const modelId = params.modelId
 
           const created = yield* hub
-            .create(
-              modelId === undefined ? { cwd, autonomyLevel } : { cwd, autonomyLevel, modelId },
-            )
+            .create({
+              cwd,
+              autonomyLevel,
+              maxAutonomy: config.maxAutonomy,
+              modelId,
+            })
             .pipe(Effect.mapError(toolFailure))
 
           const waitMs = params.waitMs
@@ -120,14 +125,22 @@ export const sessionDiscoverTools = (config: Config) => {
               ? { sessionId: created.sessionId, prompt: params.prompt }
               : { sessionId: created.sessionId, prompt: params.prompt, waitMs }
 
-          const result = yield* hub
-            .stream(turn)
-            .pipe(
-              Effect.mapError(toolFailure),
-              Effect.ensuring(hub.close(created.sessionId).pipe(Effect.ignore)),
-            )
+          let retain = false
 
-          return result
+          return yield* Effect.ensuring(
+            Effect.gen(function* () {
+              const result = yield* hub.stream(turn).pipe(Effect.mapError(toolFailure))
+
+              if (result.status === "running") retain = true
+
+              return result
+            }),
+            Effect.gen(function* () {
+              if (retain) return
+
+              yield* hub.close(created.sessionId).pipe(Effect.ignore)
+            }),
+          )
         }),
       ),
   })

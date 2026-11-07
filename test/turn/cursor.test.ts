@@ -23,6 +23,8 @@ describe("session cursors", () => {
     )
 
     expect(outcome.first.status).toBe("completed")
+    const last = outcome.first.events[outcome.first.events.length - 1]
+    expect(outcome.first.cursor).toBe((last?.seq ?? 0) + 1)
     const kinds = outcome.first.events.map((event) => event.kind)
     expect(kinds).toContain("assistant_text")
     expect(kinds).toContain("tool_call")
