@@ -375,6 +375,12 @@ const convertNode = (node: ts.TypeNode, context: ConvertContext): JsonSchema => 
 
     if (ts.isNumericLiteral(node.literal)) return { const: Number(node.literal.text) }
 
+    if (node.literal.kind === ts.SyntaxKind.TrueKeyword) return { const: true }
+
+    if (node.literal.kind === ts.SyntaxKind.FalseKeyword) return { const: false }
+
+    if (node.literal.kind === ts.SyntaxKind.NullKeyword) return { const: null }
+
     return anySchema
   }
 
@@ -611,8 +617,31 @@ const familyOf = (method: string): string => {
   return rest[0]
 }
 
+/**
+ * Verbs that remove or discard state. Matched on the method's last segment
+ * so `unarchive_session` is not `archive` and `list_skills` is not `kill`.
+ */
+const DESTRUCTIVE_VERBS = new Set(["delete", "remove", "kill", "uninstall", "archive", "discard"])
+
+/**
+ * Actions that delete state without using those verbs. `cleanup_worktree` can
+ * delete local and remote branches, including with force. `execute_rewind`
+ * restores and deletes files.
+ */
+const DESTRUCTIVE_ACTIONS = new Set(["cleanup_worktree", "execute_rewind"])
+
+const isDestructive = (method: string): boolean => {
+  const action = method.slice(method.lastIndexOf(".") + 1)
+  const separator = action.indexOf("_")
+  const verb = separator === -1 ? action : action.slice(0, separator)
+
+  if (DESTRUCTIVE_VERBS.has(verb)) return true
+
+  return DESTRUCTIVE_ACTIONS.has(action)
+}
+
 const descriptionOf = (method: string, params: JsonSchema): string => {
-  const destructive = /(delete|remove|kill|uninstall|archive|discard)/.test(method)
+  const destructive = isDestructive(method)
 
   const fields =
     isRecord(params) && isRecord(params.properties) ? Object.keys(params.properties) : []

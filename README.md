@@ -31,7 +31,7 @@ A turn works like this.
 
 1. `session_create` starts a Droid child process for a working directory and an autonomy level. The server rejects any autonomy level above the cap reported by `server_info`.
 2. `session_stream` sends the prompt and waits up to `waitMs`, 20 seconds by default and 300 seconds at most.
-3. If the turn is still running, call `session_events` with the cursor it returned. The cursor is the last event sequence number you have seen, so events do not repeat. Call it until the status is `completed`, `failed`, or `interrupted`.
+3. If the turn is still running, call `session_events` with the cursor it returned. The cursor is the next sequence number, one past the last event, so pass it back unchanged and events do not repeat. Call it until the status is `completed`, `failed`, or `interrupted`. A `running` result keeps the session; close it when you are done. `session_run` closes the session itself unless it returns `running`, in which case poll, answer prompts, and then `session_close`.
 4. While the turn runs, prompts such as `pending_permission`, `pending_question`, and `pending_options` appear, each with a deadline. Answer them with the matching tool.
 5. `session_close` stops the process. Sessions idle for 30 minutes are closed automatically.
 
@@ -105,6 +105,11 @@ Each flag also has an environment variable. The defaults work for a local instal
 - The server binds to localhost by default. Do not expose the port without TLS and a required key.
 - Requests that carry an `Origin` header are rejected unless you allow that origin explicitly.
 - The REST and Context tools redact secrets from results and errors. A minted service-account key value is never returned, and secret values sent to the organization secrets tool are never echoed back.
+- `--max-autonomy` bounds local `session_create` and `session_run`, the permission outcomes those sessions offer, and any authority field a generated tool sends explicitly (`autonomyLevel`, `autonomyMode`, `subagentAutonomyLevel`, and `skipPermissionsUnsafe: true`).
+- `daemon_initialize_session` and `droid_initialize_session` copy an omitted `autonomyLevel` or `autonomyMode` from one `daemon_get_default_settings` snapshot onto that request. A snapshot value inside the cap is kept. A snapshot value above the cap is sent as the cap. A missing level is sent as `off`, and a missing mode as `normal`. When the cap is below `high`, an omitted `skipPermissionsUnsafe` is sent as `false`. The snapshot is read for that request only; persistent defaults are left unchanged. Initialize has no `subagentAutonomyLevel` field.
+- `daemon_load_session` and `droid_load_session` send no saved authority, and work already queued on that session can be running. Use `session_create` and `session_run` when the cap has to bound the work.
+- `daemon_initialize_session` copies an omitted `autonomyLevel`, `autonomyMode`, and, when `--max-autonomy` is below `high`, `skipPermissionsUnsafe` from one `daemon_get_default_settings` snapshot onto that request. A lower observed default is kept. A missing field becomes `off`, `normal`, or `false`. The call does not change persistent defaults.
+- `daemon_load_session` and `droid_load_session` open a saved session at the authority stored with it. List and message reads do not show that authority, and `daemon_initialize_session` has no `subagentAutonomyLevel` field. Use local `session_create` or `session_run` when the work must stay inside `--max-autonomy`.
 
 ## Development
 

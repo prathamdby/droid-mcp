@@ -1,8 +1,55 @@
 import { Effect } from "effect"
+import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { describe, expect, it } from "vitest"
 
-import type { TurnResult } from "../../src/droid/turns.ts"
+import type { TurnEvent, TurnResult } from "../../src/droid/turns.ts"
+import { FIELD_BYTE_LIMIT } from "../../src/droid/turns.ts"
 import { settle, withPrompts } from "../support/prompts.ts"
+
+const MARK = "…[truncated]"
+
+const ShownQuestion = Schema.Struct({
+  index: Schema.optional(Schema.Number),
+  topic: Schema.optional(Schema.String),
+  question: Schema.optional(Schema.String),
+})
+
+const ShownRow = Schema.Struct({
+  id: Schema.String,
+  label: Schema.optional(Schema.String),
+  detail: Schema.optional(Schema.String),
+})
+
+const shownQuestion = (event: TurnEvent) => {
+  const decoded = Option.getOrUndefined(
+    Schema.decodeUnknownOption(Schema.Array(ShownQuestion))(event.questions ?? []),
+  )
+
+  const question = decoded?.[0]
+
+  if (question?.question === undefined) throw new Error("missing question")
+
+  return question
+}
+
+const shownRows = (event: TurnEvent) => {
+  const decoded = Option.getOrUndefined(
+    Schema.decodeUnknownOption(Schema.Array(ShownRow))(event.rows ?? []),
+  )
+
+  if (decoded === undefined || decoded.length < 2) throw new Error("missing rows")
+
+  return decoded
+}
+
+const boundedText = (value: string): string => {
+  expect(Buffer.byteLength(value, "utf8")).toBeLessThanOrEqual(FIELD_BYTE_LIMIT)
+  expect(value.endsWith(MARK)).toBe(true)
+  expect(value.includes("\uFFFD")).toBe(false)
+
+  return value.slice(0, value.length - MARK.length)
+}
 
 const pending = (turn: TurnResult, kind: string) => {
   const event = turn.events.find((candidate) => candidate.kind === kind)
@@ -77,6 +124,54 @@ describe("ask-user prompts", () => {
     )
 
     expect(failure.code).toBe("invalid_question_index")
+  })
+
+  it("bounds an oversized question on a UTF-8 boundary and answers with the original text", async () => {
+    const outcome = await Effect.runPromise(
+      withPrompts((harness) =>
+        Effect.gen(function* () {
+          const turn = yield* harness.hub.api.stream({
+            sessionId: harness.sessionId,
+            prompt: "ask:huge",
+            waitMs: 400,
+          })
+
+          const event = pending(turn, "pending_question")
+
+          const view = yield* harness.hub.api.pendingPrompt(
+            harness.sessionId,
+            event.requestId ?? "",
+          )
+
+          yield* harness.answerQuestion({
+            sessionId: harness.sessionId,
+            requestId: event.requestId ?? "",
+            answers: [{ index: 0, answer: "kept" }],
+          })
+
+          const settled = yield* settle(harness.hub, harness.sessionId, event.seq + 1)
+
+          return { event, view, settled }
+        }),
+      ),
+    )
+
+    const full = outcome.view?.kind === "question" ? outcome.view.questions[0]?.question : undefined
+    const shown = shownQuestion(outcome.event)
+    const body = boundedText(shown.question ?? "")
+
+    expect(outcome.view?.kind).toBe("question")
+    expect(full).toBeDefined()
+    expect(Buffer.byteLength(full ?? "", "utf8")).toBeGreaterThan(FIELD_BYTE_LIMIT)
+    expect(shown.topic).toBe("Size")
+    expect(shown.index).toBe(0)
+    expect(full?.startsWith(body)).toBe(true)
+    expect([...(body ?? "")].every((char) => char === "😀")).toBe(true)
+    expect(outcome.settled.status).toBe("completed")
+    expect(outcome.settled.result?.structuredOutput).toEqual({
+      cancelled: false,
+      answers: [{ index: 0, question: full, answer: "kept" }],
+    })
   })
 
   it("accepts a cancelled answer", async () => {
@@ -219,6 +314,61 @@ describe("option pickers", () => {
     )
 
     expect(outcome.refresh).toBe(true)
+  })
+
+  it("bounds oversized picker rows and still selects by the original id", async () => {
+    const outcome = await Effect.runPromise(
+      withPrompts((harness) =>
+        Effect.gen(function* () {
+          const turn = yield* harness.hub.api.stream({
+            sessionId: harness.sessionId,
+            prompt: "pick:huge",
+            waitMs: 400,
+          })
+
+          const event = pending(turn, "pending_options")
+
+          const view = yield* harness.hub.api.pendingPrompt(
+            harness.sessionId,
+            event.requestId ?? "",
+          )
+
+          yield* harness.pickOptions({
+            sessionId: harness.sessionId,
+            requestId: event.requestId ?? "",
+            selectedIds: ["wide"],
+          })
+
+          const settled = yield* settle(harness.hub, harness.sessionId, event.seq + 1)
+
+          return { event, view, settled }
+        }),
+      ),
+    )
+
+    const fullLabel = outcome.view?.kind === "options" ? outcome.view.rows[0]?.label : undefined
+    const fullDetail = outcome.view?.kind === "options" ? outcome.view.rows[0]?.detail : undefined
+    const rows = shownRows(outcome.event)
+    const wide = rows[0]
+    const narrow = rows[1]
+    const labelBody = boundedText(wide?.label ?? "")
+    const detailBody = boundedText(wide?.detail ?? "")
+
+    expect(outcome.view?.kind).toBe("options")
+    expect(wide?.id).toBe("wide")
+    expect(narrow?.id).toBe("narrow")
+    expect(narrow?.label).toBe("narrow")
+    expect(narrow?.detail).toBe("small")
+    expect(Buffer.byteLength(fullLabel ?? "", "utf8")).toBeGreaterThan(FIELD_BYTE_LIMIT)
+    expect(Buffer.byteLength(fullDetail ?? "", "utf8")).toBeGreaterThan(FIELD_BYTE_LIMIT)
+    expect(fullLabel?.startsWith(labelBody)).toBe(true)
+    expect(fullDetail?.startsWith(detailBody)).toBe(true)
+    expect([...(labelBody ?? "")].every((char) => char === "😀")).toBe(true)
+    expect(outcome.settled.result?.structuredOutput).toEqual({
+      cancelled: false,
+      selectedIds: ["wide"],
+      refresh: false,
+    })
   })
 })
 

@@ -50,14 +50,14 @@ export const withTools = <A, E>(
         }
 
         collect(sessionTools(config).handlers)
-        collect(sessionPromptTools().handlers)
+        collect(sessionPromptTools(config).handlers)
         collect(sessionAdminTools(config).handlers)
         collect(sessionMcpTools().handlers)
         collect(sessionHistoryTools().handlers)
         collect(sessionDiscoverTools(config).handlers)
 
         return Effect.gen(function* () {
-          const sessionId = yield* createSession(hub)
+          const sessionId = yield* createSession(hub, undefined, config.maxAutonomy)
 
           const harness: ToolHarness = {
             hub,

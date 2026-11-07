@@ -1,6 +1,7 @@
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
+import { sessionMcpTools } from "../../src/tools/session-mcp.ts"
 import { withTools } from "../support/tools.ts"
 
 describe("session admin tools", () => {
@@ -113,13 +114,44 @@ describe("session MCP tools", () => {
     })
   })
 
-  it("toggles and removes a server by name", async () => {
+  it("toggles and removes a server at the user settings level", async () => {
     const toggled = await Effect.runPromise(
       withTools((harness) =>
         harness.call("session_toggle_mcp_server", {
           sessionId: harness.sessionId,
           serverName: "paper",
           enabled: false,
+          settingsLevel: "user",
+        }),
+      ),
+    )
+
+    const removed = await Effect.runPromise(
+      withTools((harness) =>
+        harness.call("session_remove_mcp_server", {
+          sessionId: harness.sessionId,
+          serverName: "paper",
+          settingsLevel: "user",
+        }),
+      ),
+    )
+
+    expect(toggled).toMatchObject({
+      params: { serverName: "paper", enabled: false, settingsLevel: "user" },
+    })
+    expect(removed).toMatchObject({
+      method: "droid.remove_mcp_server",
+      params: { serverName: "paper", settingsLevel: "user" },
+    })
+  })
+
+  it("defaults an omitted settings level to user", async () => {
+    const toggled = await Effect.runPromise(
+      withTools((harness) =>
+        harness.call("session_toggle_mcp_server", {
+          sessionId: harness.sessionId,
+          serverName: "paper",
+          enabled: true,
         }),
       ),
     )
@@ -133,8 +165,135 @@ describe("session MCP tools", () => {
       ),
     )
 
-    expect(toggled).toMatchObject({ params: { serverName: "paper", enabled: false } })
-    expect(removed).toMatchObject({ method: "droid.remove_mcp_server" })
+    expect(toggled).toMatchObject({
+      params: { serverName: "paper", enabled: true, settingsLevel: "user" },
+    })
+    expect(removed).toMatchObject({
+      params: { serverName: "paper", settingsLevel: "user" },
+    })
+  })
+
+  it("infers stdio from command and http from url", async () => {
+    const stdio = await Effect.runPromise(
+      withTools((harness) =>
+        harness.call("session_add_mcp_server", {
+          sessionId: harness.sessionId,
+          name: "paper",
+          command: "paper-mcp",
+          args: ["--stdio"],
+        }),
+      ),
+    )
+
+    const http = await Effect.runPromise(
+      withTools((harness) =>
+        harness.call("session_add_mcp_server", {
+          sessionId: harness.sessionId,
+          name: "paper",
+          url: "https://paper.example/mcp",
+        }),
+      ),
+    )
+
+    const sse = await Effect.runPromise(
+      withTools((harness) =>
+        harness.call("session_add_mcp_server", {
+          sessionId: harness.sessionId,
+          name: "paper",
+          type: "sse",
+          url: "https://paper.example/sse",
+        }),
+      ),
+    )
+
+    expect(stdio).toMatchObject({
+      method: "droid.add_mcp_server",
+      params: { type: "stdio", command: "paper-mcp", args: ["--stdio"] },
+    })
+    expect(http).toMatchObject({
+      params: { type: "http", url: "https://paper.example/mcp" },
+    })
+    expect(sse).toMatchObject({
+      params: { type: "sse", url: "https://paper.example/sse" },
+    })
+  })
+
+  it("rejects a missing or ambiguous MCP transport before the daemon", async () => {
+    const missing = await Effect.runPromise(
+      withTools((harness) =>
+        harness
+          .call("session_add_mcp_server", {
+            sessionId: harness.sessionId,
+            name: "paper",
+          })
+          .pipe(Effect.flip),
+      ),
+    )
+
+    const ambiguous = await Effect.runPromise(
+      withTools((harness) =>
+        harness
+          .call("session_add_mcp_server", {
+            sessionId: harness.sessionId,
+            name: "paper",
+            command: "paper-mcp",
+            url: "https://paper.example/mcp",
+          })
+          .pipe(Effect.flip),
+      ),
+    )
+
+    expect(missing).toMatchObject({ code: "invalid_params" })
+    expect(ambiguous).toMatchObject({ code: "invalid_params" })
+  })
+
+  it("forwards an oauth config and a required auth state", async () => {
+    const added = await Effect.runPromise(
+      withTools((harness) =>
+        harness.call("session_add_mcp_server", {
+          sessionId: harness.sessionId,
+          name: "paper",
+          type: "http",
+          url: "https://paper.example/mcp",
+          oauth: { clientId: "paper", tokenEndpointAuthMethod: "none" },
+        }),
+      ),
+    )
+
+    const disabled = await Effect.runPromise(
+      withTools((harness) =>
+        harness.call("session_add_mcp_server", {
+          sessionId: harness.sessionId,
+          name: "paper",
+          type: "http",
+          url: "https://paper.example/mcp",
+          oauth: false,
+        }),
+      ),
+    )
+
+    const submitted = await Effect.runPromise(
+      withTools((harness) =>
+        harness.call("session_submit_mcp_auth_code", {
+          sessionId: harness.sessionId,
+          serverName: "paper",
+          code: "auth-code",
+          state: "auth-state",
+        }),
+      ),
+    )
+
+    expect(added).toMatchObject({
+      method: "droid.add_mcp_server",
+      params: {
+        oauth: { clientId: "paper", tokenEndpointAuthMethod: "none" },
+      },
+    })
+    expect(disabled).toMatchObject({ params: { oauth: false } })
+    expect(submitted).toMatchObject({
+      method: "droid.submit_mcp_auth_code",
+      params: { serverName: "paper", code: "auth-code", state: "auth-state" },
+    })
   })
 
   it("lists servers and tools", async () => {
@@ -152,6 +311,112 @@ describe("session MCP tools", () => {
 
     expect(servers).toMatchObject({ method: "droid.list_mcp_servers" })
     expect(tools).toMatchObject({ method: "droid.list_mcp_tools" })
+  })
+
+  it("accepts the SDK wire shapes and rejects the ones it does not", () => {
+    const parametersOf = (name: string): Schema.Codec<unknown> => {
+      const tool = sessionMcpTools().tools.find((entry) => entry.name === name)
+
+      if (tool === undefined) throw new Error("missing " + name)
+
+      // SAFETY: Tool.Any erases each parameter schema to Schema.Top. These tools
+      // are Struct schemas with no decoding services.
+      return tool.parametersSchema as Schema.Codec<unknown>
+    }
+
+    const accepts = (name: string, input: Schema.Json): boolean =>
+      Option.isSome(Schema.decodeUnknownOption(parametersOf(name))(input))
+
+    expect(
+      accepts("session_submit_mcp_auth_code", {
+        sessionId: "s",
+        serverName: "paper",
+        code: "c",
+        state: "st",
+      }),
+    ).toBe(true)
+    expect(
+      accepts("session_submit_mcp_auth_code", {
+        sessionId: "s",
+        serverName: "paper",
+        code: "c",
+      }),
+    ).toBe(false)
+
+    expect(
+      accepts("session_remove_mcp_server", {
+        sessionId: "s",
+        serverName: "paper",
+        settingsLevel: "user",
+      }),
+    ).toBe(true)
+    expect(
+      accepts("session_remove_mcp_server", {
+        sessionId: "s",
+        serverName: "paper",
+      }),
+    ).toBe(true)
+    expect(
+      accepts("session_toggle_mcp_server", {
+        sessionId: "s",
+        serverName: "paper",
+        enabled: true,
+      }),
+    ).toBe(true)
+    expect(
+      accepts("session_toggle_mcp_server", {
+        sessionId: "s",
+        serverName: "paper",
+        enabled: true,
+        settingsLevel: "project",
+      }),
+    ).toBe(false)
+    expect(
+      accepts("session_remove_mcp_server", {
+        sessionId: "s",
+        serverName: "paper",
+        settingsLevel: "local",
+      }),
+    ).toBe(false)
+
+    expect(
+      accepts("session_add_mcp_server", {
+        sessionId: "s",
+        name: "paper",
+        type: "http",
+        oauth: false,
+      }),
+    ).toBe(true)
+    expect(
+      accepts("session_add_mcp_server", {
+        sessionId: "s",
+        name: "paper",
+        type: "http",
+        oauth: { clientId: "paper", resource: false },
+      }),
+    ).toBe(true)
+    expect(
+      accepts("session_add_mcp_server", {
+        sessionId: "s",
+        name: "paper",
+        type: "http",
+        oauth: true,
+      }),
+    ).toBe(false)
+    expect(
+      accepts("session_add_mcp_server", {
+        sessionId: "s",
+        name: "paper",
+        command: "paper-mcp",
+      }),
+    ).toBe(true)
+    expect(
+      accepts("session_add_mcp_server", {
+        sessionId: "s",
+        name: "paper",
+        url: "https://paper.example/mcp",
+      }),
+    ).toBe(true)
   })
 })
 

@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { Effect, Fiber, Option, Stream } from "effect"
+import { Duration, Effect, Fiber, Option, Stream } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { openDaemon } from "../../src/droid/daemon-client.ts"
@@ -240,5 +240,61 @@ describe("daemon client", () => {
 
     const error = await Effect.runPromise(program)
     expect(error._tag).toBe("DaemonUnavailable")
+  })
+
+  it("answers a later request after an earlier one is interrupted", async () => {
+    let seen = 0
+
+    const fake = await start({
+      onRequest: () => {
+        seen += 1
+
+        if (seen === 1) return undefined
+
+        return { result: { sessions: [{ id: "next" }] } }
+      },
+    })
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* openDaemon({ socketPath: fake.socketPath, version: "0.1.0" })
+
+        const hanging = yield* client
+          .request({ method: "daemon.list_opened_sessions", params: {}, timeoutMs: 5_000 })
+          .pipe(Effect.forkChild)
+
+        yield* Effect.sleep(Duration.millis(50))
+        yield* Fiber.interrupt(hanging)
+
+        const value = yield* client.request({
+          method: "daemon.list_opened_sessions",
+          params: {},
+        })
+
+        yield* client.close
+
+        return value
+      }),
+    )
+
+    expect(result).toEqual({ sessions: [{ id: "next" }] })
+  })
+
+  it("completes notification subscribers when the client closes", async () => {
+    const fake = await start({
+      onRequest: () => ({ result: { userId: "u", orgId: "o" } }),
+    })
+
+    const collected = await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* openDaemon({ socketPath: fake.socketPath, version: "0.1.0" })
+        const fiber = yield* Stream.runCollect(client.notifications).pipe(Effect.forkChild)
+        yield* client.close
+
+        return yield* Fiber.join(fiber).pipe(Effect.timeout(Duration.seconds(2)))
+      }),
+    )
+
+    expect([...collected]).toEqual([])
   })
 })

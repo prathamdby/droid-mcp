@@ -18,26 +18,30 @@ and a model. You talk to it in turns.
    required: the server will not guess, and it rejects a level above
    `server_info.maxAutonomy`.
 2. `session_stream` sends the prompt. It waits `waitMs` (20 s by default) for
-   the turn, then returns either `completed`, `failed`, or `running`.
+   the turn, then returns `completed`, `failed`, `interrupted`, or `running`.
 3. If it returned `running`, call `session_events` with the `cursor` it
-   returned. Repeat until the status is no longer `running`. Every event has a
-   `seq`; the cursor is the last `seq` you have seen, so nothing repeats.
-4. When the turn is done, `session_close` stops the process. Sessions idle for
-   30 minutes are reaped for you, but close what you opened.
+   returned. Repeat until the status is `completed`, `failed`, or `interrupted`.
+   Every event has a `seq`; the cursor is the next sequence number, one past
+   the last `seq`, so pass it back unchanged and nothing repeats.
+4. When the turn is done, `session_close` stops the process. A `running` result
+   keeps the session until you close it. `session_run` closes the session for
+   you unless it returns `running`; then poll, answer prompts, and close.
+   Sessions idle for 30 minutes are reaped for you, but close what you opened.
 
 `session_interrupt` stops a turn that is going the wrong way.
 
 ## Reading a turn
 
-| Status      | Meaning                                                                                       |
-| ----------- | --------------------------------------------------------------------------------------------- |
-| `completed` | Droid finished the turn. `result` carries the reason, token usage, and any structured output. |
-| `failed`    | The turn ended in an error. The `error` event says why; `process_exit` means the CLI died.    |
-| `running`   | Still working. Poll `session_events` from the cursor.                                         |
+| Status        | Meaning                                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| `completed`   | Droid finished the turn. `result` carries the reason, token usage, and any structured output. |
+| `failed`      | The turn ended in an error. The `error` event says why; `process_exit` means the CLI died.    |
+| `interrupted` | The turn was stopped or a permission was denied. The session stays usable.                    |
+| `running`     | Still working. Poll `session_events` from the cursor. The session stays open.                 |
 
 Events are `assistant_text`, `thinking`, `tool_call`, `tool_result`, `error`,
 `turn_completed`, `prompt_resolved`, and the three prompt events. Long text is
-capped at 4096 characters and the buffer holds 500 events or 256 KiB;
+capped at 4096 UTF-8 bytes and the buffer holds 500 events or 256 KiB;
 `truncated: true` means you started above what is retained, so re-read from the
 `cursor` you were given rather than from `0`.
 
@@ -61,6 +65,18 @@ without you. Read `references/prompts.md` before answering your first one.
 daemon this server is supervising. Call it first: the autonomy cap decides what
 `session_create` will accept.
 
+The cap also bounds `session_run`, the permission outcomes a local session
+lists, and an explicit authority field on a generated call. `daemon_initialize_session`
+and `droid_initialize_session` copy an omitted `autonomyLevel` or `autonomyMode`
+from one `daemon_get_default_settings` snapshot onto that request. A snapshot
+value inside the cap is kept, and a higher one is sent as the cap. A missing
+level is sent as `off` and a missing mode as `normal`. When the cap is below
+`high`, an omitted `skipPermissionsUnsafe` is sent as `false`. That call reads
+the snapshot once and leaves persistent defaults unchanged. Initialize has no
+`subagentAutonomyLevel` field. `daemon_load_session` and `droid_load_session`
+send no saved authority, and work already queued there can be running. Use
+`session_create` or `session_run` when the work has to stay inside the cap.
+
 ## Four session backends
 
 Four tool families use the word "session", and their ids are not
@@ -75,6 +91,14 @@ interchangeable. Pick the backend first, then stay inside its family.
 
 - A `session_create` id works only with `session_*` tools. `daemon_load_session`
   will not find it, and a hosted session id is not a local `session_*` handle.
+- `daemon_initialize_session` copies omitted `autonomyLevel`, `autonomyMode`,
+  and, when the cap is below `high`, `skipPermissionsUnsafe` from one
+  `daemon_get_default_settings` snapshot. A lower observed default is kept. A
+  missing field becomes `off`, `normal`, or `false`. The call does not change
+  persistent defaults. `daemon_load_session` and `droid_load_session` open the
+  saved authority, which list and message reads do not show, and initialize has
+  no `subagentAutonomyLevel` field. Use `session_create` or `session_run` when
+  the work must stay inside `server_info.maxAutonomy`.
 - `droid_*` tools call SDK session methods that `session_*` does not already
   wrap, such as `droid_update_session_settings`, `droid_compact_session`, and
   `droid_execute_rewind`. They take a daemon `sessionId`.
@@ -92,6 +116,7 @@ interchangeable. Pick the backend first, then stay inside its family.
 | `autonomy_exceeds_cap`     | Asked for more autonomy than `server_info.maxAutonomy`.                                                                             |
 | `invalid_cwd`              | The directory does not exist or is not a directory.                                                                                 |
 | `session_not_found`        | The session id is wrong or already closed.                                                                                          |
+| `session_closed`           | The process exited or the session is shutting down. Poll `session_events` for the failure, then close it.                           |
 | `session_busy`             | A turn is already running in that session; wait or interrupt.                                                                       |
 | `prompt_not_found`         | That prompt is gone. Read `session_events` for the current state.                                                                   |
 | `prompt_mismatch`          | The tool does not match the pending prompt kind.                                                                                    |

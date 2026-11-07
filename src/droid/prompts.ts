@@ -1,6 +1,7 @@
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
+import type { AutonomyLevel } from "../config.ts"
 import { EXEC_METHOD } from "./exec-protocol.ts"
 import type { JsonValue } from "./protocol.ts"
 
@@ -272,15 +273,75 @@ export interface PermissionResult {
   editedSpecContent?: string
 }
 
+const AUTONOMY_RANK = {
+  off: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+} satisfies { readonly [Level in AutonomyLevel]: number }
+
+/**
+ * Leveled outcomes name the autonomy they persist. The SDK's
+ * `ToolConfirmationOutcome` has no other ceiling for these aliases.
+ */
+const LEVELED_OUTCOME = new Map<PermissionOutcome, AutonomyLevel>([
+  ["proceed_auto_run_low", "low"],
+  ["proceed_auto_run_medium", "medium"],
+  ["proceed_auto_run_high", "high"],
+  ["proceed_new_session_low", "low"],
+  ["proceed_new_session_medium", "medium"],
+  ["proceed_new_session_high", "high"],
+])
+
+/**
+ * `proceed_auto_run` and `proceed_new_session` do not name a level. The SDK
+ * treats them as distinct from the leveled aliases, so a lower cap cannot
+ * prove they stay inside it.
+ */
+const UNBOUNDED_OUTCOME = new Set<PermissionOutcome>(["proceed_auto_run", "proceed_new_session"])
+
+/** Persistent tool grants and one-shot answers do not raise the autonomy cap. */
+export const outcomeWithinCap = (cap: AutonomyLevel, outcome: PermissionOutcome): boolean => {
+  if (UNBOUNDED_OUTCOME.has(outcome)) return cap === "high"
+
+  const level = LEVELED_OUTCOME.get(outcome)
+
+  if (level === undefined) return true
+
+  return AUTONOMY_RANK[level] <= AUTONOMY_RANK[cap]
+}
+
+/** Advertised choices follow the canonical outcome list, and match what answers accept. */
+export const capPermissionOptions = (
+  options: ReadonlyArray<PermissionOutcome>,
+  cap: AutonomyLevel,
+): ReadonlyArray<PermissionOutcome> => {
+  const allowed: Array<PermissionOutcome> = []
+
+  for (const outcome of PERMISSION_OUTCOMES) {
+    if (options.includes(outcome) && outcomeWithinCap(cap, outcome)) allowed.push(outcome)
+  }
+
+  return allowed
+}
+
 /** Builds the CLI result; `proceed_edit` only makes sense with the edited plan. */
 export const permissionResult = (
   view: PermissionView,
   answer: PermissionAnswer,
+  cap?: AutonomyLevel,
 ): PermissionResult | PromptProblem => {
   const outcome = PERMISSION_OUTCOMES.find((candidate) => candidate === answer.outcome)
 
   if (outcome === undefined) {
     return fail("invalid_outcome", "unknown permission outcome: " + answer.outcome)
+  }
+
+  if (cap !== undefined && !outcomeWithinCap(cap, outcome)) {
+    return fail(
+      "autonomy_exceeds_cap",
+      "outcome " + outcome + " exceeds the server autonomy cap of " + cap,
+    )
   }
 
   if (!view.options.includes(outcome)) {

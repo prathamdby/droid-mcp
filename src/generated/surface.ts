@@ -187,7 +187,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
         },
         oauth: {
           anyOf: [
-            {},
+            {
+              const: false,
+            },
             {
               type: "object",
               properties: {
@@ -202,7 +204,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                     {
                       type: "string",
                     },
-                    {},
+                    {
+                      const: false,
+                    },
                   ],
                 },
                 authorizationServerIssuer: {
@@ -1046,7 +1050,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "cleanup_worktree",
     description:
-      "SDK method daemon.cleanup_worktree. Inputs: worktreePath, deleteLocalBranch, deleteRemoteBranch, force.",
+      "SDK method daemon.cleanup_worktree. Inputs: worktreePath, deleteLocalBranch, deleteRemoteBranch, force. Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -2095,7 +2099,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
         {
           type: "object",
           properties: {
-            success: {},
+            success: {
+              const: true,
+            },
             sessionId: {
               type: "string",
             },
@@ -2106,7 +2112,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
         {
           type: "object",
           properties: {
-            success: {},
+            success: {
+              const: false,
+            },
             error: {
               type: "object",
               properties: {
@@ -2133,7 +2141,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "execute_rewind",
     description:
-      "SDK method daemon.execute_rewind. Inputs: sessionId, messageId, filesToRestore, filesToDelete, forkTitle.",
+      "SDK method daemon.execute_rewind. Inputs: sessionId, messageId, filesToRestore, filesToDelete, forkTitle. Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -3610,7 +3618,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   isNew: {
                     type: "boolean",
                   },
-                  disabled: {},
+                  disabled: {
+                    const: true,
+                  },
                   disabledReason: {
                     type: "string",
                   },
@@ -3706,7 +3716,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   isNew: {
                     type: "boolean",
                   },
-                  disabled: {},
+                  disabled: {
+                    const: false,
+                  },
                   disabledReason: {
                     not: {},
                   },
@@ -3886,7 +3898,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
         {
           type: "object",
           properties: {
-            success: {},
+            success: {
+              const: true,
+            },
             data: {
               type: "object",
               properties: {
@@ -4129,7 +4143,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
         {
           type: "object",
           properties: {
-            success: {},
+            success: {
+              const: false,
+            },
             unavailableReason: {
               enum: ["missing_session_cwd", "not_git_repository", "git_not_available", "unknown"],
             },
@@ -4268,7 +4284,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       },
                       oauth: {
                         anyOf: [
-                          {},
+                          {
+                            const: false,
+                          },
                           {
                             type: "object",
                             properties: {
@@ -4283,7 +4301,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                                   {
                                     type: "string",
                                   },
-                                  {},
+                                  {
+                                    const: false,
+                                  },
                                 ],
                               },
                               authorizationServerIssuer: {
@@ -4333,7 +4353,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       },
                       oauth: {
                         anyOf: [
-                          {},
+                          {
+                            const: false,
+                          },
                           {
                             type: "object",
                             properties: {
@@ -4348,7 +4370,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                                   {
                                     type: "string",
                                   },
-                                  {},
+                                  {
+                                    const: false,
+                                  },
                                 ],
                               },
                               authorizationServerIssuer: {
@@ -5729,7 +5753,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   },
                   oauth: {
                     anyOf: [
-                      {},
+                      {
+                        const: false,
+                      },
                       {
                         type: "object",
                         properties: {
@@ -5744,7 +5770,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                               {
                                 type: "string",
                               },
-                              {},
+                              {
+                                const: false,
+                              },
                             ],
                           },
                           authorizationServerIssuer: {
@@ -5804,7 +5832,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   },
                   oauth: {
                     anyOf: [
-                      {},
+                      {
+                        const: false,
+                      },
                       {
                         type: "object",
                         properties: {
@@ -5819,7 +5849,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                               {
                                 type: "string",
                               },
-                              {},
+                              {
+                                const: false,
+                              },
                             ],
                           },
                           authorizationServerIssuer: {
@@ -8233,8 +8265,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_skills",
     kind: "daemon",
     family: "list_skills",
-    description:
-      "SDK method daemon.list_skills. Inputs: includeContent, sessionId. Destructive; confirm before calling.",
+    description: "SDK method daemon.list_skills. Inputs: includeContent, sessionId.",
     params: {
       type: "object",
       properties: {
@@ -8486,7 +8517,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   },
                   oauth: {
                     anyOf: [
-                      {},
+                      {
+                        const: false,
+                      },
                       {
                         type: "object",
                         properties: {
@@ -8501,7 +8534,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                               {
                                 type: "string",
                               },
-                              {},
+                              {
+                                const: false,
+                              },
                             ],
                           },
                           authorizationServerIssuer: {
@@ -8561,7 +8596,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   },
                   oauth: {
                     anyOf: [
-                      {},
+                      {
+                        const: false,
+                      },
                       {
                         type: "object",
                         properties: {
@@ -8576,7 +8613,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                               {
                                 type: "string",
                               },
-                              {},
+                              {
+                                const: false,
+                              },
                             ],
                           },
                           authorizationServerIssuer: {
@@ -9041,7 +9080,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
           additionalProperties: false,
           required: ["type", "schema"],
         },
-        taskSubagentProcess: {},
+        taskSubagentProcess: {
+          const: true,
+        },
         token: {
           type: "string",
         },
@@ -10027,7 +10068,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "set_skill_disabled",
     description:
-      "SDK method daemon.set_skill_disabled. Inputs: sessionId, skillName, disabled, settingsLevel. Destructive; confirm before calling.",
+      "SDK method daemon.set_skill_disabled. Inputs: sessionId, skillName, disabled, settingsLevel.",
     params: {
       type: "object",
       properties: {
@@ -11870,8 +11911,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.unarchive_session",
     kind: "daemon",
     family: "unarchive_session",
-    description:
-      "SDK method daemon.unarchive_session. Inputs: sessionId. Destructive; confirm before calling.",
+    description: "SDK method daemon.unarchive_session. Inputs: sessionId.",
     params: {
       type: "object",
       properties: {
@@ -12657,7 +12697,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                         {
                           type: "string",
                         },
-                        {},
+                        {
+                          const: false,
+                        },
                       ],
                     },
                     authorizationServerIssuer: {
@@ -12717,7 +12759,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                         {
                           type: "string",
                         },
-                        {},
+                        {
+                          const: false,
+                        },
                       ],
                     },
                     authorizationServerIssuer: {
@@ -12812,7 +12856,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       },
                       oauth: {
                         anyOf: [
-                          {},
+                          {
+                            const: false,
+                          },
                           {
                             type: "object",
                             properties: {
@@ -12827,7 +12873,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                                   {
                                     type: "string",
                                   },
-                                  {},
+                                  {
+                                    const: false,
+                                  },
                                 ],
                               },
                               authorizationServerIssuer: {
@@ -12877,7 +12925,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       },
                       oauth: {
                         anyOf: [
-                          {},
+                          {
+                            const: false,
+                          },
                           {
                             type: "object",
                             properties: {
@@ -12892,7 +12942,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                                   {
                                     type: "string",
                                   },
-                                  {},
+                                  {
+                                    const: false,
+                                  },
                                 ],
                               },
                               authorizationServerIssuer: {
@@ -14163,7 +14215,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       isNew: {
                         type: "boolean",
                       },
-                      disabled: {},
+                      disabled: {
+                        const: true,
+                      },
                       disabledReason: {
                         type: "string",
                       },
@@ -14259,7 +14313,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       isNew: {
                         type: "boolean",
                       },
-                      disabled: {},
+                      disabled: {
+                        const: false,
+                      },
                       disabledReason: {
                         not: {},
                       },
@@ -14920,7 +14976,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
         },
         oauth: {
           anyOf: [
-            {},
+            {
+              const: false,
+            },
             {
               type: "object",
               properties: {
@@ -14935,7 +14993,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                     {
                       type: "string",
                     },
-                    {},
+                    {
+                      const: false,
+                    },
                   ],
                 },
                 authorizationServerIssuer: {
@@ -16241,7 +16301,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "droid",
     family: "execute_rewind",
     description:
-      "SDK method droid.execute_rewind. Inputs: sessionId, messageId, filesToRestore, filesToDelete, forkTitle.",
+      "SDK method droid.execute_rewind. Inputs: sessionId, messageId, filesToRestore, filesToDelete, forkTitle. Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -16536,7 +16596,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   },
                   oauth: {
                     anyOf: [
-                      {},
+                      {
+                        const: false,
+                      },
                       {
                         type: "object",
                         properties: {
@@ -16551,7 +16613,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                               {
                                 type: "string",
                               },
-                              {},
+                              {
+                                const: false,
+                              },
                             ],
                           },
                           authorizationServerIssuer: {
@@ -16611,7 +16675,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   },
                   oauth: {
                     anyOf: [
-                      {},
+                      {
+                        const: false,
+                      },
                       {
                         type: "object",
                         properties: {
@@ -16626,7 +16692,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                               {
                                 type: "string",
                               },
-                              {},
+                              {
+                                const: false,
+                              },
                             ],
                           },
                           authorizationServerIssuer: {
@@ -17897,7 +17965,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       },
                       oauth: {
                         anyOf: [
-                          {},
+                          {
+                            const: false,
+                          },
                           {
                             type: "object",
                             properties: {
@@ -17912,7 +17982,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                                   {
                                     type: "string",
                                   },
-                                  {},
+                                  {
+                                    const: false,
+                                  },
                                 ],
                               },
                               authorizationServerIssuer: {
@@ -17972,7 +18044,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       },
                       oauth: {
                         anyOf: [
-                          {},
+                          {
+                            const: false,
+                          },
                           {
                             type: "object",
                             properties: {
@@ -17987,7 +18061,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                                   {
                                     type: "string",
                                   },
-                                  {},
+                                  {
+                                    const: false,
+                                  },
                                 ],
                               },
                               authorizationServerIssuer: {
@@ -18679,8 +18755,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.list_skills",
     kind: "droid",
     family: "list_skills",
-    description:
-      "SDK method droid.list_skills. Inputs: includeContent. Destructive; confirm before calling.",
+    description: "SDK method droid.list_skills. Inputs: includeContent.",
     params: {
       type: "object",
       properties: {
@@ -19009,7 +19084,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   },
                   oauth: {
                     anyOf: [
-                      {},
+                      {
+                        const: false,
+                      },
                       {
                         type: "object",
                         properties: {
@@ -19024,7 +19101,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                               {
                                 type: "string",
                               },
-                              {},
+                              {
+                                const: false,
+                              },
                             ],
                           },
                           authorizationServerIssuer: {
@@ -19084,7 +19163,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                   },
                   oauth: {
                     anyOf: [
-                      {},
+                      {
+                        const: false,
+                      },
                       {
                         type: "object",
                         properties: {
@@ -19099,7 +19180,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                               {
                                 type: "string",
                               },
-                              {},
+                              {
+                                const: false,
+                              },
                             ],
                           },
                           authorizationServerIssuer: {
@@ -20431,7 +20514,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       },
                       oauth: {
                         anyOf: [
-                          {},
+                          {
+                            const: false,
+                          },
                           {
                             type: "object",
                             properties: {
@@ -20446,7 +20531,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                                   {
                                     type: "string",
                                   },
-                                  {},
+                                  {
+                                    const: false,
+                                  },
                                 ],
                               },
                               authorizationServerIssuer: {
@@ -20506,7 +20593,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                       },
                       oauth: {
                         anyOf: [
-                          {},
+                          {
+                            const: false,
+                          },
                           {
                             type: "object",
                             properties: {
@@ -20521,7 +20610,9 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
                                   {
                                     type: "string",
                                   },
-                                  {},
+                                  {
+                                    const: false,
+                                  },
                                 ],
                               },
                               authorizationServerIssuer: {
@@ -24046,8 +24137,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.set_skill_disabled",
     kind: "droid",
     family: "set_skill_disabled",
-    description:
-      "SDK method droid.set_skill_disabled. Inputs: skillName, disabled, settingsLevel. Destructive; confirm before calling.",
+    description: "SDK method droid.set_skill_disabled. Inputs: skillName, disabled, settingsLevel.",
     params: {
       type: "object",
       properties: {

@@ -43,9 +43,13 @@ describe("permission prompts", () => {
             waitMs: 2_000,
           })
 
-          return { event, settled }
+          return { event, afterAnswer, settled }
         }),
       ),
+    )
+
+    const notices = [...outcome.afterAnswer.events, ...outcome.settled.events].filter(
+      (event) => event.kind === "prompt_resolved",
     )
 
     expect(outcome.event.options).toEqual(["proceed_once", "proceed_always", "cancel"])
@@ -53,6 +57,9 @@ describe("permission prompts", () => {
     expect(outcome.event.deadline).toBeGreaterThan(0)
     expect(outcome.settled.status).toBe("completed")
     expect(outcome.settled.result?.structuredOutput).toEqual({ selectedOption: "proceed_once" })
+    expect(notices.map((event) => event.requestId)).toEqual([outcome.event.requestId])
+    expect(notices[0]?.toolUseId).toBe("tool-1")
+    expect(outcome.event.requestId?.startsWith("hub-")).toBe(true)
   })
 
   it("reports a denied prompt as an interrupted turn", async () => {

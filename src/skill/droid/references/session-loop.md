@@ -33,19 +33,19 @@ The reply says what happened:
 {
   "sessionId": "3f1c...",
   "status": "running",
-  "cursor": 412,
+  "cursor": 402,
   "events": [{ "seq": 401, "kind": "assistant_text", "text": "I will read the helper." }],
   "truncated": false
 }
 ```
 
-Hold on to `cursor`. It is the `seq` of the last event in `events`, and passing
-it back never repeats an event.
+Hold on to `cursor`. It is the next sequence number, one past the last event,
+not that event's `seq`. Pass it back unchanged and an event is never repeated.
 
 ## Poll
 
 ```json
-{ "sessionId": "3f1c...", "cursor": 412, "waitMs": 20000 }
+{ "sessionId": "3f1c...", "cursor": 402, "waitMs": 20000 }
 ```
 
 Poll with the cursor a previous call returned, not with `0`. Starting at `0`
@@ -55,9 +55,10 @@ after the ring buffer has moved on returns `truncated: true` and only the last
 A prompt of only whitespace is rejected with `invalid_prompt` before any turn
 starts, so an accidental empty send costs nothing.
 
-Stop when `status` is `completed` or `failed`. A `failed` turn still has a
-`result.reason`; `process_exit` means the CLI exited, and the session is no
-longer usable.
+Stop when `status` is `completed`, `failed`, or `interrupted`. `interrupted` is
+terminal for that turn; the session can take another prompt. A `failed` turn
+still has a `result.reason`. `process_exit` means the CLI exited, later calls
+fail with `session_closed`, and the session is no longer usable.
 
 ## Interrupt
 
@@ -85,6 +86,8 @@ serialize behind each other.
 
 ## Sessions versus one-shot runs
 
-`session_run` starts a session, sends one prompt, and closes it, all in one
-call. It is the shortest path for a self-contained question. Reach for
-`session_create` when you need to answer prompts or keep context between turns.
+`session_run` starts a session, sends one prompt, and closes it when the turn
+completes, fails, or is interrupted. A `running` result keeps the session so
+you can poll `session_events`, answer prompts, and call `session_close`. It is
+the shortest path for a self-contained question. Reach for `session_create`
+when you need more than one turn.

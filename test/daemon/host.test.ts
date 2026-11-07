@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process"
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { connect } from "node:net"
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { connect, createServer } from "node:net"
+import type { Server } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -9,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import type { Config } from "../../src/config.ts"
 import { daemonHost } from "../../src/droid/daemon-host.ts"
-import type { DaemonHostOptions } from "../../src/droid/daemon-host.ts"
+import type { DaemonHost, DaemonHostOptions } from "../../src/droid/daemon-host.ts"
 import { errorCode } from "../../src/droid/errors.ts"
 import { testConfig } from "../support/config.ts"
 
@@ -61,6 +62,33 @@ const alive = (pid: number): boolean => {
   } catch {
     return false
   }
+}
+
+const bindSocket = (socketPath: string): Promise<Server> =>
+  new Promise((resolve) => {
+    const server = createServer((socket) => {
+      socket.on("error", () => {})
+      socket.end()
+    })
+
+    server.listen(socketPath, () => resolve(server))
+  })
+
+const closeListening = (server: Server): Promise<void> =>
+  new Promise((resolve) => {
+    server.close(() => resolve())
+  })
+
+const waitUntilPidCleared = async (host: DaemonHost): Promise<number | undefined> => {
+  const deadline = Date.now() + 1_000
+  let pid = await Effect.runPromise(host.childPid)
+
+  while (pid !== undefined && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    pid = await Effect.runPromise(host.childPid)
+  }
+
+  return pid
 }
 
 let directory: string
@@ -124,8 +152,8 @@ describe("daemon supervisor", () => {
     if (first === undefined) throw new Error("no pid after ensure")
 
     process.kill(first, "SIGKILL")
-    await new Promise((resolve) => setTimeout(resolve, 300))
 
+    expect(await waitUntilPidCleared(host)).toBeUndefined()
     expect(existsSync(config.socketPath)).toBe(false)
 
     await Effect.runPromise(host.ensure)
@@ -209,6 +237,128 @@ describe("daemon supervisor", () => {
     await Effect.runPromise(host.stop)
 
     expect(alive(pid ?? 0)).toBe(false)
+  })
+
+  it("returns as soon as the child exits instead of waiting out the grace period", async () => {
+    const host = await Effect.runPromise(daemonHost(config, { ...FAST, shutdownMs: 5_000 }))
+
+    await Effect.runPromise(host.ensure)
+    const started = Date.now()
+    await Effect.runPromise(host.stop)
+
+    expect(Date.now() - started).toBeLessThan(1_500)
+    expect(existsSync(config.socketPath)).toBe(false)
+  })
+
+  it("keeps a single child when ensure runs twice at once", async () => {
+    const host = await Effect.runPromise(daemonHost(config, FAST))
+
+    await Effect.runPromise(Effect.all([host.ensure, host.ensure], { concurrency: "unbounded" }))
+
+    const listing = execFileSync("ps", ["-eo", "args"], { encoding: "utf8" })
+
+    const owned = listing
+      .split("\n")
+      .filter((line) => line.includes(config.socketPath) && line.includes("fake-daemon.mjs"))
+
+    expect(owned).toHaveLength(1)
+    expect(await accepts(config.socketPath)).toBe(true)
+
+    await Effect.runPromise(host.stop)
+    const after = execFileSync("ps", ["-eo", "args"], { encoding: "utf8" })
+
+    const left = after
+      .split("\n")
+      .filter((line) => line.includes(config.socketPath) && line.includes("fake-daemon.mjs"))
+
+    expect(left).toHaveLength(0)
+  })
+
+  it("replaces a killed daemon without losing the new socket", async () => {
+    const host = await Effect.runPromise(daemonHost(config, FAST))
+
+    try {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await Effect.runPromise(host.ensure)
+        const pid = await Effect.runPromise(host.childPid)
+
+        if (pid === undefined) throw new Error("no pid after ensure")
+
+        // process.kill returns before Node's exit event. ensure reuses a
+        // socket that still accepts until that exit clears the owned pid.
+        process.kill(pid, "SIGKILL")
+        expect(await waitUntilPidCleared(host)).toBeUndefined()
+
+        await Effect.runPromise(host.ensure)
+
+        const successor = await Effect.runPromise(host.childPid)
+        const identity = statSync(config.socketPath, { bigint: true })
+
+        expect(successor).toBeDefined()
+        expect(successor).not.toBe(pid)
+        expect(alive(successor ?? 0)).toBe(true)
+        expect(await accepts(config.socketPath)).toBe(true)
+
+        const after = statSync(config.socketPath, { bigint: true })
+
+        expect(after.dev).toBe(identity.dev)
+        expect(after.ino).toBe(identity.ino)
+        expect(await accepts(config.socketPath)).toBe(true)
+      }
+    } finally {
+      await Effect.runPromise(host.stop)
+    }
+  })
+
+  it("clears an exited child and does not unlink a replacement socket", async () => {
+    const host = await Effect.runPromise(daemonHost(config, FAST))
+
+    await Effect.runPromise(host.ensure)
+    const pid = await Effect.runPromise(host.childPid)
+
+    if (pid === undefined) throw new Error("no pid after ensure")
+
+    const ownedIno = statSync(config.socketPath, { bigint: true }).ino
+    rmSync(config.socketPath, { force: true })
+    const replacement = await bindSocket(config.socketPath)
+    const replacementIno = statSync(config.socketPath, { bigint: true }).ino
+
+    expect(replacementIno).not.toBe(ownedIno)
+
+    try {
+      process.kill(pid, "SIGKILL")
+
+      expect(await waitUntilPidCleared(host)).toBeUndefined()
+      expect(statSync(config.socketPath, { bigint: true }).ino).toBe(replacementIno)
+      expect(await accepts(config.socketPath)).toBe(true)
+    } finally {
+      await Effect.runPromise(host.stop)
+      await closeListening(replacement)
+    }
+  })
+
+  it("does not unlink a replacement socket on stop", async () => {
+    const host = await Effect.runPromise(daemonHost(config, FAST))
+
+    await Effect.runPromise(host.ensure)
+    const pid = await Effect.runPromise(host.childPid)
+
+    if (pid === undefined) throw new Error("no pid after ensure")
+
+    rmSync(config.socketPath, { force: true })
+    const replacement = await bindSocket(config.socketPath)
+    const replacementIno = statSync(config.socketPath, { bigint: true }).ino
+
+    try {
+      await Effect.runPromise(host.stop)
+
+      expect(alive(pid)).toBe(false)
+      expect(existsSync(config.socketPath)).toBe(true)
+      expect(statSync(config.socketPath, { bigint: true }).ino).toBe(replacementIno)
+      expect(await accepts(config.socketPath)).toBe(true)
+    } finally {
+      await closeListening(replacement)
+    }
   })
 
   it("keeps the fake's own restart loop honest", () => {

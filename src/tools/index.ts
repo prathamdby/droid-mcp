@@ -18,9 +18,9 @@ import { sessionTools } from "./session.ts"
  * generated tool per SDK wire method. `server_info` counts the result.
  */
 export const toolsFor = (config: Config) => {
-  const generated = generatedSurface()
+  const generated = generatedSurface(config)
   const session = sessionTools(config)
-  const prompts = sessionPromptTools()
+  const prompts = sessionPromptTools(config)
   const admin = sessionAdminTools(config)
   const mcp = sessionMcpTools()
   const history = sessionHistoryTools()

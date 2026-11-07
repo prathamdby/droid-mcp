@@ -41,12 +41,59 @@ describe("generated surface", () => {
     expect(acks?.description).toContain("Inputs: cwd")
   })
 
-  it("marks destructive methods in their description", () => {
-    const deletes = SURFACE.filter((entry) => /delete|remove|kill/.test(entry.method))
+  it("marks destructive methods and not their harmless inverses", () => {
+    const sentence = "Destructive; confirm before calling."
+    const marked: Array<string> = []
 
-    expect(deletes.length).toBeGreaterThan(0)
+    for (const entry of SURFACE) {
+      if (entry.description.includes(sentence)) marked.push(entry.method)
+    }
 
-    for (const entry of deletes) expect(entry.description).toContain("Destructive")
+    const expected = [
+      "daemon.archive_session",
+      "daemon.cleanup_worktree",
+      "daemon.delete_automation",
+      "daemon.delete_cron",
+      "daemon.delete_custom_model",
+      "daemon.delete_worktree_setup_profile",
+      "daemon.execute_rewind",
+      "daemon.kill_worker_session",
+      "daemon.remove_marketplace",
+      "daemon.remove_mcp_server",
+      "daemon.sf.delete_workstream",
+      "daemon.uninstall_plugin",
+      "droid.execute_rewind",
+      "droid.kill_worker_session",
+      "droid.remove_mcp_server",
+    ]
+
+    expect([...marked].sort()).toEqual([...expected].sort())
+
+    for (const method of expected) {
+      const entry = SURFACE.find((candidate) => candidate.method === method)
+
+      expect(entry?.description, method).toContain(sentence)
+    }
+
+    for (const method of [
+      "daemon.unarchive_session",
+      "daemon.list_skills",
+      "droid.list_skills",
+      "daemon.set_skill_disabled",
+      "droid.set_skill_disabled",
+      "daemon.inspect_worktree_deletion",
+      "daemon.get_rewind_info",
+      "droid.get_rewind_info",
+      "daemon.close_session",
+      "droid.close_session",
+      "daemon.cancel_mcp_auth",
+      "droid.clear_mcp_auth",
+    ]) {
+      const entry = SURFACE.find((candidate) => candidate.method === method)
+
+      expect(entry, method).toBeDefined()
+      expect(entry?.description, method).not.toContain(sentence)
+    }
   })
 
   it("groups every method into a family", () => {
