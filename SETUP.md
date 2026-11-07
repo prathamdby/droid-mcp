@@ -32,17 +32,21 @@ node -p "Number(process.versions.node.split('.')[0])"
 
 ## Install missing programs
 
-Run only the group for the package manager you found. Skip the `nodesource` lines and any `nodejs` or `node@24` package when `node --version` is already 24 or newer. If it is still older, stop and show that version. The service runs `/usr/bin/env node`, so Node must be on the default `PATH`. Enable pnpm below, and use npm only when `pnpm` is still missing.
+Run only the group for the package manager you found. Skip the `nodesource` lines and any `nodejs` or `node@24` package when `node --version` is already 24 or newer. If it is still older, stop and show that version. The service runs `/usr/bin/env node`, so Node must be on the default `PATH`. Enable pnpm below, and use npm only when `pnpm` is still missing. The installer scripts below are downloaded to a file first. Show that file to the user and get approval before you run it. Do not pipe a remote script into a shell.
 
 ```sh
 # Debian or Ubuntu
 sudo apt-get update
 sudo apt-get install -y git curl ca-certificates openssl xdg-utils
-curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource-setup.sh
+# Show /tmp/nodesource-setup.sh, get approval, then run it.
+sudo -E bash /tmp/nodesource-setup.sh
 sudo apt-get install -y nodejs
 # Fedora or RHEL
 sudo dnf install -y git curl ca-certificates openssl xdg-utils
-curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash -
+curl -fsSL https://rpm.nodesource.com/setup_24.x -o /tmp/nodesource-setup.sh
+# Show /tmp/nodesource-setup.sh, get approval, then run it.
+sudo bash /tmp/nodesource-setup.sh
 sudo dnf install -y nodejs
 # Arch
 sudo pacman -S --needed git curl ca-certificates openssl xdg-utils nodejs npm
@@ -60,7 +64,9 @@ pnpm --version
 Install `droid` with Factory's installer. The Linux groups above include `xdg-utils`, which that CLI needs on Linux. The binary is `$HOME/.local/bin/droid`. Add the `PATH` line the installer prints to the shell rc file. Use one install. Homebrew is `brew install --cask droid`. npm is `npm install -g droid`.
 
 ```sh
-curl -fsSL https://app.factory.ai/cli | sh
+curl -fsSL https://app.factory.ai/cli -o /tmp/factory-cli.sh
+# Show /tmp/factory-cli.sh, get approval, then run it.
+sh /tmp/factory-cli.sh
 export PATH="$HOME/.local/bin:$PATH"
 droid --version
 ```
@@ -71,8 +77,11 @@ If the user chose the current directory, set `<install-path>` to the output of `
 
 ```sh
 sudo useradd --create-home --shell /usr/sbin/nologin droid
-sudo -u droid sh -c 'curl -fsSL https://app.factory.ai/cli | sh'
-sudo -u droid sh -c 'export PATH="$HOME/.local/bin:$PATH"; droid --version'
+sudo curl -fsSL https://app.factory.ai/cli -o /tmp/factory-cli.sh
+sudo chmod 644 /tmp/factory-cli.sh
+# Show /tmp/factory-cli.sh, get approval, then run it as the service user.
+sudo -H -u droid sh /tmp/factory-cli.sh
+sudo -H -u droid sh -c 'export PATH="$HOME/.local/bin:$PATH"; droid --version'
 sudo -u droid git clone https://github.com/prathamdby/droid-mcp.git /home/droid/droid-mcp
 ```
 
@@ -256,7 +265,11 @@ systemctl --user disable --now droid-mcp
 
 ### macOS launchd service
 
-A per-user agent is `~/Library/LaunchAgents/com.droid-mcp.plist`. A system daemon is `/Library/LaunchDaemons/com.droid-mcp.plist`. Write `$HOME/.config/droid-mcp/run.sh`, run `chmod 700 "$HOME/.config/droid-mcp/run.sh"`, and put the real install path in it. Logs are `~/Library/Logs/droid-mcp.out.log` and `~/Library/Logs/droid-mcp.err.log`. Replace `/Users/REPLACE` with `$HOME`. For a system daemon, add a `UserName` string for the account that owns the keys.
+A per-user agent is `~/Library/LaunchAgents/com.droid-mcp.plist`. A system daemon is `/Library/LaunchDaemons/com.droid-mcp.plist`. The two need different scripts, because a daemon runs as root and must never execute a file the service account can rewrite.
+
+#### Per-user agent
+
+Write `$HOME/.config/droid-mcp/run.sh`, run `chmod 700` on it, and put the real install path in it. Logs are `$HOME/Library/Logs/droid-mcp.out.log` and `$HOME/Library/Logs/droid-mcp.err.log`.
 
 ```sh
 #!/bin/sh
@@ -280,7 +293,7 @@ exec /usr/bin/env node --experimental-strip-types src/main.ts serve --host 127.0
 </dict></plist>
 ```
 
-`bootstrap` loads the job, `print` shows it, `kickstart -k` restarts it, and `bootout` stops it. Uninstall with `bootout`, then delete the plist. Ask before that delete. The system daemon commands are `sudo launchctl bootstrap system /Library/LaunchDaemons/com.droid-mcp.plist` and `sudo launchctl bootout system/com.droid-mcp`.
+Replace `/Users/REPLACE` with the user's home directory. `bootstrap` loads the job, `print` shows it, `kickstart -k` restarts it, and `bootout` stops it.
 
 ```sh
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.droid-mcp.plist"
@@ -288,6 +301,67 @@ launchctl print "gui/$(id -u)/com.droid-mcp"
 launchctl kickstart -k "gui/$(id -u)/com.droid-mcp"
 launchctl bootout "gui/$(id -u)/com.droid-mcp"
 ```
+
+#### System daemon
+
+A daemon plist without a `UserName` key runs the program as root. Set `UserName` to a non-root account so launchd drops privileges before it runs the script. Keep the script owned by root as well, so the account cannot rewrite a file that starts at boot. Call that account `<service-account>` and use an existing non-root account, such as the user's own login account, when the machine has no dedicated one. `GroupName` is that account's primary group, which `id -gn <service-account>` prints. A daemon expands no `~` and no `$HOME`, so every path below is absolute.
+
+```sh
+sudo install -d -m 700 -o "<service-account>" -g "$(id -gn <service-account>)" /etc/droid-mcp
+sudo install -d -m 755 -o root -g wheel /usr/local/libexec/droid-mcp
+```
+
+```sh
+#!/bin/sh
+set -a
+. /etc/droid-mcp/env
+set +a
+cd "<install-path>"
+exec /usr/bin/env node --experimental-strip-types src/main.ts serve --host 127.0.0.1 --port 7337 --keys-file /etc/droid-mcp/keys --max-autonomy medium --log-level info
+```
+
+Save that script as `run.sh` in the current directory, then install it as root. Check the result before you load the daemon, because root ownership is what stops the service account from editing code that runs at boot.
+
+```sh
+sudo install -m 755 -o root -g wheel run.sh /usr/local/libexec/droid-mcp/run.sh
+ls -l /usr/local/libexec/droid-mcp/run.sh
+# Expect root wheel, mode 755, and no write bit for the service account.
+```
+
+Create the keys and the env file as the service account. The directory is mode 700 and owned by that account, so only it can read them. Build the env file with the `read -s` pattern from the earlier section, then install it:
+
+```sh
+sudo -H -u "<service-account>" sh -c 'umask 077; openssl rand -hex 32 > /etc/droid-mcp/keys'
+sudo install -m 600 -o "<service-account>" -g "$(id -gn <service-account>)" "$HOME/.config/droid-mcp/env" /etc/droid-mcp/env
+sudo rm -f "$HOME/.config/droid-mcp/env"
+```
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.droid-mcp</string>
+<key>Program</key><string>/usr/local/libexec/droid-mcp/run.sh</string>
+<key>UserName</key><string>&lt;service-account&gt;</string>
+<key>GroupName</key><string>&lt;primary-group&gt;</string>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><true/>
+<key>StandardOutPath</key><string>/var/log/droid-mcp.out.log</string>
+<key>StandardErrorPath</key><string>/var/log/droid-mcp.err.log</string>
+</dict></plist>
+```
+
+Replace `<service-account>` with the account name and `<primary-group>` with the group `id -gn <service-account>` printed. Save the file as `/Library/LaunchDaemons/com.droid-mcp.plist`, owned by root with mode 644, then load it.
+
+```sh
+sudo install -m 644 -o root -g wheel com.droid-mcp.plist /Library/LaunchDaemons/com.droid-mcp.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.droid-mcp.plist
+sudo launchctl print system/com.droid-mcp
+sudo launchctl kickstart -k system/com.droid-mcp
+sudo launchctl bootout system/com.droid-mcp
+```
+
+Uninstall with `bootout`, then delete the plist. Ask before that delete, and before you delete `/etc/droid-mcp` or the `droid` account.
 
 ### Other platforms
 
