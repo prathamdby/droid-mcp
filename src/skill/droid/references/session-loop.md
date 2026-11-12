@@ -1,93 +1,95 @@
-# The session loop
+# Session loop
 
-## Create
+## Start and wait
 
 ```json
-{ "cwd": "/home/me/src/app", "autonomyLevel": "low" }
+{ "cwd": "/home/me/src/app", "autonomyLevel": "low", "modelId": "auto" }
 ```
 
-The reply is:
+`session_create` returns `{ sessionId, cwd, settings }`. Send one prompt:
+
+```json
+{ "sessionId": "ID", "prompt": "Add and run a test for the retry helper", "waitMs": 0 }
+```
+
+`session_stream` returns `{ sessionId, status, cursor, events, truncated, result? }`.
+A short wait hands control back with `running`; it does not detach ownership
+or close the session. Continue with `session_events`:
+
+```json
+{ "sessionId": "ID", "cursor": 42, "waitMs": 300000 }
+```
+
+Always replace `42` with the previous response's cursor. Waits default to
+20000 ms, accept 0..300000 ms, and are not a turn timeout.
+`session_stream` waits for completion or its timeout. `session_events` returns
+immediately for buffered events or a terminal turn; otherwise it wakes on the
+next event or timeout, **not only at completion**. Long waits avoid empty
+timeout polls but do not suppress event responses.
+
+Default to fire-and-forget (deferred consumption). Consume status/cursor and
+pending prompts while running, then the terminal `result` or last `assistant_text`.
+This is deferred
+consumption, not an event-free server mode. Intermediate events still arrive
+and cost response bytes. To retain less in the agent context, filter them in
+the client's execution layer, while preserving prompt handling and the last
+assistant text. Stream events incrementally when progress, debugging, or
+human interaction is needed.
+
+In four isolated edits with `modelId: "auto"` (two per approach), this long-wait
+approach returned 1992/1783 bytes versus 2713/2713 for 1-second incremental
+polling; all edits passed. The saving came from avoiding empty timeouts, not
+from ignoring text. Two runs do not establish a general latency advantage;
+incremental clients can also long-poll.
+
+For a task that can wait synchronously, a long initial `session_stream.waitMs`
+can avoid intermediate polls. If prompts are possible, use a shorter initial
+wait so you can answer within their deadline.
+
+## Finish
+
+`completed` means the turn finished, not that its edits are correct.
+`result` may include `reason`, `turnId`, `durationMs`, `tokenUsage`, and
+`structuredOutput`. `failed` and `interrupted` also end the turn. Inspect errors
+before deciding to reuse the session; `process_exit` means its child died.
+
+`session_interrupt { sessionId }` stops a running turn and reports
+`{ interrupted }`; there is no `prompt` argument. After interruption, poll to
+terminal before starting another turn. `session_busy` means one is still active.
+
+`session_close { sessionId }` interrupts work, cancels prompts, and stops the
+child. A missing id means it is already closed. Idle sessions are reaped after
+30 minutes; cleanup remains the caller's responsibility.
+
+## Retention
+
+Events include `assistant_text`, `thinking`, `tool_call`, `tool_result`, `error`,
+`turn_completed`, `prompt_resolved`, and prompt events. Text fields are capped
+at 4096 UTF-8 bytes, marked `…[truncated]`; the ring holds 500 events or 256 KiB.
+Top-level `truncated: true` means the requested cursor predates retained
+events. Advancing the cursor prevents duplicates, but cannot restore lost
+text. `result_read` only pages dispatch results; it cannot restore event text
+already clipped by the session hub. Use an output file for large deliverables.
+
+## One-shot alternative
+
+`session_run` accepts `cwd`, `prompt`, `autonomyLevel`, optional `modelId`
+and `waitMs`. In compact use:
 
 ```json
 {
-  "sessionId": "3f1c...",
-  "cwd": "/home/me/src/app",
-  "settings": { "autonomyLevel": "low", "interactionMode": "auto", "modelId": "claude-sonnet-4" }
+  "name": "session_run",
+  "arguments": {
+    "cwd": "/home/me/src/app",
+    "autonomyLevel": "low",
+    "prompt": "Explain the retry helper briefly",
+    "waitMs": 20000
+  },
+  "maxBytes": 1024
 }
 ```
 
-`sessionId` is what every later call takes. An autonomy level above
-`server_info.maxAutonomy` fails with `autonomy_exceeds_cap`, and a `cwd` that
-does not exist fails with `invalid_cwd`. Both are cheap to fix; do not retry
-blind.
-
-## Send a prompt
-
-```json
-{ "sessionId": "3f1c...", "prompt": "Add a test for the retry helper", "waitMs": 20000 }
-```
-
-The reply says what happened:
-
-```json
-{
-  "sessionId": "3f1c...",
-  "status": "running",
-  "cursor": 402,
-  "events": [{ "seq": 401, "kind": "assistant_text", "text": "I will read the helper." }],
-  "truncated": false
-}
-```
-
-Hold on to `cursor`. It is the next sequence number, one past the last event,
-not that event's `seq`. Pass it back unchanged and an event is never repeated.
-
-## Poll
-
-```json
-{ "sessionId": "3f1c...", "cursor": 402, "waitMs": 20000 }
-```
-
-Poll with the cursor a previous call returned, not with `0`. Starting at `0`
-after the ring buffer has moved on returns `truncated: true` and only the last
-500 events, which loses the `turn_completed` that tells you the outcome.
-
-A prompt of only whitespace is rejected with `invalid_prompt` before any turn
-starts, so an accidental empty send costs nothing.
-
-Stop when `status` is `completed`, `failed`, or `interrupted`. `interrupted` is
-terminal for that turn; the session can take another prompt. A `failed` turn
-still has a `result.reason`. `process_exit` means the CLI exited, later calls
-fail with `session_closed`, and the session is no longer usable.
-
-## Interrupt
-
-```json
-{ "sessionId": "3f1c...", "prompt": "change of plan" }
-```
-
-`session_interrupt` stops the current turn. The turn completes as `interrupted`,
-and the session stays usable for the next prompt. The reply's `interrupted`
-is `true` only when a turn was running; interrupting an idle session is
-harmless and reports `false`.
-
-## Close
-
-`session_close` interrupts a running turn, cancels any pending prompt, and stops
-the process. Closing a session id that is no longer open fails with
-`session_not_found`; treat that as already closed.
-
-## Concurrency
-
-A session runs one turn at a time. A `session_stream` while one is running fails
-with `session_busy`. Either poll to the end, or interrupt, or open a second
-session. Independent work belongs in separate sessions so two turns cannot
-serialize behind each other.
-
-## Sessions versus one-shot runs
-
-`session_run` starts a session, sends one prompt, and closes it when the turn
-completes, fails, or is interrupted. A `running` result keeps the session so
-you can poll `session_events`, answer prompts, and call `session_close`. It is
-the shortest path for a self-contained question. Reach for `session_create`
-when you need more than one turn.
+It closes automatically on a terminal response. On `running`, retain its
+`sessionId` and cursor, answer prompts, poll, and close yourself. Keep these
+control fields when selecting/bounding a running result; recover them from
+its `ref` before proceeding. Use `session_create` for multiple turns.

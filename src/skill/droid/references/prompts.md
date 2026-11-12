@@ -1,132 +1,69 @@
 # Prompts
 
-Droid raises a prompt mid-turn as a server-to-client request. The server parks
-it, publishes an event, and waits. The deadline is 300 seconds by default; when
-it passes, the server resolves the prompt itself and the turn keeps going.
+Prompts park the turn until answered or cancelled at their `deadline` (epoch
+milliseconds, 300 seconds by default). Even an outcome-only client must check
+for them. Use the event's `requestId` with its `sessionId`; answer within the
+deadline, then resume polling from your retained cursor.
 
-Always answer with the `requestId` from the event. Answering twice, or after the
-deadline, fails with `prompt_not_found`.
+## Permission
 
-## Permissions
+`pending_permission` contains `options` and `toolUses`. Choose only an offered
+outcome, after obtaining any required user approval:
+
+```json
+{ "sessionId": "ID", "requestId": "hub-2", "outcome": "proceed_once" }
+```
+
+Optional `comment` explains the decision. `proceed_edit` requires nonempty
+`editedSpecContent`. Outcomes accepted by the server:
+
+- `proceed_once`, `cancel`.
+- `proceed_always`, `proceed_always_file`, `proceed_always_tools`,
+  `proceed_always_server`, `proceed_report_false_positive`.
+- `proceed_auto_run_low`, `proceed_auto_run_medium`, `proceed_auto_run_high`,
+  `proceed_new_session_low`, `proceed_new_session_medium`, `proceed_new_session_high`.
+- `proceed_auto_run`, `proceed_new_session`, `proceed_edit`.
+
+Leveled outcomes must fit `server_info.maxAutonomy`; unlevelled
+`proceed_auto_run` and `proceed_new_session` require a `high` cap.
+The server filters above-cap choices out of `options` and rejects them if sent.
+Persistent grants are broader than one-call consent; prefer the smallest
+offered grant that covers the user's authorization.
+
+## Question
+
+`pending_question` contains `questions` with `index`, `question`, optional
+`topic`, `options`, and `multiSelect`. Supply one answer per question index:
 
 ```json
 {
-  "seq": 88,
-  "kind": "pending_permission",
-  "requestId": "hub-2",
-  "promptType": "request_permission",
-  "deadline": 1770000000000,
-  "options": ["proceed_once", "proceed_always", "cancel"],
-  "toolUses": [
-    {
-      "toolUse": { "id": "t-1", "name": "Write", "input": { "path": "src/a.ts" } },
-      "confirmationType": "tool_use"
-    }
-  ]
-}
-```
-
-Answer with one of the `options` the event listed:
-
-```json
-{ "sessionId": "3f1c...", "requestId": "hub-2", "outcome": "proceed_once" }
-```
-
-| Outcome               | Effect                                                                                         |
-| --------------------- | ---------------------------------------------------------------------------------------------- |
-| `proceed_once`        | Allow this call only.                                                                          |
-| `proceed_always`      | Allow this tool for the rest of the session.                                                   |
-| `proceed_always_file` | Allow this file for the rest of the session.                                                   |
-| `proceed_auto_run`    | Enable automatic approval without a named level. Forwarded only when the server cap is high.   |
-| `proceed_new_session` | Continue in a fresh session without a named level. Forwarded only when the server cap is high. |
-| `proceed_edit`        | Allow after editing the spec; requires `editedSpecContent`.                                    |
-| `cancel`              | Deny and tell Droid why (add `comment`).                                                       |
-
-The full list also includes `proceed_auto_run_low`, `proceed_auto_run_medium`,
-`proceed_auto_run_high`, `proceed_new_session_low`,
-`proceed_new_session_medium`, `proceed_new_session_high`, `proceed_always_tools`,
-`proceed_always_server`, and `proceed_report_false_positive`.
-
-The server drops permission outcomes that would raise autonomy above
-`server_info.maxAutonomy` and does not list them in `options`. A leveled
-outcome such as `proceed_auto_run_low` is accepted only when that level is
-within the cap. `proceed_auto_run` and `proceed_new_session` do not name a
-level, so they are accepted only when the cap is `high`. `proceed_once`,
-`cancel`, `proceed_edit`, and the `proceed_always*` grants stay available.
-Sending an outcome above the cap fails with `autonomy_exceeds_cap` and is not
-forwarded.
-
-Send only what the event offered: the server rejects an outcome that was not
-on the list, and it rejects `proceed_edit` without `editedSpecContent`.
-
-A `comment` is passed through to Droid. Use it on `cancel` so the next turn is
-not a repeat.
-
-## Questions
-
-```json
-{
-  "kind": "pending_question",
-  "requestId": "hub-4",
-  "promptType": "ask_user",
-  "questions": [
-    {
-      "index": 0,
-      "topic": "Database",
-      "question": "Which database should the tests use?",
-      "options": ["sqlite", "postgres"],
-      "multiSelect": false
-    }
-  ]
-}
-```
-
-Answer each index once:
-
-```json
-{
-  "sessionId": "3f1c...",
+  "sessionId": "ID",
   "requestId": "hub-4",
   "answers": [{ "index": 0, "answer": "sqlite" }]
 }
 ```
 
-The server fills in the question text and sends the structured answer Droid
-expects. An index that was not in the event is rejected.
+The server fills in question text. Use indices from this prompt, not positions
+guessed from an earlier one.
 
-## Option pickers
+## Options
 
-```json
-{
-  "kind": "pending_options",
-  "requestId": "hub-5",
-  "promptType": "pick_options",
-  "rows": [{ "id": "app", "label": "app", "detail": "a monorepo" }],
-  "multi": false
-}
-```
+`pending_options` contains `rows` (`id`, optional `label`/`detail`) and `multi`.
+Select offered row ids; a single-select prompt accepts at most one:
 
 ```json
-{
-  "sessionId": "3f1c...",
-  "requestId": "hub-5",
-  "selectedIds": ["app"]
-}
+{ "sessionId": "ID", "requestId": "hub-5", "selectedIds": ["app"] }
 ```
 
-Send one id for a single-select prompt. `refresh: true` asks Droid for fresh
-rows; the reply carries `refresh`, and the next `pending_options` event has the
-new rows.
+`refresh: true` requests new rows instead of selecting; watch for a fresh event.
+Permission/question answers return `{ resolved: true }`; option answers also
+return `refresh`. An answer resolves the prompt, not the turn.
 
-## Deadlines
+## Stale or invalid answers
 
-`deadline` is epoch milliseconds. The server resolves an unanswered prompt at
-that point with `prompt_resolved` and `reason: "timeout"`, and Droid continues
-with its default. If you cannot answer, say so: `cancel` with a comment is
-better than silence.
-
-## After answering
-
-The answer tool returns `{ "resolved": true }`. The turn is still running. Poll
-`session_events` from the cursor you had; the next events are the ones the turn
-produced after the prompt.
+`prompt_not_found`: already answered, expired, or retired. Poll current state.
+`prompt_mismatch`: wrong answer tool. `invalid_outcome`,
+`invalid_question_index`, `invalid_selection`, or `edited_spec_required`:
+correct the answer from this event. Above-cap choices fail
+`autonomy_exceeds_cap`. A timeout emits `prompt_resolved` with
+`reason: "timeout"` and sends a cancellation response to Droid.

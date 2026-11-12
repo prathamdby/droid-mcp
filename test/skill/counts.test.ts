@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 
 import { describe, expect, it } from "vitest"
 
+import { SKILL_FILES } from "../../src/generated/skill.ts"
 import { SURFACE } from "../../src/generated/surface.ts"
 import { SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
 import { toolsFor } from "../../src/tools/index.ts"
@@ -16,6 +17,33 @@ const SKILL = readFileSync("src/skill/droid/SKILL.md", "utf8")
 const FAMILY_ROW = /^\| `([a-z]+)_` +\| (\d+) +\|/gm
 
 const names = Object.keys(toolsFor(testConfig()).toolkit.tools)
+const skillText = Object.values(SKILL_FILES).join("\n")
+
+const failureSources = [
+  "src/tools/compact.ts",
+  "src/tools/generated.ts",
+  "src/tools/results.ts",
+  "src/tools/guards.ts",
+  "src/tools/session-prompts.ts",
+  "src/tools/session-mcp.ts",
+  "src/tools/rest-kit.ts",
+  "src/droid/turns.ts",
+  "src/droid/prompts.ts",
+  "src/droid/errors.ts",
+]
+
+const failureCodes = new Set(
+  failureSources.flatMap((path) =>
+    Array.from(
+      readFileSync(path, "utf8").matchAll(
+        path === "src/droid/errors.ts"
+          ? /^\s+[A-Z]\w+: "([a-z_]+)"/gm
+          : /(?:code:\s*|problem\(\s*|fail\(\s*)"([a-z_]+)"/g,
+      ),
+      (match) => match[1] ?? "",
+    ),
+  ),
+)
 
 const computedFamilies = () => {
   const counts = new Map<string, number>()
@@ -79,5 +107,25 @@ describe("documented tool counts", () => {
     }
 
     expect(names).toContain("droid_update_session_settings")
+  })
+
+  it("names only operations that the server exposes", () => {
+    const mentioned = skillText.match(
+      /\b(?:server|session|daemon|droid|rest|context)_[a-z]+(?:_[a-z]+)*\b/g,
+    )
+
+    expect(mentioned).not.toBeNull()
+
+    for (const name of new Set(mentioned)) {
+      if (failureCodes.has(name)) continue
+
+      expect(names, name).toContain(name)
+    }
+  })
+
+  it("documents the server-defined failure codes", () => {
+    for (const code of failureCodes) {
+      expect(skillText, code).toContain("`" + code + "`")
+    }
   })
 })
