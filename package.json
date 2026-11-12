@@ -19,17 +19,17 @@
     "codegen:check": "node --experimental-strip-types scripts/codegen.ts --check && node --experimental-strip-types scripts/embed-skill.ts --check"
   },
   "dependencies": {
-    "@effect/platform-node": "4.1.2",
+    "@effect/platform-node": "4.1.4",
     "@factory/droid-sdk": "0.10.0",
-    "effect": "4.1.2"
+    "effect": "4.1.4"
   },
   "devDependencies": {
-    "@oxlint/plugins": "1.91.0",
-    "@types/node": "^24.0.0",
-    "oxfmt": "0.76.0",
-    "oxlint": "1.91.0",
-    "typescript": "5.9.3",
-    "vitest": "3.2.7"
+    "@oxlint/plugins": "1.93.0",
+    "@types/node": "^24.19.2",
+    "oxfmt": "0.78.0",
+    "oxlint": "1.93.0",
+    "typescript": "6.0.3",
+    "vitest": "5.1.0"
   },
   "engines": {
     "node": ">=24"

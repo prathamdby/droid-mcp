@@ -797,6 +797,26 @@ describe("compact profile", () => {
     )
   })
 
+  it("rejects null for optional dispatch inputs", async () => {
+    const compact = await open(await serve({ toolProfile: "compact" }), KEY)
+
+    const calls = [
+      ["tools_search", { readOnly: null }],
+      ["tool_call", { name: "daemon_list_models", arguments: null }],
+      ["tool_call", { name: "daemon_list_models", maxBytes: null }],
+      ["batch", { steps: [{ name: "daemon_list_models", id: null }] }],
+      ["batch", { steps: [{ name: "daemon_list_models" }], stopOnError: null }],
+      ["result_read", { ref: "missing", select: null }],
+    ] as const
+
+    for (const [name, args] of calls) {
+      const { body } = await compact.call(name, args)
+
+      expect(body.result?.isError, name).toBe(true)
+      expect(isSchemaRejection(body), name).toBe(true)
+    }
+  })
+
   it("continues past a failed step when stopOnError is false", async () => {
     const compact = await open(await serve({ toolProfile: "compact" }), KEY)
 

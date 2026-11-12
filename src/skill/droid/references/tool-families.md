@@ -4,6 +4,10 @@ This server publishes 288 tools: 158 generated from the SDK's method surface and
 130 hand-written for the turn loop, prompts, the hosted Factory API, and the
 Context API. They are named by prefix, so a prefix is all you need to find one.
 
+The release surface was checked on 2026-11-13 against Droid CLI `1.9.0` and
+SDK `0.10.0`. The SDK declares 165 wire methods and protocol `1.269.0`; CLI
+release numbers are separate from protocol versions.
+
 In the default compact profile, `tools/list` shows only the turn loop and five
 dispatch tools. Every name below is still an operation: find it with
 `tools_search`, read its schema with `tools_describe`, and run it with

@@ -14,14 +14,14 @@ import { toolFailure } from "./guards.ts"
  * not a wire value (`AddMcpServerRequestParamsSchema`).
  */
 const McpOAuthConfig = Schema.Struct({
-  scopes: Schema.optional(Schema.Array(Schema.String)),
-  resource: Schema.optional(Schema.Union([Schema.String, Schema.Literal(false)])),
-  authorizationServerIssuer: Schema.optional(Schema.String),
-  clientMetadataUrl: Schema.optional(Schema.String),
-  clientId: Schema.optional(Schema.String),
-  clientSecret: Schema.optional(Schema.String),
-  callbackPort: Schema.optional(Schema.Finite),
-  tokenEndpointAuthMethod: Schema.optional(
+  scopes: Schema.optionalKey(Schema.Array(Schema.String)),
+  resource: Schema.optionalKey(Schema.Union([Schema.String, Schema.Literal(false)])),
+  authorizationServerIssuer: Schema.optionalKey(Schema.String),
+  clientMetadataUrl: Schema.optionalKey(Schema.String),
+  clientId: Schema.optionalKey(Schema.String),
+  clientSecret: Schema.optionalKey(Schema.String),
+  callbackPort: Schema.optionalKey(Schema.Finite),
+  tokenEndpointAuthMethod: Schema.optionalKey(
     Schema.Literals(["none", "client_secret_basic", "client_secret_post"]),
   ),
 })
@@ -72,13 +72,13 @@ const AddMcpServer = Tool.make("session_add_mcp_server", {
   parameters: Schema.Struct({
     sessionId: Schema.String,
     name: Schema.String,
-    type: Schema.optional(Schema.Literals(["stdio", "http", "sse"])),
-    url: Schema.optional(Schema.String),
-    headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-    command: Schema.optional(Schema.String),
-    args: Schema.optional(Schema.Array(Schema.String)),
-    env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-    oauth: Schema.optional(McpOAuth),
+    type: Schema.optionalKey(Schema.Literals(["stdio", "http", "sse"])),
+    url: Schema.optionalKey(Schema.String),
+    headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+    command: Schema.optionalKey(Schema.String),
+    args: Schema.optionalKey(Schema.Array(Schema.String)),
+    env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+    oauth: Schema.optionalKey(McpOAuth),
   }),
   success: Schema.optional(Schema.Json),
   failure: ToolFailure,
@@ -92,7 +92,7 @@ const RemoveMcpServer = Tool.make("session_remove_mcp_server", {
   parameters: Schema.Struct({
     sessionId: Schema.String,
     serverName: Schema.String,
-    settingsLevel: Schema.optional(UserSettingsLevel),
+    settingsLevel: Schema.optionalKey(UserSettingsLevel),
   }),
   success: Schema.optional(Schema.Json),
   failure: ToolFailure,
@@ -107,7 +107,7 @@ const ToggleMcpServer = Tool.make("session_toggle_mcp_server", {
     sessionId: Schema.String,
     serverName: Schema.String,
     enabled: Schema.Boolean,
-    settingsLevel: Schema.optional(UserSettingsLevel),
+    settingsLevel: Schema.optionalKey(UserSettingsLevel),
   }),
   success: Schema.optional(Schema.Json),
   failure: ToolFailure,

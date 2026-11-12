@@ -1,8 +1,14 @@
+import { FACTORY_PROTOCOL_VERSION } from "@factory/droid-sdk"
 import { describe, expect, it } from "vitest"
 
+import { SDK_PROTOCOL_VERSION } from "../../src/droid/protocol.ts"
 import { SURFACE, SURFACE_COUNT } from "../../src/generated/surface.ts"
 
 describe("generated surface", () => {
+  it("starts with the installed SDK's protocol version", () => {
+    expect(SDK_PROTOCOL_VERSION).toBe(FACTORY_PROTOCOL_VERSION)
+  })
+
   it("matches its advertised count", () => {
     expect(SURFACE).toHaveLength(SURFACE_COUNT)
   })

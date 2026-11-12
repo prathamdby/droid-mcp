@@ -21,6 +21,10 @@ check it:
 sudo -u droid droid --version
 ```
 
+Release surface checked on 2026-11-13: Droid CLI `1.9.0`, SDK `0.10.0`, and SDK
+protocol `1.269.0`. The inventory remains 288 operations, advertised as 15 tools
+in the default compact profile or 288 in the full profile.
+
 Create the runtime directory the daemon socket lives in:
 
 ```sh
@@ -195,3 +199,6 @@ sudo systemctl restart droid-mcp
 
 `pnpm codegen:check` fails when the installed SDK changed shape and the generated
 surface is stale, so run it after any `@factory/droid-sdk` bump.
+Check `droid --version` against the [Factory changelog](https://docs.factory.com/changelog/release-notes)
+too. A CLI release number is not a wire protocol version; the daemon client
+adopts the version reported by its peer.

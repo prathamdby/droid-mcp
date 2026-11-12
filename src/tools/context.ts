@@ -433,7 +433,7 @@ export const contextTools = (): RestDomain =>
       operation: "listContextSpaces",
       description:
         "List the Context spaces the caller can read, as `{ items, nextCursor? }`." + PAGED,
-      inputs: { limit: Schema.optional(Limit), cursor: Schema.optional(Cursor) },
+      inputs: { limit: Schema.optionalKey(Limit), cursor: Schema.optionalKey(Cursor) },
       call: ({ limit, cursor }, client) =>
         client.send(
           read(
@@ -463,8 +463,8 @@ export const contextTools = (): RestDomain =>
       inputs: {
         spaceId: SpaceId,
         path: DocumentPath,
-        body: Schema.optional(DocumentBody),
-        fileId: Schema.optional(CommitFileId),
+        body: Schema.optionalKey(DocumentBody),
+        fileId: Schema.optionalKey(CommitFileId),
       },
       check: (params) => firstProblem(pathProblem(params.path), contentProblem(params)),
       call: ({ spaceId, path, body, fileId }, client) =>
@@ -487,9 +487,9 @@ export const contextTools = (): RestDomain =>
         " The cursor is the last path of the previous page.",
       inputs: {
         spaceId: SpaceId,
-        limit: Schema.optional(Limit),
-        cursor: Schema.optional(Cursor),
-        kinds: Schema.optional(Schema.NonEmptyArray(Schema.Literals(["text", "binary"]))),
+        limit: Schema.optionalKey(Limit),
+        cursor: Schema.optionalKey(Cursor),
+        kinds: Schema.optionalKey(Schema.NonEmptyArray(Schema.Literals(["text", "binary"]))),
       },
       call: ({ spaceId, limit, cursor, kinds }, client) =>
         client.send(
@@ -543,9 +543,9 @@ export const contextTools = (): RestDomain =>
         spaceId: SpaceId,
         documentId: DocumentId,
         expectedVersion: Version,
-        merge: Schema.optional(Schema.Literals(["auto", "strict"])),
-        body: Schema.optional(DocumentBody),
-        fileId: Schema.optional(CommitFileId),
+        merge: Schema.optionalKey(Schema.Literals(["auto", "strict"])),
+        body: Schema.optionalKey(DocumentBody),
+        fileId: Schema.optionalKey(CommitFileId),
       },
       check: (params) =>
         firstProblem(
@@ -694,7 +694,7 @@ export const contextTools = (): RestDomain =>
       inputs: {
         spaceId: SpaceId,
         sessionId: SessionId,
-        parentSessionId: Schema.optional(
+        parentSessionId: Schema.optionalKey(
           ContextId.annotate({ description: "The parent stored session ID." }),
         ),
       },
@@ -727,9 +727,9 @@ export const contextTools = (): RestDomain =>
         PAGED,
       inputs: {
         spaceId: SpaceId,
-        limit: Schema.optional(Limit),
-        cursor: Schema.optional(Cursor),
-        parentSessionId: Schema.optional(
+        limit: Schema.optionalKey(Limit),
+        cursor: Schema.optionalKey(Cursor),
+        parentSessionId: Schema.optionalKey(
           ContextId.annotate({ description: "A parent stored session ID, or `root`." }),
         ),
       },
@@ -788,11 +788,11 @@ export const contextTools = (): RestDomain =>
       inputs: {
         spaceId: SpaceId,
         sessionId: SessionId,
-        afterSequence: Schema.optional(
+        afterSequence: Schema.optionalKey(
           Sequence.annotate({ description: "Read records after this sequence." + STRING_COUNTER }),
         ),
-        limit: Schema.optional(Limit),
-        maxBytes: Schema.optional(
+        limit: Schema.optionalKey(Limit),
+        maxBytes: Schema.optionalKey(
           Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: BATCH_MAX_BYTES })),
         ),
       },
