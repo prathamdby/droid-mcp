@@ -13,6 +13,7 @@ const HAND_WRITTEN = [
   "session_events",
   "session_interrupt",
   "session_close",
+  "session_list",
   "session_respond_permission",
   "session_answer_question",
   "session_pick_options",
@@ -152,16 +153,16 @@ describe("tool inventory", () => {
     expect(toolNames()).toHaveLength(generated.length + HAND_WRITTEN.length)
   })
 
-  it("exposes 287 tools in the expected families", () => {
+  it("exposes 288 tools in the expected families", () => {
     const counts = new Map<string, number>()
 
     for (const name of toolNames()) {
       counts.set(familyOf(name), (counts.get(familyOf(name)) ?? 0) + 1)
     }
 
-    expect(toolNames()).toHaveLength(287)
+    expect(toolNames()).toHaveLength(288)
     expect(Object.fromEntries(FAMILIES.map((family) => [family, counts.get(family) ?? 0]))).toEqual(
-      { server: 1, session: 31, rest: 79, context: 18, daemon: 130, droid: 28 },
+      { server: 1, session: 32, rest: 79, context: 18, daemon: 130, droid: 28 },
     )
     expect([...counts.keys()].every((family) => FAMILIES.some((known) => known === family))).toBe(
       true,

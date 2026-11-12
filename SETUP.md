@@ -395,7 +395,7 @@ Confirm each item. Show the command output when one fails.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "http://127.0.0.1:7337/mcp" -H 'content-type: application/json' -d '{}'
 ```
 
-- The MCP client lists a server named `droid`. `server_info` returns `version` `0.1.0`, a numeric `toolCount`, `maxAutonomy` equal to `<autonomy>`, and `daemon.connected` true. `README.md` lists 287 tools in this release. If `package.json` has a newer `version`, expect that version.
+- The MCP client lists a server named `droid`. `server_info` returns `version` `0.1.0`, `profile` `compact`, a numeric `toolCount` (15 in the compact profile), `operationCount` 288, `maxAutonomy` equal to `<autonomy>`, and `daemon.connected` true. `README.md` lists 288 operations in this release. If `package.json` has a newer `version`, expect that version.
 
 ## Hand the setup to the user
 

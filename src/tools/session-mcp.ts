@@ -20,7 +20,7 @@ const McpOAuthConfig = Schema.Struct({
   clientMetadataUrl: Schema.optional(Schema.String),
   clientId: Schema.optional(Schema.String),
   clientSecret: Schema.optional(Schema.String),
-  callbackPort: Schema.optional(Schema.Number),
+  callbackPort: Schema.optional(Schema.Finite),
   tokenEndpointAuthMethod: Schema.optional(
     Schema.Literals(["none", "client_secret_basic", "client_secret_post"]),
   ),
@@ -88,7 +88,7 @@ const AddMcpServer = Tool.make("session_add_mcp_server", {
 const RemoveMcpServer = Tool.make("session_remove_mcp_server", {
   description:
     "Remove an MCP server from a live session. settingsLevel defaults to user; that is the " +
-    "only level the daemon accepts.",
+    "only level the daemon accepts. Destructive; confirm before calling.",
   parameters: Schema.Struct({
     sessionId: Schema.String,
     serverName: Schema.String,

@@ -12,18 +12,34 @@ Read https://raw.githubusercontent.com/prathamdby/droid-mcp/main/SETUP.md and fo
 
 ## What it does
 
-The server provides 287 tools in six families. 158 are generated from the Factory Droid SDK, one per wire method, and 129 are hand-written.
+The server provides 288 tools in six families. 158 are generated from the Factory Droid SDK, one per wire method, and 130 are hand-written.
 
 | Prefix     | Count | What the tools cover                                                                                            |
 | ---------- | ----- | --------------------------------------------------------------------------------------------------------------- |
 | `daemon_`  | 130   | Generated. The long-running `droid daemon`: its sessions, automations, worktrees, and MCP servers.              |
 | `droid_`   | 28    | Generated. Session-scoped SDK methods that the `session_*` tools do not already own.                            |
-| `session_` | 31    | The local turn loop, prompts, and per-session administration.                                                   |
+| `session_` | 32    | The local turn loop, prompts, and per-session administration.                                                   |
 | `rest_`    | 79    | The hosted Factory API: computers, Environments, hosted sessions, wiki, CI, organization, and service accounts. |
 | `context_` | 18    | The Context API on a Prem origin: spaces, documents, files, and stored session records.                         |
 | `server_`  | 1     | `server_info`.                                                                                                  |
 
 The 79 `rest_*` tools cover the 77 operations of the published Factory OpenAPI document (version 0.1.0) plus the two machine-template operations the SDK still calls.
+
+### Tool profiles
+
+By default the server runs the `compact` profile. `tools/list` advertises 15 tools instead of 288, so a client spends about 22 KB of context on the list instead of about 350 KB:
+
+- The turn loop as first-class tools: `server_info`, `session_create`, `session_stream`, `session_events`, `session_interrupt`, `session_close`, `session_list`, and the three prompt answers.
+- `tools_search` finds any of the 288 operations by keyword, family, or read-only hint, and `tools_describe` returns the full description and input schema of up to 20 of them.
+- `tool_call` runs one operation by name with its arguments. It uses the same handler, validation, autonomy cap, and `{ code, message }` failures as the operation's own tool in the full profile.
+- `batch` runs up to 20 operations in order in one call. An argument `{ "$from": "<step id>", "path": "/json/pointer" }` takes part of an earlier step's result, so intermediate results never return to the client.
+- A result larger than `maxBytes` (16 KB by default) returns a preview and a `ref`. `result_read` reads the stored result by byte range or by JSON Pointer, so no data is lost. Refs expire 15 minutes after their last use and only the key that created a ref can read it.
+
+If `select` fails after an operation completes, `tool_call` or the batch step returns `invalid_select` with a `ref` to its full result. Read that ref instead of repeating the operation. Byte offsets for `result_read` must fall on UTF-8 character boundaries; use `nextOffset` to page, or expect `invalid_offset` for an offset inside a character.
+
+`--tool-profile full` advertises all 288 tools, one per operation, as earlier releases did. Every tool in both profiles carries MCP hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a client can skip confirmation for reads and ask before destructive calls.
+
+`node --experimental-strip-types scripts/measure.ts` prints the `initialize` and `tools/list` sizes for both profiles.
 
 It also serves a `droid` skill and a `droid` prompt that teach the assistant the turn loop, so you do not have to explain it yourself.
 
@@ -69,7 +85,7 @@ Add this to your MCP client's configuration:
 }
 ```
 
-Then ask the client to read the `droid` prompt or the skill at `skill://droid/SKILL.md`, and call `server_info` first. It reports the version, the tool count, the autonomy cap, and the daemon connection.
+Then ask the client to read the `droid` prompt or the skill at `skill://droid/SKILL.md`, and call `server_info` first. It reports the version, the tool profile, the advertised tool count, the operation count, the autonomy cap, and the daemon connection.
 
 If you run the server on another machine, put a TLS proxy in front of it and keep the key required. `docs/hosting.md` has a systemd unit, a keys file layout, and TLS setup for that case.
 
@@ -83,6 +99,7 @@ Each flag also has an environment variable. The defaults work for a local instal
 | `--port`             | `DROID_MCP_PORT`            | `7337`                                              |
 | `--keys-file`        | `DROID_MCP_KEYS`            | none, startup fails without a key                   |
 | `--max-autonomy`     | `DROID_MCP_MAX_AUTONOMY`    | `medium`                                            |
+| `--tool-profile`     | `DROID_MCP_TOOL_PROFILE`    | `compact`; `full` lists every operation as a tool   |
 | `--droid-path`       | `DROID_MCP_DROID_PATH`      | `droid`                                             |
 | `--socket`           | `DROID_MCP_SOCKET`          | `$XDG_RUNTIME_DIR/droid-mcp/daemon.sock`            |
 | `--daemon-url`       | `DROID_MCP_DAEMON_URL`      | none, the server spawns a daemon                    |

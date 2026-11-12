@@ -64,7 +64,11 @@ const WithSession = Schema.Struct({ sessionId: Schema.String })
 const WithAccount = Schema.Struct({ serviceAccount: WithId })
 const WithKey = Schema.Struct({ apiKey: WithId })
 
-const ServerInfo = Schema.Struct({ toolCount: Schema.Number })
+const ServerInfo = Schema.Struct({
+  profile: Schema.String,
+  toolCount: Schema.Number,
+  operationCount: Schema.Number,
+})
 
 const REPO = "https://github.com/acme/app"
 
@@ -292,11 +296,12 @@ describe("hosted REST coverage", () => {
     expect(marked.sort()).toEqual([...DESIGNATED_DESTRUCTIVE].sort())
   })
 
-  it("reports the listed tool count in server_info", async () => {
+  it("reports the operation count, and the advertised count for its profile, in server_info", async () => {
     const listed = await client.list()
     const info = Schema.decodeUnknownSync(ServerInfo)(await client.ok("server_info"))
 
-    expect(listed).toHaveLength(287)
-    expect(info.toolCount).toBe(listed.length)
+    expect(listed).toHaveLength(288)
+    expect(info.operationCount).toBe(listed.length)
+    expect(info.toolCount).toBe(info.profile === "compact" ? 15 : listed.length)
   })
 })
