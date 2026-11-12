@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { SURFACE, SURFACE_COUNT } from "../../src/generated/surface.ts"
-import { SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
+import { DAEMON_UNSERVED_METHODS, SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
 import { toolsFor } from "../../src/tools/index.ts"
 import { testConfig } from "../support/config.ts"
 
@@ -147,22 +147,25 @@ const toolNames = (): ReadonlyArray<string> => Object.keys(toolsFor(testConfig()
 
 describe("tool inventory", () => {
   it("counts one generated tool per SDK method plus the hand-written tools", () => {
-    const generated = SURFACE.filter((entry) => !SESSION_OWNED_METHODS.includes(entry.method))
+    const generated = SURFACE.filter(
+      (entry) =>
+        !SESSION_OWNED_METHODS.includes(entry.method) && !DAEMON_UNSERVED_METHODS.has(entry.method),
+    )
 
     expect(SURFACE_COUNT).toBe(165)
     expect(toolNames()).toHaveLength(generated.length + HAND_WRITTEN.length)
   })
 
-  it("exposes 288 tools in the expected families", () => {
+  it("exposes 284 tools in the expected families", () => {
     const counts = new Map<string, number>()
 
     for (const name of toolNames()) {
       counts.set(familyOf(name), (counts.get(familyOf(name)) ?? 0) + 1)
     }
 
-    expect(toolNames()).toHaveLength(288)
+    expect(toolNames()).toHaveLength(284)
     expect(Object.fromEntries(FAMILIES.map((family) => [family, counts.get(family) ?? 0]))).toEqual(
-      { server: 1, session: 32, rest: 79, context: 18, daemon: 130, droid: 28 },
+      { server: 1, session: 32, rest: 79, context: 18, daemon: 130, droid: 24 },
     )
     expect([...counts.keys()].every((family) => FAMILIES.some((known) => known === family))).toBe(
       true,
@@ -173,6 +176,23 @@ describe("tool inventory", () => {
     const names = toolNames()
 
     expect(new Set(names).size).toBe(names.length)
+  })
+
+  it("omits only the four confirmed daemon-unserved reads and keeps their replacements", () => {
+    const names = toolNames()
+
+    expect([...DAEMON_UNSERVED_METHODS]).toEqual([
+      ["droid.list_skills", ["session_list_skills", "daemon_list_skills"]],
+      ["droid.list_tools", ["session_list_tools"]],
+      ["droid.list_mcp_tools", ["session_list_mcp_tools", "daemon_list_mcp_tools"]],
+      ["droid.list_mcp_registry", ["daemon_list_mcp_registry"]],
+    ])
+
+    for (const [method, replacements] of DAEMON_UNSERVED_METHODS) {
+      expect(names).not.toContain(method.replaceAll(".", "_"))
+
+      for (const name of replacements) expect(names).toContain(name)
+    }
   })
 
   it("keeps every hand-written tool", () => {

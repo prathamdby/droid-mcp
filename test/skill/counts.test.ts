@@ -6,7 +6,7 @@ import { errorCode } from "../../src/droid/errors.ts"
 import { SKILL_FILES } from "../../src/generated/skill.ts"
 import { SURFACE } from "../../src/generated/surface.ts"
 import { MAX_BATCH_STEPS, META_TOOLS } from "../../src/tools/compact.ts"
-import { SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
+import { DAEMON_UNSERVED_METHODS, SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
 import { toolsFor } from "../../src/tools/index.ts"
 import {
   DEFAULT_RESULT_BYTES,
@@ -31,6 +31,7 @@ const exposedNames = new Set([...names, ...META_TOOLS.map((tool) => tool.name)])
 // Wire methods, event types, and permission outcomes are not tool names or failure codes.
 const nonCodeIdentifiers = new Set([
   ...SESSION_OWNED_METHODS.map((method) => method.slice("droid.".length)),
+  ...[...DAEMON_UNSERVED_METHODS.keys()].map((method) => method.replaceAll(".", "_")),
   "assistant_text",
   "pending_options",
   "pending_permission",
@@ -127,7 +128,10 @@ const documentedFamilies = (markdown: string): Record<string, number> =>
     Array.from(markdown.matchAll(FAMILY_ROW), (match) => [match[1] ?? "", Number(match[2])]),
   )
 
-const generated = SURFACE.filter((entry) => !SESSION_OWNED_METHODS.includes(entry.method)).length
+const generated = SURFACE.filter(
+  (entry) =>
+    !SESSION_OWNED_METHODS.includes(entry.method) && !DAEMON_UNSERVED_METHODS.has(entry.method),
+).length
 
 describe("documented tool counts", () => {
   it("match the families the server exposes in README.md", () => {
@@ -168,6 +172,14 @@ describe("documented tool counts", () => {
 
     for (const entry of suppressed) {
       expect(TOOL_FAMILIES).toContain("`" + entry.method.slice("droid.".length) + "`")
+    }
+
+    expect(DAEMON_UNSERVED_METHODS.size).toBe(4)
+
+    for (const [method, replacements] of DAEMON_UNSERVED_METHODS) {
+      expect(TOOL_FAMILIES).toContain("`" + method.replaceAll(".", "_") + "`")
+
+      for (const name of replacements) expect(TOOL_FAMILIES).toContain("`" + name + "`")
     }
 
     expect(names).toContain("droid_update_session_settings")

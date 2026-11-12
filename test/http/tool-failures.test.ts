@@ -55,6 +55,35 @@ const unusableDroids = (): ReadonlyArray<readonly [string, string]> => {
 }
 
 describe("tool failures over MCP", () => {
+  it("maps fake-daemon -32601 to daemon_method_unsupported while a working method still succeeds", async () => {
+    daemon = await startFakeDaemon(join(directory, "daemon.sock"), {
+      onRequest: (request): ScriptedReply => {
+        if (request.method === "daemon.authenticate") {
+          return { result: { userId: "user-1", orgId: "org-1" } }
+        }
+
+        if (request.method === "daemon.list_models") {
+          return { result: { models: [{ id: "working-model" }] } }
+        }
+
+        return { error: { code: -32601, message: "Method not found" } }
+      },
+    })
+
+    const tools = await open({})
+    const failure = await tools.fail("droid_list_mcp_servers")
+    const working = await tools.ok("daemon_list_models")
+
+    expect(failure).toEqual({
+      code: "daemon_method_unsupported",
+      message: "daemon (protocol 1.299.0) does not implement droid.list_mcp_servers",
+    })
+    expect(working).toEqual({ models: [{ id: "working-model" }] })
+    expect(daemon.openSockets()).toBe(1)
+    console.info("fake daemon -32601: " + JSON.stringify(failure))
+    console.info("same connection daemon_list_models: " + JSON.stringify(working))
+  })
+
   it("reports a droid binary that cannot run as a failure and keeps serving", async () => {
     for (const [label, droidPath] of unusableDroids()) {
       const tools = await open({ droidPath })

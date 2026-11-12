@@ -6,6 +6,7 @@ import { Duration, Effect, Fiber, Option, Stream } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { openDaemon } from "../../src/droid/daemon-client.ts"
+import { errorCode } from "../../src/droid/errors.ts"
 import { startFakeDaemon } from "../support/fake-daemon.ts"
 import type { FakeDaemon, ScriptedHandler, ScriptedReply } from "../support/fake-daemon.ts"
 
@@ -169,24 +170,47 @@ describe("daemon client", () => {
     expect(error._tag).toBe("DaemonTimeout")
   })
 
-  it("maps an unknown method to DaemonProtocolError", async () => {
-    const fake = await start({
-      onRequest: () => ({ error: { code: -32601, message: "Method not found" } }),
-    })
+  it.each([false, true])(
+    "maps an unsupported method precisely after protocol adoption: %s",
+    async (adopt) => {
+      const fake = await start({
+        onRequest: (request) => {
+          if (adopt && request.factoryProtocolVersion !== "1.299.0") {
+            return {
+              error: {
+                code: -32601,
+                message: "Method not found",
+                data: {
+                  protocolVersionMismatch: {
+                    localFactoryProtocolVersion: "1.299.0",
+                    peerFactoryProtocolVersion: request.factoryProtocolVersion,
+                  },
+                },
+              },
+            }
+          }
 
-    const error = await Effect.runPromise(
-      Effect.gen(function* () {
-        const client = yield* openDaemon({ socketPath: fake.socketPath, version: "0.1.0" })
-        const failed = yield* Effect.flip(client.request({ method: "daemon.nope", params: {} }))
-        yield* client.close
+          return { error: { code: -32601, message: "Method not found" } }
+        },
+      })
 
-        return failed
-      }),
-    )
+      const error = await Effect.runPromise(
+        Effect.gen(function* () {
+          const client = yield* openDaemon({ socketPath: fake.socketPath, version: "0.1.0" })
+          const failed = yield* Effect.flip(client.request({ method: "daemon.nope", params: {} }))
+          yield* client.close
 
-    expect(error._tag).toBe("DaemonProtocolError")
-    expect(error.message).toContain("daemon.nope")
-  })
+          return failed
+        }),
+      )
+
+      expect(error._tag).toBe("DaemonMethodUnsupported")
+      expect(errorCode(error)).toBe("daemon_method_unsupported")
+      expect(error.message).toBe("daemon (protocol 1.299.0) does not implement daemon.nope")
+      expect(error).toMatchObject({ detail: "Method not found" })
+      expect(fake.requests).toHaveLength(adopt ? 2 : 1)
+    },
+  )
 
   it("routes daemon notifications to subscribers", async () => {
     const fake = await start({
