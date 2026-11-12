@@ -42,6 +42,14 @@ export class DaemonProtocolError extends Schema.TaggedError<DaemonProtocolError>
   },
 ) {}
 
+export class DaemonMethodUnsupported extends Schema.TaggedError<DaemonMethodUnsupported>()(
+  "DaemonMethodUnsupported",
+  {
+    message: Schema.String,
+    detail: Schema.optional(Schema.String),
+  },
+) {}
+
 export class DaemonTimeout extends Schema.TaggedError<DaemonTimeout>()("DaemonTimeout", {
   message: Schema.String,
   detail: Schema.optional(Schema.String),
@@ -81,6 +89,7 @@ export type DaemonError =
   | DaemonUnavailable
   | DaemonAuthRejected
   | DaemonProtocolError
+  | DaemonMethodUnsupported
   | DaemonTimeout
   | FactoryApiKeyMissing
   | WsError
@@ -91,6 +100,7 @@ export const AppErrors = Schema.Union([
   DaemonUnavailable,
   DaemonAuthRejected,
   DaemonProtocolError,
+  DaemonMethodUnsupported,
   DaemonTimeout,
   ExecFailed,
   ExecTimeout,
@@ -105,6 +115,7 @@ const ERROR_CODES = {
   DaemonUnavailable: "daemon_unavailable",
   DaemonAuthRejected: "daemon_auth_rejected",
   DaemonProtocolError: "daemon_protocol_error",
+  DaemonMethodUnsupported: "daemon_method_unsupported",
   DaemonTimeout: "daemon_timeout",
   ExecFailed: "exec_failed",
   ExecTimeout: "exec_timeout",

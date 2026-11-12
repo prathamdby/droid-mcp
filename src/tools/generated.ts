@@ -27,6 +27,14 @@ export const SESSION_OWNED_METHODS: ReadonlyArray<string> = [
   "droid.session_notification",
 ]
 
+/** Exec-session reads that the daemon socket does not serve, with supported replacements. */
+export const DAEMON_UNSERVED_METHODS: ReadonlyMap<string, ReadonlyArray<string>> = new Map([
+  ["droid.list_skills", ["session_list_skills", "daemon_list_skills"]],
+  ["droid.list_tools", ["session_list_tools"]],
+  ["droid.list_mcp_tools", ["session_list_mcp_tools", "daemon_list_mcp_tools"]],
+  ["droid.list_mcp_registry", ["daemon_list_mcp_registry"]],
+])
+
 /** The SDK's JSON Schema, as `effect/SchemaRepresentation` accepts it. */
 const asDocument = (value: JsonSchemaObject): JsonSchema.JsonSchema =>
   // SAFETY: the document was emitted by scripts/codegen.ts from the SDK's own Zod
@@ -85,8 +93,7 @@ const AutonomyModeSchema = Schema.Literals([
 const SubagentAutonomySchema = Schema.Literals(["off", "low", "medium", "high", "inherit"])
 
 /**
- * Methods whose parameters can raise session authority. `droid.list_tools`
- * repeats these names as a query and is omitted.
+ * Methods whose parameters can raise session authority.
  *
  * Omitted initialize authority is copied from one `daemon.get_default_settings`
  * read onto that request. A lower observed value is kept. A missing field
@@ -357,7 +364,11 @@ export type GeneratedHandlers = Record<
  */
 export const generatedSurface = (config?: Pick<Config, "maxAutonomy">) => {
   const maxAutonomy = config?.maxAutonomy ?? DEFAULT_MAX_AUTONOMY
-  const entries = SURFACE.filter((entry) => !SESSION_OWNED_METHODS.includes(entry.method))
+
+  const entries = SURFACE.filter(
+    (entry) =>
+      !SESSION_OWNED_METHODS.includes(entry.method) && !DAEMON_UNSERVED_METHODS.has(entry.method),
+  )
 
   const tools: Array<Tool.Any> = entries.map((entry) =>
     Tool.dynamic(entry.tool, {

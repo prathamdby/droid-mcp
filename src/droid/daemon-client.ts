@@ -12,6 +12,7 @@ import * as Stream from "effect/Stream"
 import type { Logger } from "../log.ts"
 import {
   DaemonAuthRejected,
+  DaemonMethodUnsupported,
   DaemonProtocolError,
   DaemonTimeout,
   DaemonUnavailable,
@@ -126,6 +127,7 @@ export const decodeSessionsResult = (
 const unwrap = (
   response: ResponseEnvelope,
   method: string,
+  protocolVersion: string,
 ): Effect.Effect<JsonValue | undefined, DaemonError> => {
   const error = response.error
 
@@ -142,8 +144,12 @@ const unwrap = (
 
   if (isMethodNotFoundCode(error.code)) {
     return Effect.fail(
-      new DaemonProtocolError({
-        message: "daemon does not implement " + method,
+      new DaemonMethodUnsupported({
+        message:
+          "daemon (protocol " +
+          (response.factoryProtocolVersion ?? protocolVersion) +
+          ") does not implement " +
+          method,
         detail: error.message,
       }),
     )
@@ -419,7 +425,7 @@ export const openDaemon = (
           const mismatch = protocolMismatch(first.error)
 
           if (mismatch === undefined) {
-            return yield* unwrap(first, requestOptions.method)
+            return yield* unwrap(first, requestOptions.method, firstVersion)
           }
 
           logger?.info("daemon.protocol.adopted", {
@@ -450,7 +456,7 @@ export const openDaemon = (
             )
           }
 
-          return yield* unwrap(second, requestOptions.method)
+          return yield* unwrap(second, requestOptions.method, mismatch.local)
         })
 
       const connected = Effect.gen(function* () {

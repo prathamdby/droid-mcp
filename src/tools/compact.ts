@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream"
 
 import type { Config } from "../config.ts"
 import { ToolFailure } from "./failure.ts"
+import { DAEMON_UNSERVED_METHODS } from "./generated.ts"
 import { toolsFor } from "./index.ts"
 import { annotate, annotateWith, policyOf } from "./policy.ts"
 import type { ToolPolicy } from "./policy.ts"
@@ -321,6 +322,18 @@ export type Outcome =
   | { readonly ok: true; readonly value: Schema.Json | undefined }
   | { readonly ok: false; readonly failure: ToolFailure }
 
+const unknownTool = (name: string): ToolFailure => {
+  const replacements = DAEMON_UNSERVED_METHODS.get(name.replace("_", "."))
+
+  return {
+    code: "unknown_tool",
+    message:
+      replacements === undefined
+        ? "no operation named " + name + "; find one with tools_search"
+        : name + " is not served by the daemon; use " + replacements.join(" or "),
+  }
+}
+
 /** Maps a dispatch error onto the `{ code, message }` contract. */
 const failureOfAi = (error: AiError.AiError): ToolFailure =>
   Match.value(error.reason).pipe(
@@ -328,10 +341,7 @@ const failureOfAi = (error: AiError.AiError): ToolFailure =>
       code: "invalid_arguments",
       message: "Invalid parameters for tool '" + reason.toolName + "': " + reason.description,
     })),
-    Match.tag("ToolNotFoundError", (reason): ToolFailure => ({
-      code: "unknown_tool",
-      message: "no operation named " + reason.toolName + "; find one with tools_search",
-    })),
+    Match.tag("ToolNotFoundError", (reason): ToolFailure => unknownTool(reason.toolName)),
     Match.orElse((reason): ToolFailure => ({ code: "internal_error", message: reason.message })),
   )
 
@@ -453,12 +463,7 @@ export const compactSurface = (config: Config) => {
       ) as Effect.Effect<Outcome>
 
     const known = (name: string): Effect.Effect<void, ToolFailure> =>
-      byName.has(name)
-        ? Effect.void
-        : Effect.fail({
-            code: "unknown_tool",
-            message: "no operation named " + name + "; find one with tools_search",
-          })
+      byName.has(name) ? Effect.void : Effect.fail(unknownTool(name))
 
     const deliver = (
       value: Schema.Json | undefined,
@@ -522,15 +527,17 @@ export const compactSurface = (config: Config) => {
           return found
         }),
       tools_describe: (params: { readonly names: ReadonlyArray<string> }) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           const found: Array<ReturnType<typeof describeEntry>> = []
           const unknown: Array<string> = []
 
           for (const name of params.names) {
             const entry = byName.get(name)
 
-            if (entry === undefined) unknown.push(name)
-            else found.push(describeEntry(entry))
+            if (entry === undefined) {
+              if (DAEMON_UNSERVED_METHODS.has(name.replace("_", "."))) yield* known(name)
+              unknown.push(name)
+            } else found.push(describeEntry(entry))
           }
 
           return { tools: found, unknown }
