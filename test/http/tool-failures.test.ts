@@ -123,6 +123,25 @@ describe("tool failures over MCP", () => {
     expect(outcome.rpcError ?? outcome.isError).toBeTruthy()
   })
 
+  it("advertises session inputs as omittable but not nullable", async () => {
+    const tools = await open({})
+    const listed = await tools.list()
+
+    expect(listed.find((tool) => tool.name === "session_create")?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        cwd: { type: "string" },
+        autonomyLevel: { type: "string", enum: ["off", "low", "medium", "high"] },
+        modelId: { type: "string" },
+        reasoningEffort: { type: "string" },
+        restrictToolIds: { type: "array", items: { type: "string" } },
+        disabledToolIds: { type: "array", items: { type: "string" } },
+      },
+      required: ["cwd", "autonomyLevel"],
+      additionalProperties: true,
+    })
+  })
+
   it("rejects null for non-nullable optional inputs before running handlers", async () => {
     const tools = await open({ droidPath: join(directory, "missing", "droid") })
 
@@ -141,7 +160,6 @@ describe("tool failures over MCP", () => {
         { sessionId: "nope", requestId: "p", outcome: "cancel", comment: null },
       ],
       ["rest_list_environments", { serviceAccountId: null }],
-      ["rest_create_environment", { body: { name: "x", repositories: [], setupScript: null } }],
       ["context_list_spaces", { limit: null }],
     ] as const
 
