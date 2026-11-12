@@ -22,27 +22,28 @@ export const droidPrompt = (): Layer.Layer<
 > =>
   McpServer.prompt({
     name: "droid",
-    description: "Read the droid skill: the turn loop, prompts, and delegation.",
+    description:
+      "Read the droid skill: token-efficient turns, dispatch, and all capability families.",
     content: () => Effect.succeed(SKILL_MD),
   })
 
 /** What `initialize` tells a client before it lists a single tool. */
 export const INSTRUCTIONS =
-  "This server drives Factory Droid on this host. Read the droid skill at " +
+  "Drive Factory Droid. Read " +
   SKILL_URI +
-  " before starting. A turn is session_create, then session_stream; poll " +
-  "session_events from the cursor it returns until the status is not running. " +
-  "Answer pending prompts with session_respond_permission, " +
-  "session_answer_question, or session_pick_options, and call session_close when " +
-  "the work is done. server_info reports the version and the autonomy cap."
+  " before starting. Reuse server_info profile/cap and known schemas. " +
+  "session_create -> session_stream -> session_events with each returned cursor; " +
+  "use long waitMs and consume only the outcome when enough, but handle pending prompts " +
+  "with session_respond_permission, session_answer_question, or session_pick_options. " +
+  "Stop on terminal status; session_close when done."
 
 /** The compact profile adds how to reach the operations it does not list. */
 export const COMPACT_INSTRUCTIONS =
   INSTRUCTIONS +
-  " Every other operation (daemon, hosted REST, Context, session administration) is not " +
-  "listed: find it with tools_search, read its schema with tools_describe, and run it with " +
-  "tool_call, or chain up to 20 with batch. Results over maxBytes return a preview and a " +
-  "ref; read the rest with result_read."
+  " All operations remain reachable: tools_search/tools_describe only for unknown names/inputs; " +
+  "tool_call or batch (up to 20, $from dependencies). Use select and small maxBytes; " +
+  "result_read only for needed data beyond the preview. Includes session administration, " +
+  "daemon/droid, hosted REST, and Context."
 
 export const instructionsFor = (profile: ToolProfile): string =>
   profile === "compact" ? COMPACT_INSTRUCTIONS : INSTRUCTIONS

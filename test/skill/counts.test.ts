@@ -2,9 +2,17 @@ import { readFileSync } from "node:fs"
 
 import { describe, expect, it } from "vitest"
 
+import { errorCode } from "../../src/droid/errors.ts"
+import { SKILL_FILES } from "../../src/generated/skill.ts"
 import { SURFACE } from "../../src/generated/surface.ts"
+import { MAX_BATCH_STEPS, META_TOOLS } from "../../src/tools/compact.ts"
 import { SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
 import { toolsFor } from "../../src/tools/index.ts"
+import {
+  DEFAULT_RESULT_BYTES,
+  MAX_RESULT_BYTES,
+  MIN_RESULT_BYTES,
+} from "../../src/tools/results.ts"
 import { testConfig } from "../support/config.ts"
 
 /** The numbers the README and the skill state must be the ones the server exposes. */
@@ -12,10 +20,94 @@ import { testConfig } from "../support/config.ts"
 const README = readFileSync("README.md", "utf8")
 const TOOL_FAMILIES = readFileSync("src/skill/droid/references/tool-families.md", "utf8")
 const SKILL = readFileSync("src/skill/droid/SKILL.md", "utf8")
+const COMPACT = readFileSync("src/tools/compact.ts", "utf8")
 
 const FAMILY_ROW = /^\| `([a-z]+)_` +\| (\d+) +\|/gm
 
 const names = Object.keys(toolsFor(testConfig()).toolkit.tools)
+const skillText = Object.values(SKILL_FILES).join("\n")
+const exposedNames = new Set([...names, ...META_TOOLS.map((tool) => tool.name)])
+
+// Wire methods, event types, and permission outcomes are not tool names or failure codes.
+const nonCodeIdentifiers = new Set([
+  ...SESSION_OWNED_METHODS.map((method) => method.slice("droid.".length)),
+  "assistant_text",
+  "pending_options",
+  "pending_permission",
+  "pending_question",
+  "prompt_resolved",
+  "tool_result",
+  "turn_completed",
+  "proceed_once",
+  "proceed_always",
+  "proceed_always_file",
+  "proceed_always_tools",
+  "proceed_always_server",
+  "proceed_report_false_positive",
+  "proceed_auto_run_low",
+  "proceed_auto_run_medium",
+  "proceed_auto_run_high",
+  "proceed_new_session_low",
+  "proceed_new_session_medium",
+  "proceed_new_session_high",
+  "proceed_auto_run",
+  "proceed_new_session",
+  "proceed_edit",
+])
+
+const failureSources = [
+  "src/tools/compact.ts",
+  "src/tools/generated.ts",
+  "src/tools/results.ts",
+  "src/tools/guards.ts",
+  "src/tools/session-prompts.ts",
+  "src/tools/session-mcp.ts",
+  "src/tools/rest-kit.ts",
+  "src/droid/turns.ts",
+  "src/droid/prompts.ts",
+  "src/droid/errors.ts",
+]
+
+const failureCodes = new Set([
+  errorCode(undefined),
+  ...failureSources.flatMap((path) =>
+    Array.from(
+      readFileSync(path, "utf8").matchAll(
+        path === "src/droid/errors.ts"
+          ? /^\s+[A-Z]\w+: "([a-z_]+)"/gm
+          : /(?:code:\s*|problem\(\s*|fail\(\s*)"([a-z_]+)"/g,
+      ),
+      (match) => match[1] ?? "",
+    ),
+  ),
+])
+
+const backtickedIdentifiers = (text: string): Array<string> =>
+  Array.from(text.matchAll(/`([a-z]+(?:_[a-z]+)+|batch)`/g), (match) => match[1] ?? "")
+
+const unknownOperations = (text: string): Array<string> => {
+  const mentioned = [
+    ...backtickedIdentifiers(text),
+    ...(text.match(/\b(?:server|session|daemon|droid|rest|context)_[a-z]+(?:_[a-z]+)*\b/g) ?? []),
+  ]
+
+  return [...new Set(mentioned)].filter(
+    (name) => !failureCodes.has(name) && !nonCodeIdentifiers.has(name) && !exposedNames.has(name),
+  )
+}
+
+const unknownFailureCodes = (text: string): Array<string> =>
+  [...new Set(backtickedIdentifiers(text))].filter(
+    (code) => !exposedNames.has(code) && !nonCodeIdentifiers.has(code) && !failureCodes.has(code),
+  )
+
+const numbersIn = (text: string, pattern: RegExp): Array<number> => {
+  const match = text.match(pattern)
+
+  expect(match, pattern.source).not.toBeNull()
+
+  return (match?.slice(1) ?? []).map(Number)
+}
 
 const computedFamilies = () => {
   const counts = new Map<string, number>()
@@ -79,5 +171,61 @@ describe("documented tool counts", () => {
     }
 
     expect(names).toContain("droid_update_session_settings")
+  })
+
+  it("names only operations that the server exposes", () => {
+    expect(unknownOperations(skillText)).toEqual([])
+
+    for (const tool of META_TOOLS) {
+      expect(backtickedIdentifiers(skillText)).toContain(tool.name)
+    }
+  })
+
+  it.each(["tools_seach", "tools_describ", "tool_cal", "result_reed"])(
+    "rejects the misspelled dispatch name %s",
+    (name) => {
+      expect(unknownOperations(skillText + "\n`" + name + "`")).toEqual([name])
+    },
+  )
+
+  it("documents the server-defined failure codes", () => {
+    for (const code of failureCodes) {
+      expect(skillText, code).toContain("`" + code + "`")
+    }
+  })
+
+  it("documents no invented failure codes", () => {
+    expect(unknownFailureCodes(skillText)).toEqual([])
+    expect(unknownFailureCodes(skillText + "\n`invented_failure_code`")).toEqual([
+      "invented_failure_code",
+    ])
+  })
+
+  it("pins documented dispatch bounds to the implementation", () => {
+    expect(numbersIn(TOOL_FAMILIES, /Range: (\d+)\.\.(\d+) bytes; default: (\d+)/)).toEqual([
+      MIN_RESULT_BYTES,
+      MAX_RESULT_BYTES,
+      DEFAULT_RESULT_BYTES,
+    ])
+    expect(numbersIn(TOOL_FAMILIES, /Start at `maxBytes: (\d+)`/)).toEqual([MIN_RESULT_BYTES])
+    expect(numbersIn(TOOL_FAMILIES, /`batch` runs (\d+)\.\.(\d+) steps/)).toEqual([
+      1,
+      MAX_BATCH_STEPS,
+    ])
+    expect(numbersIn(TOOL_FAMILIES, /Batch defaults to (\d+) bytes/)).toEqual([
+      (numbersIn(COMPACT, /const DEFAULT_BATCH_BYTES = (\d+) \* DEFAULT_RESULT_BYTES/)[0] ?? 0) *
+        DEFAULT_RESULT_BYTES,
+    ])
+    expect(numbersIn(TOOL_FAMILIES, /step to (\d+)\.\.(\d+)/)).toEqual([
+      MIN_RESULT_BYTES,
+      MAX_RESULT_BYTES,
+    ])
+    expect(numbersIn(TOOL_FAMILIES, /`limit` \(default (\d+), maximum (\d+)\)/)).toEqual([
+      ...numbersIn(COMPACT, /const DEFAULT_SEARCH_LIMIT = (\d+)/),
+      ...numbersIn(COMPACT, /const SEARCH_LIMIT = (\d+)/),
+    ])
+    expect(numbersIn(TOOL_FAMILIES, /`tools_describe \{ names \}` accepts (\d+)\.\.(\d+)/)).toEqual(
+      [1, ...numbersIn(COMPACT, /const DESCRIBE_LIMIT = (\d+)/)],
+    )
   })
 })

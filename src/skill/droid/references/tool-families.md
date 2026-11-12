@@ -1,152 +1,223 @@
-# Tool families
+# Tool families and dispatch
 
-This server publishes 288 tools: 158 generated from the SDK's method surface and
-130 hand-written for the turn loop, prompts, the hosted Factory API, and the
-Context API. They are named by prefix, so a prefix is all you need to find one.
+The full profile publishes 288 tools: 158 generated from the SDK's method surface and
+130 hand-written for local sessions, hosted REST, and Context.
+Compact advertises `server_info`, nine turn/prompt tools, and five dispatch tools
+(15 total); all 288 operations remain callable by name.
 
-The release surface was checked on 2026-11-13 against Droid CLI `1.9.0` and
-SDK `0.10.0`. The SDK declares 165 wire methods and protocol `1.269.0`; CLI
-release numbers are separate from protocol versions.
+| Prefix     | Count | Backend/capability                                              |
+| ---------- | ----- | --------------------------------------------------------------- |
+| `daemon_`  | 130   | Daemon SDK methods.                                             |
+| `droid_`   | 28    | Remaining session SDK methods, transported through the daemon.  |
+| `session_` | 32    | Local hub turns, prompts, administration.                       |
+| `rest_`    | 79    | Hosted Factory REST API.                                        |
+| `context_` | 18    | Prem Context API.                                               |
+| `server_`  | 1     | `server_info`: version, protocols, profile/counts, cap, daemon. |
 
-In the default compact profile, `tools/list` shows only the turn loop and five
-dispatch tools. Every name below is still an operation: find it with
-`tools_search`, read its schema with `tools_describe`, and run it with
-`tool_call { name, arguments }` or as a step of `batch`. In the full profile
-each one is also its own MCP tool.
+Generated names replace dots with underscores: `daemon.sf.list_workstreams`
+becomes `daemon_sf_list_workstreams`. Inputs and replies use SDK schemas.
+The SDK has 35 `droid.*` methods. Seven of them belong to the session loop:
+`initialize_session`, `add_user_message`, `interrupt_session`, `close_session`,
+`request_permission`, `ask_user`, `pick_options`. Use the local wrappers for
+that loop; these seven have no generated `droid_*` tool.
 
-| Prefix     | Count | Source                                                                          |
-| ---------- | ----- | ------------------------------------------------------------------------------- |
-| `daemon_`  | 130   | Generated, one per `daemon.*` SDK method.                                       |
-| `droid_`   | 28    | Generated, one per `droid.*` SDK method that the `session_*` tools do not own.  |
-| `session_` | 32    | Hand-written. The local turn loop, prompts, and per-session administration.     |
-| `rest_`    | 79    | Hand-written. The hosted Factory API on `FACTORY_BASE_URL`.                     |
-| `context_` | 18    | Hand-written. The Context API on the Prem origin in `FACTORY_CONTEXT_BASE_URL`. |
-| `server_`  | 1     | `server_info`.                                                                  |
+## Discover only what is missing
 
-The SDK has 35 `droid.*` methods. Seven of them belong to the session loop
-(`initialize_session`, `close_session`, `add_user_message`, `interrupt_session`,
-`request_permission`, `ask_user`, `pick_options`), so the `session_*` tools
-cover them and they do not appear as `droid_*` tools. Using both would mean two
-ways to drive one session. `droid_update_session_settings` is still exposed,
-next to the hand-written `session_update_settings`.
+`tools_search` matches all query words against names/descriptions; narrow with
+`family` (`server|session|daemon|droid|rest|context`), `readOnly`, and a small
+`limit` (default 15, maximum 50). Page with returned `nextOffset` as `offset`
+only if needed. `tools_describe { names }` accepts 1..20 names and returns
+descriptions, `inputSchema`, and policy; unknown names appear in `unknown`.
+Reuse these schemas. The catalogs inside a session (`session_list_tools`) or
+configured MCP servers (`daemon_list_mcp_tools`) are different catalogs.
 
-## Finding a tool
+`readOnly` and `destructive` hints describe the operation, not user consent.
+Confirm destructive work unless already authorized; the server does not ask
+on the client's behalf. `tool_call` and `batch` have broad dispatch hints:
+inspect the underlying operation's policy.
 
-Generated descriptions name the action and the wire method; the input schema
-names the fields:
+## Bounded results and batch
 
-```text
-Git push (SDK method daemon.git_push). Destructive; confirm before calling.
+`tool_call { name, arguments?, select?, maxBytes? }` runs the full handler,
+including validation and autonomy checks. Start at `maxBytes: 1024`; increase
+only when needed. Range: 1024..262144 bytes; default: 16384.
+`select` is one RFC 6901 JSON Pointer (empty means whole result), applied before
+bounding. It is not JSONPath, an event filter, or a multi-field projection.
+
+`batch` runs 1..20 steps sequentially in one call, not in parallel or as a
+transaction. Example after learning the schemas:
+
+```json
+{
+  "steps": [
+    {
+      "id": "new",
+      "name": "session_create",
+      "arguments": { "cwd": "/absolute/project", "autonomyLevel": "low" },
+      "select": "/sessionId"
+    },
+    {
+      "name": "session_rename",
+      "arguments": { "sessionId": { "$from": "new", "path": "/sessionId" }, "title": "Retry fix" }
+    }
+  ],
+  "maxBytes": 2048
+}
 ```
 
-Hand-written tools that delete, revoke, rotate, invite, remove, cancel, or
-change secrets, privacy, or CI workflows carry the same sentence,
-"Destructive; confirm before calling." Ask the user before calling one. The
-server does not ask for you. Every tool and every `tools_search` hit also
-carries `readOnly` and `destructive` hints.
+`$from` reads an earlier step's **full** result before `select` or truncation;
+omit `path` for that entire result. Ids default to string indices and must
+be unique. Stops on first failure unless `stopOnError: false`; completed
+steps stay done. Inspect step statuses (`ok|failed|skipped`) and counts.
+Batch defaults to 32768 bytes, divides its budget among steps, then clamps each
+step to 1024..262144. `maxBytes` is not a hard total-response cap for a batch:
+step envelopes and that minimum add overhead.
 
-Search rather than asking for the list. `tools_search { query: "git branch" }`
-returns matching names with one-line summaries; filter by `family` or
-`readOnly`. `session_list_tools` lists what a running session has, and
-`daemon_list_mcp_tools` lists tools a configured MCP server offers. Read
-`tools_describe` for the operation you are about to call.
+An oversized result returns `truncated`, `totalBytes`, `preview`, and `ref`
+instead of `result`. The ref stores the selected subtree, not automatically
+the unselected result. Recover only needed data:
 
-## Large results and chaining
+- `result_read { ref, select: "/needed", length: 1024 }` selects inside the
+  stored JSON and returns `selected` (itself bounded).
+- For a byte page, use `{ ref, offset: 0, length: 1024 }`; follow `nextOffset`
+  unchanged only while more text is needed. `chunk` is JSON text, not an object.
 
-`tool_call` and `batch` return `{ result }` when the result fits `maxBytes`
-(16384 by default). A larger result returns `truncated`, `totalBytes`, a
-`preview`, and a `ref`. Pass `select` (a JSON Pointer such as `/models/0`) to
-return only part of a result, or read the stored result with
-`result_read { ref, offset }`, following `nextOffset` until it is absent, or
-`result_read { ref, select }`. Refs last 15 minutes after their last use.
+Refs are key-scoped, expire 15 minutes after last use, and may be evicted under
+the 64 MiB store limit. On `invalid_select` after dispatch, the operation
+already ran: use the error's `ref` for the full result, rather than rerunning.
+If a ref is lost, repeat a safe read or reconcile a write's state first.
 
-In `batch`, `{ "$from": "create", "path": "/sessionId" }` as an argument value
-is replaced by that part of step `create`'s full result. Steps run in order and
-stop at the first failure unless `stopOnError` is false; completed steps are not
-undone.
+## Capability index
 
-## Naming
+Search the indicated family and subject, then describe only unfamiliar inputs.
+This index covers groups, not an eager dump of all schemas.
 
-Generated names replace every dot in the method with an underscore, so
-`daemon.sf.list_workstreams` becomes `daemon_sf_list_workstreams`. A generated
-tool takes exactly the method's own parameters, validated against the schema the
-SDK declares, and returns the daemon's reply as JSON.
+### Local session administration
 
-Tool names are stable: they come from the method name, not from a hand-kept list.
+Beyond the direct loop and prompt tools:
 
-## Daemon families
+- One-shot: `session_run` via dispatch in compact; see [session loop](session-loop.md).
+- Settings/directory/spec/title: `session_update_settings`, `session_change_cwd`,
+  `session_enter_spec_mode`, `session_exit_spec_mode`, `session_rename`.
+- Context/history: `session_get_context_stats`, `session_compact`, `session_fork`,
+  `session_get_rewind_info`, `session_rewind`. Inspect rewind effects before confirming.
+- MCP configuration/auth: `session_list_mcp_servers`, `session_list_mcp_tools`,
+  `session_add_mcp_server`, `session_remove_mcp_server`, `session_toggle_mcp_server`,
+  `session_authenticate_mcp_server`, `session_submit_mcp_auth_code`,
+  `session_refresh_connector_tool_catalog`.
+- Tools/skills/models: `session_list_tools`, `session_list_skills`,
+  `session_set_skill_disabled`, `session_models`. Request skill content only if needed.
 
-| Names                                                                                     | What they do                                 |
-| ----------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `daemon_list_available_sessions`, `daemon_list_opened_sessions`, `daemon_search_sessions` | Find sessions the daemon knows.              |
-| `daemon_list_automations`, `daemon_create_automation`, `daemon_run_automation`            | Scheduled work.                              |
-| `daemon_list_managed_worktrees`, `daemon_list_git_branches`, `daemon_git_commit`          | Repositories and worktrees.                  |
-| `daemon_list_mcp_servers`, `daemon_add_mcp_server`, `daemon_toggle_mcp_tool`              | The daemon's MCP configuration.              |
-| `daemon_list_models`, `daemon_list_skills`, `daemon_list_commands`                        | What this installation offers.               |
-| `daemon_sf_*`                                                                             | Workstream activities, changes, and signals. |
+### Daemon (`daemon_`)
 
-## Hosted REST families
+Search subjects:
 
-Every `rest_*` tool sends exactly one request to `FACTORY_BASE_URL` with
-`FACTORY_API_KEY`. Path and query parameters are named inputs; request bodies
-go in `body`, whose required fields are listed in the schema and whose other
-members are forwarded as given. Every tool also takes an optional `query`
-object for extra query parameters.
+- Session/message/turn/queue: initialize/load/close/interrupt, list opened/available,
+  search, messages/outcome, queued-message resolution, archive/unarchive, rename,
+  fork, compact, context breakdown, rewind, worker termination.
+- Settings/model/preferences/trust: defaults/session settings, cwd validation/change,
+  folder trust, models/custom models, user preferences, cache warmup, authentication.
+- Git/worktree/semantic diff/pull request: branches/checkout, diff/file contents,
+  commit/push/create PR, PR status/layer-manifest generation, managed worktrees
+  and setup profiles, deletion inspection/cleanup, semantic diff generation/cache.
+- Automation/cron: config, create/list/update/delete/fork/run/dispatch, schedule/prompt/
+  model/privacy, pause/resume/history/visuals; cron create/list/update/delete,
+  per-session hold/resume.
+- Terminal/workspace/files: terminal create/list/write/resize/close, workspace
+  file read/write, file list/search, checkout metadata.
+- MCP: registry/config, servers/tools, add/remove/toggle, authentication,
+  submit code/error/cancel/clear.
+- Skill/command/plugin/marketplace: list skills/commands, disable skills;
+  plugin discover/install/update/enable/uninstall; marketplace list/add/update/remove.
+- Mission readiness: inspect and acknowledge warnings.
+- `sf`: workstream create/get/list/update/delete, content hydrate/publish,
+  activities/reviews, changes, signals, events/read/unread.
+- Bug report: submit diagnostics.
 
-| Names                                          | What they cover                                                |
-| ---------------------------------------------- | -------------------------------------------------------------- |
-| `rest_*_computer*`, `rest_*_machine_template*` | Cloud computers, their files, metrics, and templates (18).     |
-| `rest_*_environment*`                          | Environments, their sources, default, and builds (13).         |
-| `rest_*_remote_session*`                       | Hosted sessions on a computer and their messages (10).         |
-| `rest_*_wiki*`                                 | Wiki runs, pages, search, export, and privacy (11).            |
-| `rest_*_ci_*`                                  | CI automation repositories, jobs, runs, and workflow PRs (6).  |
-| `rest_*_organization_*`                        | Members, invitations, usage limits, secrets, and history (12). |
-| `rest_*_service_account*`                      | Service accounts and their API keys (9).                       |
+### Session SDK (`droid_`)
 
-## Context families
+Daemon transport, daemon-shaped session ids. Capabilities: load, append
+messages, resolve queued messages, update settings/cwd/title, compact/fork/
+context stats/rewind, kill workers, list tools/skills and disable skills,
+MCP registry/servers/tools/configuration/authentication/tool toggles,
+connector-catalog refresh, and bug reports. Prefer `session_*` wrappers when
+working with a local hub handle.
 
-Every `context_*` tool sends one request to `FACTORY_CONTEXT_BASE_URL` with
-`FACTORY_API_KEY` and the headers in `FACTORY_CONTEXT_HEADERS`. Spaces hold
-documents (text, or binary files uploaded in parts) and stored sessions
-(append-only JSONL records). Stored sessions only hold records; nothing runs.
+### Hosted REST (`rest_`)
 
-Versions and sequences are decimal strings, never JSON numbers, so counters past
-2^53 keep their precision. Pass them back exactly as you received them.
+- Computer/machine template: providers/templates, computer CRUD/bulk creation,
+  lookup by name, restart/refresh/activity/metrics, file transfers.
+- Environment: CRUD, defaults/ensure-default, sources, build statuses/diagnostics/
+  attempt diagnostics, cancel/retry builds or dependency installation.
+- Remote session: create/get/list/update/delete, messages/list/get/post, children, interrupt.
+- Wiki: create/get/list/delete runs, pages/search/history/export, privacy,
+  upload access and video-upload URLs.
+- CI: repository owners/repositories/scan, jobs/runs, workflow editing.
+- Organization: users/invitations/removal, global/group/user limits,
+  computer secrets, enterprise-control history.
+- Service account: CRUD, API-key list/create/revoke/rotate.
 
-## Paging
+Each operation sends one request to `FACTORY_BASE_URL` using `FACTORY_API_KEY`.
+Path/query fields are named inputs; payload goes in `body` where the schema
+defines it. Some operations, such as computer creation, use named body fields
+instead. Optional `query` adds query parameters. Describe unfamiliar inputs.
+Hosted list tools that accept cursors return `pagination.nextCursor`; pass it
+back as `cursor` unchanged, only when another page is needed.
 
-One call returns one page. Hosted list tools that take `cursor` return
-`pagination.nextCursor`; pass it as `cursor` for the next page. Context list
-tools return `nextCursor` when there is more; pass it as `cursor`.
-`context_read_session_records` returns `nextCursor` and `hasMore`; pass
-`nextCursor` as the next `afterSequence`. Cursors may contain reserved
-characters, and the server encodes them, so pass them unchanged.
+Transfer tools return temporary URLs; the server does not fetch them.
+Upload computer bytes to the URL, then call `rest_complete_computer_file_upload`.
+`rest_export_wiki_run` returns a ZIP as base64 metadata/data (JSON replies pass
+through). Minted service-account key values are removed and replaced with
+`notice`; they cannot be recovered here. Configured API/header secrets and
+submitted organization-secret values are redacted from results/errors.
 
-## Redaction
+### Stored Context (`context_`)
 
-Results and errors never contain `FACTORY_API_KEY`, the MCP keys, or a
-`FACTORY_CONTEXT_HEADERS` value. `rest_create_service_account_api_key` and
-`rest_rotate_service_account_api_key` drop the minted key value and return a
-`notice` instead. The value cannot be recovered through this server, so mint
-keys where the user can read them directly when they need the value. Secret
-values sent to `rest_update_organization_computer_secrets` are never echoed back,
-even in an error.
+Space create/get/list; document create/get/get-by-path/list/update/delete;
+file create/upload-part/read-part/delete; session register/get/list/append/
+read-records. Context lists page with `nextCursor` as `cursor`; record reads
+instead use `afterSequence`. See [backend workflows](delegation.md) before
+writing versions, sequences, or files.
 
-## Transfers
+## Failures
 
-`rest_create_computer_file_upload`, `rest_create_computer_file_download`, and
-`rest_create_wiki_video_upload_url` return temporary transfer URLs, which the
-server never fetches; move the bytes yourself, then call
-`rest_complete_computer_file_upload` for an upload. `rest_export_wiki_run`
-returns a ZIP as `{ encoding: "base64", contentType, sizeBytes, data }` (a JSON
-answer passes through as is), and `context_read_file_part` returns one part of a
-file as base64.
+Tools report `{ code, message }`; turn failures can also appear in `error`
+events or `result.reason`. Branch on code, inspect the message, and reconcile
+state before retrying a mutation after a transport error or timeout.
 
-## Prompts and failures
+- `unknown_tool`: search the correct operation name.
+- `invalid_arguments`, `invalid_params`: correct inputs against the known schema;
+  describe it only if missing/stale.
+- `invalid_select`: correct the pointer; after dispatch use the attached `ref`,
+  because work completed.
+- `invalid_reference`: use an earlier successful step id and a path in its full result.
+- `invalid_offset`: use the previous page's `nextOffset` (UTF-8 boundary).
+- `result_not_found`: ref expired, evicted, or belongs to another key.
+  Repeat only safe reads; reconcile writes.
+- `internal_error`: unexpected dispatch failure; inspect state before retrying.
+- `invalid_cwd`, `invalid_prompt`: use an existing absolute directory or a nonblank prompt.
+- `autonomy_exceeds_cap`: lower requested authority to the reported cap.
+- `session_not_found`, `session_closed`: wrong/closed/dead handle; inspect events
+  if retained, close a dead child, create a new session if needed.
+- `session_busy`: poll the existing turn or interrupt it before sending another.
+- `prompt_not_found`, `prompt_mismatch`: refresh state or use the answer tool
+  matching the pending kind.
+- `invalid_outcome`, `invalid_question_index`, `invalid_selection`,
+  `edited_spec_required`: use offered choices/indices/ids, or supply nonempty
+  `editedSpecContent`; see [prompts](prompts.md).
+- `process_exit`: CLI died (event code); the session is unusable. Inspect failure and close.
+- `exec_failed`, `exec_timeout`: child launch/request failed or timed out.
+  Inspect current turn/file state before rerunning.
+- `daemon_unavailable`, `daemon_timeout`, `websocket_error`: daemon/socket
+  unavailable or request timeout. Restore connectivity, inspect state, then retry only if safe.
+- `daemon_auth_rejected`, `factory_api_key_missing`: repair server-side credentials/authentication.
+- `daemon_protocol_error`: invalid wire reply/schema; check CLI/SDK compatibility.
+- `rest_rejected`: HTTP 4xx, fix input/access. For 409 reread and reconcile state.
+- `rest_unavailable`: network/5xx/timeout/malformed JSON/refused redirect;
+  retry safe reads later, reconcile uncertain writes.
+- `context_base_url_missing`: configure the Prem origin; no Context request was sent.
 
-`session_*`, `rest_*`, and `context_*` tools report failures as
-`{ "code": ..., "message": ... }`. The code is stable and meant to be branched
-on; the message is for a human. `rest_rejected` is an upstream 4xx and keeps its
-detail; `rest_unavailable` is a 5xx, a timeout, a network error, malformed JSON,
-or a refused redirect. Generated tools report the daemon's own error code where
-it has one. All of these are documented in `SKILL.md`.
+`config_invalid` is a startup/CLI configuration code; `unknown_error` is the
+fallback mapping for an unrecognized application error. Upstream CLI error
+events can carry additional codes; this list covers server-defined codes,
+not every future upstream error.

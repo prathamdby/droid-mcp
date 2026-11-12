@@ -1,151 +1,78 @@
 ---
 name: droid
-description: Drive Factory Droid on this host through MCP tools. Use for coding
-  tasks, long-running daemon sessions, permission prompts, hosted sessions on
-  Factory computers and Environments, and stored Context documents and
-  sessions.
+description: Drive Factory Droid through MCP for local coding turns and prompts,
+  daemon sessions and automation, hosted computers and sessions, or stored
+  Context documents, files, and transcripts.
 ---
 
 # Droid
 
-This server runs one Droid per session on the host it is installed on. A
-session is a child process that owns a working directory, an autonomy level,
-and a model. You talk to it in turns.
+## Route once
 
-## The turn loop
+Call `server_info` once for `profile`, counts, and `maxAutonomy`; reuse known
+schemas and settings. Choose the backend before choosing an operation:
 
-1. `session_create` asks for a `cwd` and an `autonomyLevel`. Autonomy is
-   required: the server will not guess, and it rejects a level above
-   `server_info.maxAutonomy`.
-2. `session_stream` sends the prompt. It waits `waitMs` (20 s by default) for
-   the turn, then returns `completed`, `failed`, `interrupted`, or `running`.
-3. If it returned `running`, call `session_events` with the `cursor` it
-   returned. Repeat until the status is `completed`, `failed`, or `interrupted`.
-   Every event has a `seq`; the cursor is the next sequence number, one past
-   the last `seq`, so pass it back unchanged and nothing repeats.
-4. When the turn is done, `session_close` stops the process. A `running` result
-   keeps the session until you close it. `session_run` closes the session for
-   you unless it returns `running`; then poll, answer prompts, and close.
-   Sessions idle for 30 minutes are reaped for you, but close what you opened.
+| Backend | Family                | Use                                                                                      |
+| ------- | --------------------- | ---------------------------------------------------------------------------------------- |
+| Local   | `session_*`           | Coding turns in a `droid exec` child on this host; client answers prompts.               |
+| Daemon  | `daemon_*`, `droid_*` | Daemon-managed sessions, automation, git/worktrees, terminals, configuration.            |
+| Hosted  | `rest_*`              | Factory computers, Environments, remote sessions, wiki, CI, organization administration. |
+| Stored  | `context_*`           | Spaces, documents, files, append-only transcripts. Nothing runs.                         |
 
-`session_interrupt` stops a turn that is going the wrong way. `session_list`
-shows the live sessions with their status and next cursor.
+Keep ids within their backend. For daemon authority, hosted provisioning, or
+Context writes, read [delegation](references/delegation.md) before acting.
 
-## Reaching every other operation
+## Spend fewer tokens
 
-The compact profile lists only the turn loop. The daemon, hosted REST,
-Context, and session administration operations are found with
-`tools_search`, described with `tools_describe`, and run with `tool_call`
-or `batch`. Results over `maxBytes` return a `ref` for `result_read`.
-`server_info.profile` says which profile is running.
+- Reuse tool names and schemas already in context. Search only an unknown
+  capability; describe only the operations whose inputs you still need.
+- In compact, prefer `batch` for related calls, with `$from` for dependencies.
+  Return only the needed subtree with `select` and start with `maxBytes: 1024`.
+  Page a stored result only when its preview or selected value is insufficient.
+- Default to fire-and-forget (deferred consumption): retain status/cursor and
+  handle prompts; consume only the terminal result or last assistant text when
+  enough. Use long `waitMs` instead of repeated short timeouts.
+  Optionally stream intermediate events to observe critical tasks, or when
+  progress, debugging, or interaction matters.
+- Omit unused optional inputs. Send `null` only where the schema permits it.
+- Confirm destructive operations unless the user already authorized them.
+  Dispatch does not bypass policy or obtain consent for you.
 
-Omit optional inputs when unused. Do not send `null` unless the input schema
-explicitly allows it, such as `rest_update_environment.body.setupScript`.
+## Local turn
 
-## Reading a turn
+1. `session_create` with absolute existing `cwd`, explicit `autonomyLevel`
+   (`off|low|medium|high`, within `maxAutonomy`), and optional `modelId`,
+   `reasoningEffort`, `restrictToolIds`, or `disabledToolIds`. Retain `sessionId`.
+2. `session_stream` sends `prompt`; retain its `cursor`. While `status` is
+   `running`, call `session_events` with that cursor unchanged, then replace
+   it with the new returned cursor. It is the next sequence number, not the
+   last event's `seq`.
+3. Answer `pending_permission`, `pending_question`, and `pending_options`
+   before their `deadline`. Read [prompts](references/prompts.md) when one
+   appears, even if you otherwise ignore intermediate events.
+4. Stop polling on `completed`, `failed`, or `interrupted`. Check `result.reason`
+   and any `error` event; verify the requested work. Reuse the session for
+   another turn or `session_close` when done. Close every session you open.
 
-| Status        | Meaning                                                                                       |
-| ------------- | --------------------------------------------------------------------------------------------- |
-| `completed`   | Droid finished the turn. `result` carries the reason, token usage, and any structured output. |
-| `failed`      | The turn ended in an error. The `error` event says why; `process_exit` means the CLI died.    |
-| `interrupted` | The turn was stopped or a permission was denied. The session stays usable.                    |
-| `running`     | Still working. Poll `session_events` from the cursor. The session stays open.                 |
+`session_interrupt` stops a turn; `session_list` recovers live ids/status/cursors.
+One session runs one turn at a time. Read [session loop](references/session-loop.md)
+for wait behavior, event limits, streaming alternatives, and one-shot
+`session_run` (in compact, call it through `tool_call`, not as a listed tool).
 
-Events are `assistant_text`, `thinking`, `tool_call`, `tool_result`, `error`,
-`turn_completed`, `prompt_resolved`, and the three prompt events. Long text is
-capped at 4096 UTF-8 bytes and the buffer holds 500 events or 256 KiB;
-`truncated: true` means you started above what is retained, so re-read from the
-`cursor` you were given rather than from `0`.
+## Compact dispatch
 
-## Prompts
+Compact advertises 15 tools: `server_info`, nine local turn/prompt tools, and
+`tools_search`, `tools_describe`, `tool_call`, `batch`, `result_read`.
+All 288 operations remain reachable. Full advertises each operation directly;
+the five dispatch tools are compact-only.
 
-Droid stops mid-turn to ask. The event tells you which tool to call:
+For an unknown operation: `tools_search { query, family?, readOnly?, limit }`
+(start with a small limit), then `tools_describe { names }` only if its schema
+is unknown. Run `tool_call { name, arguments, select?, maxBytes? }` or
+`batch { steps, maxBytes? }`. Selection is one JSON Pointer, not a field list
+or event filter. A truncated response carries a `ref` for `result_read`.
 
-| Event                | Answer with                                                     |
-| -------------------- | --------------------------------------------------------------- |
-| `pending_permission` | `session_respond_permission` with an `outcome` the event listed |
-| `pending_question`   | `session_answer_question` with one answer per question index    |
-| `pending_options`    | `session_pick_options` with row ids from the event              |
-
-Each event carries a `requestId` and a `deadline`. A prompt answered after the
-deadline, or never answered, is resolved by the server and the turn continues
-without you. Read `references/prompts.md` before answering your first one.
-
-## Before you start
-
-`server_info` reports the version, the tool count, the autonomy cap, and the
-daemon this server is supervising. Call it first: the autonomy cap decides what
-`session_create` will accept.
-
-The cap also bounds `session_run`, the permission outcomes a local session
-lists, and an explicit authority field on a generated call. `daemon_initialize_session`
-and `droid_initialize_session` copy an omitted `autonomyLevel` or `autonomyMode`
-from one `daemon_get_default_settings` snapshot onto that request. A snapshot
-value inside the cap is kept, and a higher one is sent as the cap. A missing
-level is sent as `off` and a missing mode as `normal`. When the cap is below
-`high`, an omitted `skipPermissionsUnsafe` is sent as `false`. That call reads
-the snapshot once and leaves persistent defaults unchanged. Initialize has no
-`subagentAutonomyLevel` field. `daemon_load_session` and `droid_load_session`
-send no saved authority, and work already queued there can be running. Use
-`session_create` or `session_run` when the work has to stay inside the cap.
-
-## Four session backends
-
-Four tool families use the word "session", and their ids are not
-interchangeable. Pick the backend first, then stay inside its family.
-
-| Backend        | Tools                    | Where the work runs                                                                                                                                                               |
-| -------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local session  | `session_*`              | A `droid exec` child process on this host, with prompts you answer. Use it for anything that edits files here.                                                                    |
-| Daemon         | `daemon_*`, `droid_*`    | The long-running `droid daemon` on this host: its sessions, automations, worktrees, MCP servers, and plugins. Use it to look across sessions or schedule work, not to run a turn. |
-| Hosted session | `rest_*_remote_session*` | A Factory cloud computer. Hosted sessions are enabled for selected organizations only.                                                                                            |
-| Stored session | `context_*`              | Nowhere. The Context API stores session records and documents; nothing runs.                                                                                                      |
-
-- A `session_create` id works only with `session_*` tools. `daemon_load_session`
-  will not find it, and a hosted session id is not a local `session_*` handle.
-- `daemon_initialize_session` copies omitted `autonomyLevel`, `autonomyMode`,
-  and, when the cap is below `high`, `skipPermissionsUnsafe` from one
-  `daemon_get_default_settings` snapshot. A lower observed default is kept. A
-  missing field becomes `off`, `normal`, or `false`. The call does not change
-  persistent defaults. `daemon_load_session` and `droid_load_session` open the
-  saved authority, which list and message reads do not show, and initialize has
-  no `subagentAutonomyLevel` field. Use `session_create` or `session_run` when
-  the work must stay inside `server_info.maxAutonomy`.
-- `droid_*` tools call SDK session methods that `session_*` does not already
-  wrap, such as `droid_update_session_settings`, `droid_compact_session`, and
-  `droid_execute_rewind`. They take a daemon `sessionId`.
-- A hosted session needs a computer. The usual path is an Environment, then a
-  computer built from it, then the session, then its messages, each as a
-  separate call. `references/delegation.md` walks through it.
-- `context_*` tools need `FACTORY_CONTEXT_BASE_URL`, the Prem origin that serves
-  the Context API. Use them to keep notes, files, and session transcripts that
-  another agent can read later.
-
-## Failures worth knowing
-
-| Code                       | Meaning                                                                                                                             |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomy_exceeds_cap`     | Asked for more autonomy than `server_info.maxAutonomy`.                                                                             |
-| `invalid_cwd`              | The directory does not exist or is not a directory.                                                                                 |
-| `session_not_found`        | The session id is wrong or already closed.                                                                                          |
-| `session_closed`           | The process exited or the session is shutting down. Poll `session_events` for the failure, then close it.                           |
-| `session_busy`             | A turn is already running in that session; wait or interrupt.                                                                       |
-| `prompt_not_found`         | That prompt is gone. Read `session_events` for the current state.                                                                   |
-| `prompt_mismatch`          | The tool does not match the pending prompt kind.                                                                                    |
-| `daemon_unavailable`       | The `droid daemon` is not running and could not be started.                                                                         |
-| `factory_api_key_missing`  | The `rest_*` and `context_*` tools and daemon auth need `FACTORY_API_KEY`.                                                          |
-| `rest_rejected`            | The hosted or Context API refused the request (HTTP 4xx). The message keeps the upstream detail; fix the input, do not retry blind. |
-| `rest_unavailable`         | The upstream failed (HTTP 5xx), timed out, could not be reached, answered with malformed JSON, or redirected. Retry later.          |
-| `context_base_url_missing` | `FACTORY_CONTEXT_BASE_URL` is not set, so no `context_*` tool can run. No request was sent.                                         |
-
-A rejected Context write on a version or sequence conflict (HTTP 409) names
-`code`, `requestId`, `expectedVersion`, `currentVersion`, and
-`currentSequence` where the API returned them. Reread, then decide; do not
-resend the same write.
-
-## References
-
-- `references/session-loop.md`: the loop with real arguments and cursors.
-- `references/prompts.md`: the three prompts, outcomes, and deadlines.
-- `references/delegation.md`: the four backends, and the Environment-to-hosted-session flow.
-- `references/tool-families.md`: what the 288 tool names mean, how to find one, and how to read large results.
+Read [tool families](references/tool-families.md) when discovering a capability,
+chaining calls, recovering a result, or handling a failure. It explains
+what the 288 tool names mean, indexes every capability family, and groups the server's
+failure codes with recovery actions.
