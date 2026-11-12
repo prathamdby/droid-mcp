@@ -32,7 +32,8 @@ Context writes, read [delegation](references/delegation.md) before acting.
 - Default to fire-and-forget (deferred consumption): retain status/cursor and
   handle prompts; consume only the terminal result or last assistant text when
   enough. Use long `waitMs` instead of repeated short timeouts.
-  Stream intermediate events when progress, debugging, or interaction matters.
+  Optionally stream intermediate events to observe critical tasks, or when
+  progress, debugging, or interaction matters.
 - Omit unused optional inputs. Send `null` only where the schema permits it.
 - Confirm destructive operations unless the user already authorized them.
   Dispatch does not bypass policy or obtain consent for you.

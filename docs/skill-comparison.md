@@ -40,7 +40,8 @@ Wall time includes creation through close and the independent file read.
 
 Choose long-wait outcome consumption as the default: 3775 bytes versus 5426
 bytes, 30.43% less, and 19 calls versus 38. Mean bytes: 1887.5 versus 2713.
-Use incremental streaming when live progress, debugging, or interaction matters.
+Use incremental streaming to observe critical tasks, or when live progress,
+debugging, or interaction matters.
 
 This compares these polling policies, not a server-side event-free mode.
 `session_events` wakes on any event, even with a long wait. Ignoring event text
@@ -67,8 +68,7 @@ The first harness attempt created four idle sessions, then failed before
 sending any task because Script did not expose `TextEncoder`. Those four were
 recovered by their disposable cwd and closed. They are excluded setup attempts,
 not failed task runs. The successful harness used a pure-JavaScript UTF-8
-counter. Raw per-call numbers were also saved to
-`/tmp/droid-mcp-compare-results.json`.
+counter. The table above preserves the per-call measurements in the repository.
 
 ## Writing guidance
 

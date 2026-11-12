@@ -53,7 +53,7 @@ transaction. Example after learning the schemas:
     {
       "id": "new",
       "name": "session_create",
-      "arguments": { "cwd": "/home/me/src/app", "autonomyLevel": "low" },
+      "arguments": { "cwd": "/absolute/project", "autonomyLevel": "low" },
       "select": "/sessionId"
     },
     {

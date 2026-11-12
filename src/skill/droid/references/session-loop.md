@@ -3,7 +3,7 @@
 ## Start and wait
 
 ```json
-{ "cwd": "/home/me/src/app", "autonomyLevel": "low", "modelId": "auto" }
+{ "cwd": "/absolute/project", "autonomyLevel": "low", "modelId": "auto" }
 ```
 
 `session_create` returns `{ sessionId, cwd, settings }`. Send one prompt:
@@ -33,8 +33,8 @@ This is deferred
 consumption, not an event-free server mode. Intermediate events still arrive
 and cost response bytes. To retain less in the agent context, filter them in
 the client's execution layer, while preserving prompt handling and the last
-assistant text. Stream events incrementally when progress, debugging, or
-human interaction is needed.
+assistant text. Optionally stream events incrementally to observe critical
+tasks, or when progress, debugging, or human interaction is needed.
 
 In four isolated edits with `modelId: "auto"` (two per approach), this long-wait
 approach returned 1992/1783 bytes versus 2713/2713 for 1-second incremental
@@ -80,7 +80,7 @@ and `waitMs`. In compact use:
 {
   "name": "session_run",
   "arguments": {
-    "cwd": "/home/me/src/app",
+    "cwd": "/absolute/project",
     "autonomyLevel": "low",
     "prompt": "Explain the retry helper briefly",
     "waitMs": 20000
