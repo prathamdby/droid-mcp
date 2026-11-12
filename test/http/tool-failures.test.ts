@@ -123,6 +123,40 @@ describe("tool failures over MCP", () => {
     expect(outcome.rpcError ?? outcome.isError).toBeTruthy()
   })
 
+  it("rejects null for non-nullable optional inputs before running handlers", async () => {
+    const tools = await open({ droidPath: join(directory, "missing", "droid") })
+
+    const calls = [
+      ["session_create", { cwd: directory, autonomyLevel: "low", modelId: null }],
+      ["session_run", { cwd: directory, prompt: "hello", autonomyLevel: "low", waitMs: null }],
+      ["session_update_settings", { sessionId: "nope", modelId: null }],
+      ["session_rewind", { sessionId: "nope", messageId: "m-1", filesToDelete: null }],
+      ["session_list_skills", { sessionId: "nope", includeContent: null }],
+      [
+        "session_add_mcp_server",
+        { sessionId: "nope", name: "docs", command: "docs", oauth: { scopes: null } },
+      ],
+      [
+        "session_respond_permission",
+        { sessionId: "nope", requestId: "p", outcome: "cancel", comment: null },
+      ],
+      ["rest_list_environments", { serviceAccountId: null }],
+      ["rest_create_environment", { body: { name: "x", repositories: [], setupScript: null } }],
+      ["context_list_spaces", { limit: null }],
+    ] as const
+
+    for (const [name, args] of calls) {
+      const outcome = await tools.call(name, args)
+
+      if (outcome.rpcError !== undefined) {
+        expect(outcome.rpcError.code, name).toBe(-32602)
+      } else {
+        expect(outcome.isError, name).toBe(true)
+        expect(outcome.text, name).toMatch(/Invalid parameters for tool|invalid_arguments/)
+      }
+    }
+  })
+
   it("reports an unknown session to the prompt tools as session_not_found", async () => {
     const tools = await open({})
 

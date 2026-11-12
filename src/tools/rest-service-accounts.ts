@@ -51,7 +51,7 @@ export const serviceAccountTools = (): RestDomain =>
         "optional `description`. It has no API key until rest_create_service_account_api_key.",
       method: "POST",
       path: "/api/v0/service-accounts",
-      body: { name: Id, status: Status, description: Schema.optional(Schema.String) },
+      body: { name: Id, status: Status, description: Schema.optionalKey(Schema.String) },
     }),
     restTool({
       name: "rest_get_service_account",
@@ -70,7 +70,7 @@ export const serviceAccountTools = (): RestDomain =>
       method: "PATCH",
       path: ACCOUNT,
       inputs: { serviceAccountId: Id },
-      body: { description: Schema.optional(Schema.String), status: Schema.optional(Status) },
+      body: { description: Schema.optionalKey(Schema.String), status: Schema.optionalKey(Status) },
     }),
     restTool({
       name: "rest_delete_service_account",
@@ -101,7 +101,7 @@ export const serviceAccountTools = (): RestDomain =>
       method: "POST",
       path: KEYS,
       inputs: { serviceAccountId: Id },
-      body: { name: Id, expiresAt: Schema.optional(ExpiresAt) },
+      body: { name: Id, expiresAt: Schema.optionalKey(ExpiresAt) },
       result: withKeyNotice,
     }),
     restTool({
@@ -117,8 +117,8 @@ export const serviceAccountTools = (): RestDomain =>
       path: KEYS + "/{keyId}/rotate",
       inputs: { serviceAccountId: Id, keyId: Id },
       body: {
-        expiresAt: Schema.optional(ExpiresAt),
-        gracePeriodMinutes: Schema.optional(GracePeriodMinutes),
+        expiresAt: Schema.optionalKey(ExpiresAt),
+        gracePeriodMinutes: Schema.optionalKey(GracePeriodMinutes),
       },
       bodyOptional: true,
       result: withKeyNotice,

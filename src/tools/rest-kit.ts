@@ -162,16 +162,16 @@ export const restTool = <const Fields extends Schema.Struct.Fields>(
   }
 
   if (spec.body === "optional") {
-    fields[BODY_FIELD] = Schema.optional(JsonBody)
+    fields[BODY_FIELD] = Schema.optionalKey(JsonBody)
   } else if (spec.body !== undefined) {
     const body = openStruct(spec.body)
 
-    fields[BODY_FIELD] = spec.bodyOptional === true ? Schema.optional(body) : body
+    fields[BODY_FIELD] = spec.bodyOptional === true ? Schema.optionalKey(body) : body
   }
 
   const named = new Set(Object.keys(fields))
 
-  fields[EXTRA_QUERY_FIELD] = Schema.optional(
+  fields[EXTRA_QUERY_FIELD] = Schema.optionalKey(
     ExtraQuery.annotate({
       description: "Extra query parameters sent unchanged; a key may not repeat a named input.",
     }),

@@ -39,6 +39,9 @@ Context, and session administration operations are found with
 or `batch`. Results over `maxBytes` return a `ref` for `result_read`.
 `server_info.profile` says which profile is running.
 
+Omit optional inputs when unused. Do not send `null` unless the input schema
+explicitly allows it, such as `rest_update_environment.body.setupScript`.
+
 ## Reading a turn
 
 | Status        | Meaning                                                                                       |

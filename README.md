@@ -58,6 +58,15 @@ A turn works like this.
 - A Factory API key in `FACTORY_API_KEY`. Droid itself needs this key, and so do the `rest_*` and `context_*` tools.
 - pnpm, to install dependencies.
 
+### Droid compatibility
+
+Release surface checked on 2026-11-13: [Droid CLI 1.9.0](https://www.npmjs.com/package/@factory/cli)
+and [Droid SDK 0.10.0](https://www.npmjs.com/package/@factory/droid-sdk) are current.
+The SDK still declares 165 wire methods and protocol `1.269.0`; the 288-operation
+inventory is unchanged. CLI versions and wire protocol versions are separate.
+The daemon client adopts the peer's protocol version and retries once on a mismatch.
+See the [Factory changelog](https://docs.factory.com/changelog/release-notes).
+
 ## Set it up
 
 ```sh
@@ -142,6 +151,11 @@ Each flag also has an environment variable. The defaults work for a local instal
 | `pnpm codegen:check` | Fail if a generated file is stale                                  |
 
 Tests split by what they need. The `unit`, `http`, `process`, and `integration` projects run against fakes and a real server process. The `live` project needs a real model and a real daemon and stays off by default.
+
+Codegen uses TypeScript 6's compiler API. TypeScript 7 replaces that API and is
+not a drop-in upgrade. Node type definitions stay on the Node 24 runtime baseline.
+Optional tool inputs must be omitted when unused; `null` is accepted only where
+the schema explicitly allows it, such as clearing an Environment's setup script.
 
 The source layout:
 

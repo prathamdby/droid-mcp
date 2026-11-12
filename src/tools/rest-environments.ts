@@ -22,7 +22,7 @@ export const environmentTools = (): RestDomain =>
         "Pass `serviceAccountId` to list as a service account.",
       method: "GET",
       path: "/api/v0/environments",
-      inputs: { serviceAccountId: Schema.optional(Schema.String) },
+      inputs: { serviceAccountId: Schema.optionalKey(Schema.String) },
       query: ["serviceAccountId"],
     }),
     restTool({
@@ -36,10 +36,10 @@ export const environmentTools = (): RestDomain =>
       body: {
         name: Id,
         repositories: Repositories,
-        scope: Schema.optional(Schema.Literals(["user", "organization"])),
-        setupScript: Schema.optional(Schema.String),
-        sourceId: Schema.optional(Schema.String),
-        makeOrganizationDefault: Schema.optional(Schema.Boolean),
+        scope: Schema.optionalKey(Schema.Literals(["user", "organization"])),
+        setupScript: Schema.optionalKey(Schema.String),
+        sourceId: Schema.optionalKey(Schema.String),
+        makeOrganizationDefault: Schema.optionalKey(Schema.Boolean),
       },
     }),
     restTool({
@@ -60,12 +60,12 @@ export const environmentTools = (): RestDomain =>
       path: ENVIRONMENT,
       inputs: { environmentId: Id },
       body: {
-        name: Schema.optional(Schema.String),
-        repositories: Schema.optional(Repositories),
-        setupScript: Schema.optional(
+        name: Schema.optionalKey(Schema.String),
+        repositories: Schema.optionalKey(Repositories),
+        setupScript: Schema.optionalKey(
           Schema.NullOr(Schema.String).annotate({ description: "null clears the setup script." }),
         ),
-        sourceId: Schema.optional(Schema.String),
+        sourceId: Schema.optionalKey(Schema.String),
       },
     }),
     restTool({
@@ -116,7 +116,7 @@ export const environmentTools = (): RestDomain =>
       path: "/api/v0/environments/build-statuses",
       inputs: {
         environmentIds: Schema.NonEmptyArray(Id),
-        serviceAccountId: Schema.optional(Schema.String),
+        serviceAccountId: Schema.optionalKey(Schema.String),
       },
       query: ["environmentIds", "serviceAccountId"],
     }),

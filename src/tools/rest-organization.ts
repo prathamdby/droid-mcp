@@ -52,7 +52,7 @@ export const organizationTools = (): RestDomain =>
       description: "List the organization's members." + PAGED,
       method: "GET",
       path: ORGANIZATION + "/users",
-      inputs: { limit: Schema.optional(PageLimit), cursor: Schema.optional(Cursor) },
+      inputs: { limit: Schema.optionalKey(PageLimit), cursor: Schema.optionalKey(Cursor) },
       query: ["limit", "cursor"],
     }),
     restTool({
@@ -64,7 +64,7 @@ export const organizationTools = (): RestDomain =>
         DESTRUCTIVE,
       method: "POST",
       path: ORGANIZATION + "/users/invite",
-      body: { email: Id, role: Schema.optional(Role) },
+      body: { email: Id, role: Schema.optionalKey(Role) },
     }),
     restTool({
       name: "rest_remove_organization_user",
@@ -154,7 +154,7 @@ export const organizationTools = (): RestDomain =>
       body: {
         upsert: SecretUpserts,
         delete: SecretDeletes,
-        createOnly: Schema.optional(Schema.Boolean),
+        createOnly: Schema.optionalKey(Schema.Boolean),
       },
       secrets: upsertValues,
     }),
@@ -164,7 +164,7 @@ export const organizationTools = (): RestDomain =>
       description: "List changes to the organization's enterprise controls, newest first." + PAGED,
       method: "GET",
       path: ORGANIZATION + "/enterprise-controls/history",
-      inputs: { limit: Schema.optional(PageLimit), cursor: Schema.optional(Cursor) },
+      inputs: { limit: Schema.optionalKey(PageLimit), cursor: Schema.optionalKey(Cursor) },
       query: ["limit", "cursor"],
     }),
   ])

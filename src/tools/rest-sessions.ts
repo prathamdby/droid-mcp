@@ -36,9 +36,9 @@ export const remoteSessionTools = (): RestDomain =>
       method: "GET",
       path: "/api/v0/sessions",
       inputs: {
-        computerId: Schema.optional(Schema.String),
-        limit: Schema.optional(PageLimit),
-        cursor: Schema.optional(Cursor),
+        computerId: Schema.optionalKey(Schema.String),
+        limit: Schema.optionalKey(PageLimit),
+        cursor: Schema.optionalKey(Cursor),
       },
       query: ["computerId", "limit", "cursor"],
     }),
@@ -53,8 +53,8 @@ export const remoteSessionTools = (): RestDomain =>
       path: "/api/v0/sessions",
       body: {
         computerId: Id,
-        cwd: Schema.optional(Schema.String),
-        sessionSettings: Schema.optional(SessionSettings),
+        cwd: Schema.optionalKey(Schema.String),
+        sessionSettings: Schema.optionalKey(SessionSettings),
       },
     }),
     restTool({
@@ -63,7 +63,7 @@ export const remoteSessionTools = (): RestDomain =>
       description: "Read one hosted session, including its status and settings." + HOSTED,
       method: "GET",
       path: SESSION,
-      inputs: { sessionId: Id, computerId: Schema.optional(Schema.String) },
+      inputs: { sessionId: Id, computerId: Schema.optionalKey(Schema.String) },
       query: ["computerId"],
     }),
     restTool({
@@ -73,7 +73,7 @@ export const remoteSessionTools = (): RestDomain =>
       method: "PATCH",
       path: SESSION,
       inputs: { sessionId: Id },
-      body: { sessionSettings: Schema.optional(SessionSettings) },
+      body: { sessionSettings: Schema.optionalKey(SessionSettings) },
     }),
     restTool({
       name: "rest_delete_remote_session",
@@ -81,7 +81,7 @@ export const remoteSessionTools = (): RestDomain =>
       description: "Delete a hosted session and its messages. " + DESTRUCTIVE + HOSTED,
       method: "DELETE",
       path: SESSION,
-      inputs: { sessionId: Id, computerId: Schema.optional(Schema.String) },
+      inputs: { sessionId: Id, computerId: Schema.optionalKey(Schema.String) },
       query: ["computerId"],
       response: "empty",
     }),
@@ -104,10 +104,10 @@ export const remoteSessionTools = (): RestDomain =>
       path: SESSION + "/messages",
       inputs: {
         sessionId: Id,
-        limit: Schema.optional(PageLimit),
-        cursor: Schema.optional(Cursor),
-        computerId: Schema.optional(Schema.String),
-        role: Schema.optional(Role),
+        limit: Schema.optionalKey(PageLimit),
+        cursor: Schema.optionalKey(Cursor),
+        computerId: Schema.optionalKey(Schema.String),
+        role: Schema.optionalKey(Role),
       },
       query: ["limit", "cursor", "computerId", "role"],
     }),
@@ -126,7 +126,7 @@ export const remoteSessionTools = (): RestDomain =>
         text: Schema.String.annotate({
           description: "The message text; may be empty when images or files carry the message.",
         }),
-        computerId: Schema.optional(Schema.String),
+        computerId: Schema.optionalKey(Schema.String),
       },
     }),
     restTool({
@@ -135,7 +135,7 @@ export const remoteSessionTools = (): RestDomain =>
       description: "Read one message of a hosted session." + HOSTED,
       method: "GET",
       path: SESSION + "/messages/{messageId}",
-      inputs: { sessionId: Id, messageId: Id, computerId: Schema.optional(Schema.String) },
+      inputs: { sessionId: Id, messageId: Id, computerId: Schema.optionalKey(Schema.String) },
       query: ["computerId"],
     }),
     restTool({
@@ -149,9 +149,9 @@ export const remoteSessionTools = (): RestDomain =>
       path: SESSION + "/children",
       inputs: {
         sessionId: Id,
-        includeArtifacts: Schema.optional(BooleanFlag),
-        includeAttention: Schema.optional(BooleanFlag),
-        includeUsage: Schema.optional(BooleanFlag),
+        includeArtifacts: Schema.optionalKey(BooleanFlag),
+        includeAttention: Schema.optionalKey(BooleanFlag),
+        includeUsage: Schema.optionalKey(BooleanFlag),
       },
       query: ["includeArtifacts", "includeAttention", "includeUsage"],
     }),

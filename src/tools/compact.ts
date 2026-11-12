@@ -103,17 +103,17 @@ const Search = Tool.make("tools_search", {
     "(daemon_*, droid_*), hosted REST (rest_*), and Context (context_*). Returns names, " +
     "one-line summaries, and hints; call tools_describe for a schema, tool_call to run one.",
   parameters: Schema.Struct({
-    query: Schema.optional(Schema.String).annotate({
+    query: Schema.optionalKey(Schema.String).annotate({
       description: "Words to match in names and descriptions; omit to list in catalog order.",
     }),
-    family: Schema.optional(Schema.Literals(FAMILIES)),
-    readOnly: Schema.optional(Schema.Boolean).annotate({
+    family: Schema.optionalKey(Schema.Literals(FAMILIES)),
+    readOnly: Schema.optionalKey(Schema.Boolean).annotate({
       description: "true for reads only, false for writes only.",
     }),
-    limit: Schema.optional(
+    limit: Schema.optionalKey(
       Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: SEARCH_LIMIT })),
     ),
-    offset: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    offset: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   }),
   success: Schema.Struct({
     total: Schema.Int,
@@ -163,21 +163,21 @@ const Call = Tool.make("tool_call", {
     "Confirm with the user before an operation whose hints say destructive.",
   parameters: Schema.Struct({
     name: OperationName,
-    arguments: Schema.optional(Arguments),
-    select: Schema.optional(JsonPointer),
-    maxBytes: Schema.optional(ResultBytes),
+    arguments: Schema.optionalKey(Arguments),
+    select: Schema.optionalKey(JsonPointer),
+    maxBytes: Schema.optionalKey(ResultBytes),
   }),
   success: BoundedSchema,
   failure: ResultFailure,
 })
 
 const BatchStep = Schema.Struct({
-  id: Schema.optional(Schema.String).annotate({
+  id: Schema.optionalKey(Schema.String).annotate({
     description: "Name later steps use to reference this step's result; defaults to its index.",
   }),
   name: OperationName,
-  arguments: Schema.optional(Arguments),
-  select: Schema.optional(JsonPointer),
+  arguments: Schema.optionalKey(Arguments),
+  select: Schema.optionalKey(JsonPointer),
 })
 
 const Batch = Tool.make("batch", {
@@ -191,8 +191,8 @@ const Batch = Tool.make("batch", {
       Schema.isMinLength(1),
       Schema.isMaxLength(MAX_BATCH_STEPS),
     ),
-    stopOnError: Schema.optional(Schema.Boolean),
-    maxBytes: Schema.optional(ResultBytes),
+    stopOnError: Schema.optionalKey(Schema.Boolean),
+    maxBytes: Schema.optionalKey(ResultBytes),
   }),
   success: Schema.Struct({
     completed: Schema.Int,
@@ -218,9 +218,9 @@ const Read = Tool.make("result_read", {
     "returns invalid_offset. Refs expire 15 minutes after last use.",
   parameters: Schema.Struct({
     ref: Schema.String,
-    offset: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-    length: Schema.optional(ResultBytes),
-    select: Schema.optional(JsonPointer),
+    offset: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    length: Schema.optionalKey(ResultBytes),
+    select: Schema.optionalKey(JsonPointer),
   }),
   success: Schema.Struct({
     ref: Schema.String,

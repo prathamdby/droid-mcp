@@ -27,10 +27,10 @@ const Create = Tool.make("session_create", {
   parameters: Schema.Struct({
     cwd: Schema.String,
     autonomyLevel: AutonomySchema,
-    modelId: Schema.optional(Schema.String),
-    reasoningEffort: Schema.optional(Schema.String),
-    restrictToolIds: Schema.optional(Schema.Array(Schema.String)),
-    disabledToolIds: Schema.optional(Schema.Array(Schema.String)),
+    modelId: Schema.optionalKey(Schema.String),
+    reasoningEffort: Schema.optionalKey(Schema.String),
+    restrictToolIds: Schema.optionalKey(Schema.Array(Schema.String)),
+    disabledToolIds: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   success: Schema.Struct({
     sessionId: Schema.String,
@@ -49,7 +49,7 @@ const Stream = Tool.make("session_stream", {
   parameters: Schema.Struct({
     sessionId: Schema.String,
     prompt: Schema.String,
-    waitMs: Schema.optional(WaitMsSchema),
+    waitMs: Schema.optionalKey(WaitMsSchema),
   }),
   success: TurnResultSchema,
   failure: ToolFailure,
@@ -65,7 +65,7 @@ const Events = Tool.make("session_events", {
   parameters: Schema.Struct({
     sessionId: Schema.String,
     cursor: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    waitMs: Schema.optional(WaitMsSchema),
+    waitMs: Schema.optionalKey(WaitMsSchema),
   }),
   success: TurnResultSchema,
   failure: ToolFailure,

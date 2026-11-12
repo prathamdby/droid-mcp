@@ -18,6 +18,10 @@ Ask this batch in one message. Wait for the answers. Offer the defaults in the q
 
 Detect the operating system, the shell, and the package manager. Then check `git`, Node.js, `pnpm`, `droid`, and `openssl`. A missing command is not installed yet. Node.js must be version 24 or newer. Ask before any `sudo` command.
 
+The release surface was checked on 2026-11-13 against Droid CLI `1.9.0` and
+`@factory/droid-sdk` `0.10.0`. The SDK protocol remains `1.269.0`, with 288 MCP
+operations and 15 advertised tools in the default compact profile.
+
 ```sh
 uname -s
 printf '%s\n' "$SHELL"
@@ -61,7 +65,7 @@ command -v pnpm >/dev/null || npm install -g pnpm
 pnpm --version
 ```
 
-Install `droid` with Factory's installer. The Linux groups above include `xdg-utils`, which that CLI needs on Linux. The binary is `$HOME/.local/bin/droid`. Add the `PATH` line the installer prints to the shell rc file. Use one install. Homebrew is `brew install --cask droid`. npm is `npm install -g droid`.
+Install `droid` with Factory's installer. The Linux groups above include `xdg-utils`, which that CLI needs on Linux. The binary is `$HOME/.local/bin/droid`. Add the `PATH` line the installer prints to the shell rc file. Use one install. Homebrew is `brew install --cask droid`. npm is `npm install -g @factory/cli`.
 
 ```sh
 curl -fsSL https://app.factory.ai/cli -o /tmp/factory-cli.sh
