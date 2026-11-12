@@ -7,6 +7,22 @@ const serve = (
   argv: ReadonlyArray<string> = [],
 ) => parseConfig(["serve", ...argv], env)
 
+describe("tool profile", () => {
+  it("defaults to the compact tool profile and rejects other values", () => {
+    expect(serve({}).toolProfile).toBe("compact")
+    expect(serve({ DROID_MCP_TOOL_PROFILE: "full" }).toolProfile).toBe("full")
+    expect(serve({}, ["--tool-profile=full"]).toolProfile).toBe("full")
+    expect(
+      serve({ DROID_MCP_TOOL_PROFILE: "full" }, ["--tool-profile", "compact"]).toolProfile,
+    ).toBe("compact")
+    expect(() => serve({}, ["--tool-profile", "compactt"])).toThrow(ConfigError)
+    expect(() => serve({}, ["--tool-profile", "compactt"])).toThrow(
+      "--tool-profile must be one of compact, full",
+    )
+    expect(() => serve({ DROID_MCP_TOOL_PROFILE: "compactt" })).toThrow(ConfigError)
+  })
+})
+
 describe("base URL validation", () => {
   it("accepts http(s) origins and returns the origin", () => {
     expect(parseOrigin("X", "https://api.factory.ai")).toBe("https://api.factory.ai")

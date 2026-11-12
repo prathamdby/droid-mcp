@@ -628,8 +628,8 @@ const DESTRUCTIVE_VERBS = new Set(["delete", "remove", "kill", "uninstall", "arc
  * `cleanup_worktree` can delete local and remote branches, including with
  * force. `execute_rewind` restores and deletes files. `git_push` publishes
  * commits to a shared remote. `write_workspace_file_content` replaces a
- * file. `write_terminal_data` types into a live shell. `apply_automation_config`
- * and `update_mcp_config` replace stored configuration.
+ * file. `write_terminal_data` types into a live shell. `apply_automation_config`,
+ * `apply_user_preferences`, and `update_mcp_config` replace stored configuration.
  */
 const DESTRUCTIVE_ACTIONS = new Set([
   "cleanup_worktree",
@@ -638,6 +638,7 @@ const DESTRUCTIVE_ACTIONS = new Set([
   "write_workspace_file_content",
   "write_terminal_data",
   "apply_automation_config",
+  "apply_user_preferences",
   "update_mcp_config",
 ])
 

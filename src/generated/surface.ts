@@ -663,7 +663,8 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.apply_user_preferences",
     kind: "daemon",
     family: "apply_user_preferences",
-    description: "Apply user preferences (SDK method daemon.apply_user_preferences).",
+    description:
+      "Apply user preferences (SDK method daemon.apply_user_preferences). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {

@@ -81,7 +81,9 @@ const Interrupt = Tool.make("session_interrupt", {
 })
 
 const Close = Tool.make("session_close", {
-  description: "Interrupt any running turn, cancel pending prompts, and stop the session process.",
+  description:
+    "Interrupt any running turn, cancel pending prompts, and stop the session process. " +
+    "Destructive; confirm before calling.",
   parameters: Schema.Struct({ sessionId: Schema.String }),
   success: Schema.Struct({ closed: Schema.Boolean }),
   failure: ToolFailure,

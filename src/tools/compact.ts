@@ -86,6 +86,13 @@ const BoundedSchema = Schema.Struct({
   hint: Schema.optional(Schema.String),
 })
 
+const ResultFailure = Schema.Struct({
+  ...ToolFailure.fields,
+  ref: Schema.optional(Schema.String),
+})
+
+type ResultFailure = typeof ResultFailure.Type
+
 const strict = <T extends Tool.Any>(tool: T): T =>
   // SAFETY: `annotate` returns a clone of the same tool.
   tool.annotate(Tool.Strict, true) as T
@@ -152,6 +159,7 @@ const Call = Tool.make("tool_call", {
     "Run one operation by name with its arguments, exactly as its own tool would run in the " +
     "full profile: same validation, autonomy cap, and failure { code, message }. Returns " +
     "{ result }, or a preview and ref for result_read when the result exceeds maxBytes. " +
+    "An invalid_select failure includes a ref to the completed result; do not repeat the operation. " +
     "Confirm with the user before an operation whose hints say destructive.",
   parameters: Schema.Struct({
     name: OperationName,
@@ -160,7 +168,7 @@ const Call = Tool.make("tool_call", {
     maxBytes: Schema.optional(ResultBytes),
   }),
   success: BoundedSchema,
-  failure: ToolFailure,
+  failure: ResultFailure,
 })
 
 const BatchStep = Schema.Struct({
@@ -195,7 +203,7 @@ const Batch = Tool.make("batch", {
         id: Schema.String,
         name: Schema.String,
         status: Schema.Literals(["ok", "failed", "skipped"]),
-        error: Schema.optional(ToolFailure),
+        error: Schema.optional(ResultFailure),
         ...BoundedSchema.fields,
       }),
     ),
@@ -206,7 +214,8 @@ const Batch = Tool.make("batch", {
 const Read = Tool.make("result_read", {
   description:
     "Read a stored result from tool_call or batch: a byte range of its JSON text from offset, " +
-    "or the part a select pointer names. Refs expire 15 minutes after last use.",
+    "or the part a select pointer names. Offsets must be UTF-8 character boundaries; otherwise " +
+    "returns invalid_offset. Refs expire 15 minutes after last use.",
   parameters: Schema.Struct({
     ref: Schema.String,
     offset: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
@@ -455,8 +464,23 @@ export const compactSurface = (config: Config) => {
       value: Schema.Json | undefined,
       pointer: string | undefined,
       maxBytes: number,
-    ): Effect.Effect<Bounded, ToolFailure> =>
-      Effect.flatMap(select(value, pointer), (selected) => bound(store, selected, maxBytes))
+      retainOnFailure = false,
+    ): Effect.Effect<Bounded, ResultFailure> =>
+      Effect.flatMap(select(value, pointer), (selected) => bound(store, selected, maxBytes)).pipe(
+        Effect.catch((error) => {
+          if (!retainOnFailure || value === undefined) return Effect.fail(error)
+
+          return Effect.flatMap(store.put(JSON.stringify(value)), (ref) =>
+            Effect.fail({
+              ...error,
+              ref,
+              message:
+                error.message +
+                "; the operation completed. Read its result with result_read using ref; do not repeat it.",
+            }),
+          )
+        }),
+      )
 
     const meta = {
       tools_search: (params: {
@@ -528,6 +552,7 @@ export const compactSurface = (config: Config) => {
             outcome.value,
             params.select,
             params.maxBytes ?? DEFAULT_RESULT_BYTES,
+            true,
           )
         }),
       batch: (params: {
@@ -567,7 +592,7 @@ export const compactSurface = (config: Config) => {
               readonly id: string
               readonly name: string
               readonly status: "ok" | "failed" | "skipped"
-              readonly error?: ToolFailure
+              readonly error?: ResultFailure
             } & Partial<Bounded>
           > = []
 
@@ -599,7 +624,7 @@ export const compactSurface = (config: Config) => {
 
               results.set(id, done.value)
 
-              return yield* deliver(done.value, step.select, perStep)
+              return yield* deliver(done.value, step.select, perStep, true)
             }).pipe(Effect.result)
 
             if (Result.isSuccess(outcome)) {
@@ -635,6 +660,16 @@ export const compactSurface = (config: Config) => {
           }
 
           const offset = params.offset ?? 0
+          const bytes = Buffer.from(stored.text, "utf8")
+
+          if (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) {
+            return yield* Effect.fail({
+              code: "invalid_offset",
+              message:
+                "offset must be a UTF-8 character boundary; use the previous page's nextOffset",
+            })
+          }
+
           const chunk = utf8Slice(stored.text, offset, length)
           const next = offset + Buffer.byteLength(chunk, "utf8")
 

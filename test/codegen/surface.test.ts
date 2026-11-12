@@ -54,6 +54,7 @@ describe("generated surface", () => {
 
     const expected = [
       "daemon.apply_automation_config",
+      "daemon.apply_user_preferences",
       "daemon.archive_session",
       "daemon.cleanup_worktree",
       "daemon.delete_automation",

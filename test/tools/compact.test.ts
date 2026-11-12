@@ -1,12 +1,14 @@
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 
 import { Option, Schema } from "effect"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import type { Config } from "../../src/config.ts"
+import { SessionSettingsSchema, TurnStatusSchema } from "../../src/droid/turns.ts"
 import { DIRECT_TOOLS } from "../../src/tools/compact.ts"
 import { testConfig } from "../support/config.ts"
 import { startFakeDaemon } from "../support/fake-daemon.ts"
@@ -134,7 +136,7 @@ const closedPort = (): Promise<number> =>
 
 const files = Array.from(
   { length: FILE_COUNT },
-  (_, index) => "src/module-" + String(index) + "/index.ts",
+  (_, index) => "src/module-" + String(index) + "/é中😀.ts",
 )
 
 let directory: string
@@ -160,6 +162,10 @@ const serve = async (overrides: Partial<Config>): Promise<TestServer> => {
 
 beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), "droid-mcp-compact-"))
+  const fake = fileURLToPath(new URL("../support/fake-droid-exec.mjs", import.meta.url))
+  writeFileSync(join(directory, "droid"), `#!/bin/sh\nexec "${process.execPath}" "${fake}"\n`, {
+    mode: 0o755,
+  })
   daemon = await startFakeDaemon(join(directory, "daemon.sock"), {
     onRequest: (request): ScriptedReply => {
       if (request.method === "daemon.authenticate") {
@@ -232,7 +238,14 @@ describe("compact profile", () => {
       expect(hints.get(name), name).toMatchObject({ readOnlyHint: true, destructiveHint: false })
     }
 
-    for (const name of ["daemon_git_push", "rest_delete_computer", "daemon_execute_rewind"]) {
+    for (const name of [
+      "daemon_git_push",
+      "rest_delete_computer",
+      "daemon_execute_rewind",
+      "daemon_apply_user_preferences",
+      "session_close",
+      "session_remove_mcp_server",
+    ]) {
       expect(hints.get(name), name).toMatchObject({ readOnlyHint: false, destructiveHint: true })
     }
 
@@ -241,6 +254,31 @@ describe("compact profile", () => {
       destructiveHint: false,
       openWorldHint: true,
     })
+
+    const compact = await open(await serve({ toolProfile: "compact" }), KEY)
+
+    const direct = (await compact.list()).body.result.tools.find(
+      (tool) => tool.name === "session_close",
+    )
+
+    expect(direct?.annotations?.destructiveHint).toBe(true)
+
+    for (const name of [
+      "session_close",
+      "session_remove_mcp_server",
+      "daemon_apply_user_preferences",
+    ]) {
+      expect(structured((await compact.call("tools_search", { query: name })).body)).toMatchObject({
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name, readOnly: false, destructive: true }),
+        ]),
+      })
+      expect(
+        structured((await compact.call("tools_describe", { names: [name] })).body),
+      ).toMatchObject({
+        tools: [{ name, policy: { readOnly: false, destructive: true } }],
+      })
+    }
   })
 
   it("finds every operation once through tools_search and describes it as the full profile lists it", async () => {
@@ -356,6 +394,164 @@ describe("compact profile", () => {
     )
   })
 
+  it("rejects a misspelled operation argument under compact", async () => {
+    const compact = await open(await serve({ toolProfile: "compact" }), KEY)
+    const full = await open(await serve({ toolProfile: "full" }), KEY)
+
+    const before = daemon.requests.filter(
+      (request) => request.method === "daemon.list_files",
+    ).length
+
+    const args = { sessionIdX: "s-1" }
+
+    const dispatched = await compact.call("tool_call", {
+      name: "daemon_list_files",
+      arguments: args,
+    })
+
+    const direct = await full.call("daemon_list_files", args)
+
+    expect(failureOf(dispatched.body).code).toBe("invalid_params")
+    expect(direct.body.result?.isError).toBe(true)
+    expect(failureOf(dispatched.body)).toEqual(failureOf(direct.body))
+    expect(
+      daemon.requests.filter((request) => request.method === "daemon.list_files"),
+    ).toHaveLength(before)
+
+    // Full-profile operations ignore extra properties when required arguments are present.
+    const valid = { sessionId: "s-1", sessionIdX: "ignored" }
+
+    const viaCall = structured(
+      (
+        await compact.call("tool_call", {
+          name: "daemon_list_files",
+          arguments: valid,
+          select: "/totalFiles",
+        })
+      ).body,
+    )
+
+    const own = Schema.decodeUnknownSync(Schema.Struct({ totalFiles: Schema.Number }))(
+      structured((await full.call("daemon_list_files", valid)).body),
+    )
+
+    expect(viaCall).toEqual({ result: own.totalFiles })
+    expect(daemon.requests.at(-1)?.params).toEqual({ sessionId: "s-1" })
+  })
+
+  it("retains a completed operation after an invalid select without repeating it", async () => {
+    const server = await serve({ toolProfile: "compact", droidPath: join(directory, "droid") })
+    const compact = await open(server, KEY)
+
+    const invalid = await compact.call("tool_call", {
+      name: "session_create",
+      arguments: { cwd: directory, autonomyLevel: "low" },
+      select: "/missing",
+    })
+
+    const failure = Schema.decodeUnknownSync(
+      Schema.Struct({
+        code: Schema.Literal("invalid_select"),
+        message: Schema.String,
+        ref: Schema.String,
+      }),
+    )(JSON.parse(invalid.body.result?.content?.[0]?.text ?? "{}"))
+
+    expect(invalid.body.result?.isError).toBe(true)
+
+    const restored = Schema.decodeUnknownSync(
+      Schema.Struct({
+        selected: Schema.Struct({
+          result: Schema.Struct({ sessionId: Schema.String, cwd: Schema.String }),
+        }),
+      }),
+    )(structured((await compact.call("result_read", { ref: failure.ref, select: "" })).body))
+
+    expect(restored.selected.result.cwd).toBe(directory)
+    expect(structured((await compact.call("session_list", {})).body)).toMatchObject({
+      sessions: [{ sessionId: restored.selected.result.sessionId, cwd: directory }],
+    })
+    const other = await open(server, OTHER_KEY)
+    expect(failureOf((await other.call("result_read", { ref: failure.ref })).body).code).toBe(
+      "result_not_found",
+    )
+    expect(
+      structured(
+        (await compact.call("session_close", { sessionId: restored.selected.result.sessionId }))
+          .body,
+      ),
+    ).toEqual({ closed: true })
+    expect(structured((await compact.call("session_list", {})).body)).toEqual({ sessions: [] })
+  })
+
+  it("retains batch results after invalid selects with either stopOnError setting", async () => {
+    const compact = await open(
+      await serve({ toolProfile: "compact", droidPath: join(directory, "droid") }),
+      KEY,
+    )
+
+    for (const stopOnError of [true, false]) {
+      const batch = await compact.call("batch", {
+        stopOnError,
+        steps: [
+          {
+            id: "created",
+            name: "session_create",
+            arguments: { cwd: directory, autonomyLevel: "low" },
+            select: "/missing",
+          },
+          {
+            name: "session_close",
+            arguments: { sessionId: { $from: "created", path: "/sessionId" } },
+          },
+        ],
+      })
+
+      const result = Schema.decodeUnknownSync(
+        Schema.Struct({
+          completed: Schema.Number,
+          failed: Schema.Number,
+          skipped: Schema.Number,
+          steps: Schema.Array(
+            Schema.Struct({
+              status: Schema.String,
+              error: Schema.optional(Schema.Struct({ code: Schema.String, ref: Schema.String })),
+            }),
+          ),
+        }),
+      )(structured(batch.body))
+
+      expect(result).toMatchObject({
+        completed: stopOnError ? 0 : 1,
+        failed: 1,
+        skipped: stopOnError ? 1 : 0,
+        steps: [
+          { status: "failed", error: { code: "invalid_select" } },
+          { status: stopOnError ? "skipped" : "ok" },
+        ],
+      })
+
+      const ref = result.steps[0]?.error?.ref ?? ""
+
+      const restored = Schema.decodeUnknownSync(
+        Schema.Struct({
+          selected: Schema.Struct({ result: Schema.Struct({ sessionId: Schema.String }) }),
+        }),
+      )(structured((await compact.call("result_read", { ref, select: "" })).body))
+
+      if (stopOnError) {
+        expect(
+          structured(
+            (await compact.call("session_close", { sessionId: restored.selected.result.sessionId }))
+              .body,
+          ),
+        ).toEqual({ closed: true })
+      }
+
+      expect(structured((await compact.call("session_list", {})).body)).toEqual({ sessions: [] })
+    }
+  })
+
   it("bounds a large result and loses nothing of it", async () => {
     const full = await open(await serve({ toolProfile: "full" }), KEY)
     const compactServer = await serve({ toolProfile: "compact" })
@@ -421,6 +617,67 @@ describe("compact profile", () => {
         String(reads) +
         " result_read pages",
     )
+  })
+
+  it("rejects byte offsets inside a character and pages from exact boundaries", async () => {
+    const compact = await open(await serve({ toolProfile: "compact" }), KEY)
+    const full = await open(await serve({ toolProfile: "full" }), KEY)
+    const args = { sessionId: "s-1" }
+    const text = JSON.stringify(structured((await full.call("daemon_list_files", args)).body))
+    const bytes = Buffer.from(text)
+
+    const envelope = Schema.decodeUnknownSync(Schema.Struct({ ref: Schema.String }))(
+      structured(
+        (await compact.call("tool_call", { name: "daemon_list_files", arguments: args })).body,
+      ),
+    )
+
+    for (const character of ["é", "中", "😀"]) {
+      const offset = bytes.indexOf(Buffer.from(character))
+      expect(offset).toBeGreaterThan(0)
+
+      for (let continuation = 1; continuation < Buffer.byteLength(character); continuation += 1) {
+        const invalid = await compact.call("result_read", {
+          ref: envelope.ref,
+          offset: offset + continuation,
+          length: 1024,
+        })
+
+        expect(failureOf(invalid.body).code).toBe("invalid_offset")
+      }
+
+      const page = Schema.decodeUnknownSync(
+        Schema.Struct({ offset: Schema.Number, chunk: Schema.String, nextOffset: Schema.Number }),
+      )(
+        structured(
+          (await compact.call("result_read", { ref: envelope.ref, offset, length: 1024 })).body,
+        ),
+      )
+
+      expect(page.offset).toBe(offset)
+      expect(page.chunk.startsWith(character)).toBe(true)
+      expect(page.chunk).not.toContain("\ufffd")
+      expect(page.offset + Buffer.byteLength(page.chunk)).toBe(page.nextOffset)
+      expect(Buffer.from(page.chunk)).toEqual(bytes.subarray(offset, page.nextOffset))
+      expect(Buffer.byteLength(page.chunk)).toBeLessThanOrEqual(1024)
+    }
+
+    expect(
+      structured(
+        (await compact.call("result_read", { ref: envelope.ref, offset: bytes.length })).body,
+      ),
+    ).toMatchObject({
+      offset: bytes.length,
+      chunk: "",
+    })
+    expect(
+      structured(
+        (await compact.call("result_read", { ref: envelope.ref, offset: bytes.length + 10 })).body,
+      ),
+    ).toMatchObject({
+      offset: bytes.length + 10,
+      chunk: "",
+    })
   })
 
   it("chains dependent operations in one batch call", async () => {
@@ -538,6 +795,107 @@ describe("compact profile", () => {
     expect(typo.body.result?.content?.[0]?.text).toContain(
       'Expected no excess property\n  at ["nme"]',
     )
+  })
+
+  it("continues past a failed step when stopOnError is false", async () => {
+    const compact = await open(await serve({ toolProfile: "compact" }), KEY)
+
+    const batch = await compact.call("batch", {
+      stopOnError: false,
+      steps: [
+        { name: "daemon_list_models" },
+        {
+          name: "daemon_update_session_settings",
+          arguments: { sessionId: "s-1", autonomyLevel: "high" },
+        },
+        { name: "daemon_list_models" },
+      ],
+    })
+
+    expect(structured(batch.body)).toMatchObject({
+      completed: 2,
+      failed: 1,
+      skipped: 0,
+      steps: [
+        { status: "ok" },
+        { status: "failed", error: { code: "autonomy_exceeds_cap" } },
+        { status: "ok", result: { models: [{ id: "gpt-6.1-sol" }, { id: "claude-opus-5-5" }] } },
+      ],
+    })
+  })
+
+  it("rejects references to failed steps while continuing the batch", async () => {
+    const compact = await open(await serve({ toolProfile: "compact" }), KEY)
+
+    const batch = await compact.call("batch", {
+      stopOnError: false,
+      steps: [
+        {
+          id: "failed",
+          name: "daemon_update_session_settings",
+          arguments: { sessionId: "s-1", autonomyLevel: "high" },
+        },
+        {
+          name: "daemon_list_files",
+          arguments: { sessionId: { $from: "failed", path: "/sessionId" } },
+        },
+        { name: "daemon_list_models" },
+      ],
+    })
+
+    expect(structured(batch.body)).toMatchObject({
+      completed: 1,
+      failed: 2,
+      skipped: 0,
+      steps: [
+        { status: "failed", error: { code: "autonomy_exceeds_cap" } },
+        { status: "failed", error: { code: "invalid_reference" } },
+        { status: "ok", result: { models: [{ id: "gpt-6.1-sol" }, { id: "claude-opus-5-5" }] } },
+      ],
+    })
+  })
+
+  it("lists a live session with its status, cursor, and settings", async () => {
+    for (const toolProfile of ["compact", "full"] as const) {
+      const client = await open(
+        await serve({ toolProfile, droidPath: join(directory, "droid") }),
+        KEY,
+      )
+
+      const created = Schema.decodeUnknownSync(
+        Schema.Struct({
+          sessionId: Schema.String,
+          cwd: Schema.String,
+          settings: SessionSettingsSchema,
+        }),
+      )(
+        structured(
+          (await client.call("session_create", { cwd: directory, autonomyLevel: "low" })).body,
+        ),
+      )
+
+      const listed = Schema.decodeUnknownSync(
+        Schema.Struct({
+          sessions: Schema.Array(
+            Schema.Struct({
+              sessionId: Schema.String,
+              cwd: Schema.String,
+              status: TurnStatusSchema,
+              cursor: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+              settings: SessionSettingsSchema,
+            }),
+          ),
+        }),
+      )(structured((await client.call("session_list", {})).body))
+
+      expect(listed.sessions).toHaveLength(1)
+      expect(listed.sessions[0]).toMatchObject(created)
+      expect(listed.sessions[0]?.settings).toMatchObject({ autonomyLevel: "low" })
+      expect(
+        structured((await client.call("session_close", { sessionId: created.sessionId })).body),
+      ).toEqual({ closed: true })
+      expect(structured((await client.call("session_list", {})).body)).toEqual({ sessions: [] })
+    }
   })
 
   it("lists live local sessions", async () => {

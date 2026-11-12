@@ -35,6 +35,8 @@ By default the server runs the `compact` profile. `tools/list` advertises 15 too
 - `batch` runs up to 20 operations in order in one call. An argument `{ "$from": "<step id>", "path": "/json/pointer" }` takes part of an earlier step's result, so intermediate results never return to the client.
 - A result larger than `maxBytes` (16 KB by default) returns a preview and a `ref`. `result_read` reads the stored result by byte range or by JSON Pointer, so no data is lost. Refs expire 15 minutes after their last use and only the key that created a ref can read it.
 
+If `select` fails after an operation completes, `tool_call` or the batch step returns `invalid_select` with a `ref` to its full result. Read that ref instead of repeating the operation. Byte offsets for `result_read` must fall on UTF-8 character boundaries; use `nextOffset` to page, or expect `invalid_offset` for an offset inside a character.
+
 `--tool-profile full` advertises all 288 tools, one per operation, as earlier releases did. Every tool in both profiles carries MCP hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a client can skip confirmation for reads and ask before destructive calls.
 
 `node --experimental-strip-types scripts/measure.ts` prints the `initialize` and `tools/list` sizes for both profiles.
