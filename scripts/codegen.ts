@@ -624,11 +624,22 @@ const familyOf = (method: string): string => {
 const DESTRUCTIVE_VERBS = new Set(["delete", "remove", "kill", "uninstall", "archive", "discard"])
 
 /**
- * Actions that delete state without using those verbs. `cleanup_worktree` can
- * delete local and remote branches, including with force. `execute_rewind`
- * restores and deletes files.
+ * Actions that delete or overwrite state without using those verbs.
+ * `cleanup_worktree` can delete local and remote branches, including with
+ * force. `execute_rewind` restores and deletes files. `git_push` publishes
+ * commits to a shared remote. `write_workspace_file_content` replaces a
+ * file. `write_terminal_data` types into a live shell. `apply_automation_config`
+ * and `update_mcp_config` replace stored configuration.
  */
-const DESTRUCTIVE_ACTIONS = new Set(["cleanup_worktree", "execute_rewind"])
+const DESTRUCTIVE_ACTIONS = new Set([
+  "cleanup_worktree",
+  "execute_rewind",
+  "git_push",
+  "write_workspace_file_content",
+  "write_terminal_data",
+  "apply_automation_config",
+  "update_mcp_config",
+])
 
 const isDestructive = (method: string): boolean => {
   const action = method.slice(method.lastIndexOf(".") + 1)
@@ -640,17 +651,21 @@ const isDestructive = (method: string): boolean => {
   return DESTRUCTIVE_ACTIONS.has(action)
 }
 
-const descriptionOf = (method: string, params: JsonSchema): string => {
-  const destructive = isDestructive(method)
+/** `daemon.sf.delete_workstream` reads as "Sf delete workstream". */
+const summaryOf = (method: string): string => {
+  const words = method.split(".").slice(1).join(" ").replaceAll("_", " ")
 
-  const fields =
-    isRecord(params) && isRecord(params.properties) ? Object.keys(params.properties) : []
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
 
-  const lines = ["SDK method " + method + "."]
+/**
+ * The input schema already names every field, so the description carries the
+ * action, the wire method, and the destructive warning only.
+ */
+const descriptionOf = (method: string): string => {
+  const lines = [summaryOf(method) + " (SDK method " + method + ")."]
 
-  if (fields.length > 0) lines.push("Inputs: " + fields.join(", ") + ".")
-
-  if (destructive) lines.push("Destructive; confirm before calling.")
+  if (isDestructive(method)) lines.push("Destructive; confirm before calling.")
 
   return lines.join(" ")
 }
@@ -685,7 +700,7 @@ for (const [schemaName, entry] of declarations) {
     method,
     kind: method.startsWith("daemon.") ? "daemon" : "droid",
     family: familyOf(method),
-    description: descriptionOf(method, converted.params),
+    description: descriptionOf(method),
     params: converted.params,
     result: converted.result,
   })

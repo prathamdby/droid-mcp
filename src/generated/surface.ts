@@ -33,7 +33,8 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.acknowledge_mission_readiness_warning",
     kind: "daemon",
     family: "acknowledge_mission_readiness_warning",
-    description: "SDK method daemon.acknowledge_mission_readiness_warning. Inputs: cwd.",
+    description:
+      "Acknowledge mission readiness warning (SDK method daemon.acknowledge_mission_readiness_warning).",
     params: {
       type: "object",
       properties: {
@@ -55,7 +56,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.add_marketplace",
     kind: "daemon",
     family: "add_marketplace",
-    description: "SDK method daemon.add_marketplace. Inputs: sessionId, source.",
+    description: "Add marketplace (SDK method daemon.add_marketplace).",
     params: {
       type: "object",
       properties: {
@@ -165,8 +166,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.add_mcp_server",
     kind: "daemon",
     family: "add_mcp_server",
-    description:
-      "SDK method daemon.add_mcp_server. Inputs: name, type, url, headers, oauth, command, args, env, sessionId.",
+    description: "Add mcp server (SDK method daemon.add_mcp_server).",
     params: {
       type: "object",
       properties: {
@@ -265,8 +265,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.add_user_message",
     kind: "daemon",
     family: "add_user_message",
-    description:
-      "SDK method daemon.add_user_message. Inputs: messageId, text, content, images, imagePaths, files, outputFormat, skipAgentLoop, queuePlacement, role, visibility, userMessageSource, sender, author, chatSettingsCatalog, sessionId, pullFromOrigin.",
+    description: "Add user message (SDK method daemon.add_user_message).",
     params: {
       type: "object",
       properties: {
@@ -589,7 +588,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "apply_automation_config",
     description:
-      "SDK method daemon.apply_automation_config. Inputs: automationId, basePath, name, description, schedule, model, reasoningEffort, prompt, tags, privacyLevel, sessionPrivacy, paused, workingDirectory, workstreamId.",
+      "Apply automation config (SDK method daemon.apply_automation_config). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -664,7 +663,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.apply_user_preferences",
     kind: "daemon",
     family: "apply_user_preferences",
-    description: "SDK method daemon.apply_user_preferences. Inputs: conflict.",
+    description: "Apply user preferences (SDK method daemon.apply_user_preferences).",
     params: {
       type: "object",
       properties: {
@@ -741,7 +740,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "archive_session",
     description:
-      "SDK method daemon.archive_session. Inputs: sessionId, force. Destructive; confirm before calling.",
+      "Archive session (SDK method daemon.archive_session). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -774,8 +773,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.authenticate",
     kind: "daemon",
     family: "authenticate",
-    description:
-      "SDK method daemon.authenticate. Inputs: token, activeOrganizationId, apiKey, actAsGrant, sharedSessionGrant, connectionId, caller, metadata.",
+    description: "Authenticate (SDK method daemon.authenticate).",
     params: {
       type: "object",
       properties: {
@@ -858,7 +856,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.authenticate_mcp_server",
     kind: "daemon",
     family: "authenticate_mcp_server",
-    description: "SDK method daemon.authenticate_mcp_server. Inputs: serverName, sessionId.",
+    description: "Authenticate mcp server (SDK method daemon.authenticate_mcp_server).",
     params: {
       type: "object",
       properties: {
@@ -883,7 +881,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.cancel_mcp_auth",
     kind: "daemon",
     family: "cancel_mcp_auth",
-    description: "SDK method daemon.cancel_mcp_auth. Inputs: serverName, sessionId.",
+    description: "Cancel mcp auth (SDK method daemon.cancel_mcp_auth).",
     params: {
       type: "object",
       properties: {
@@ -908,7 +906,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.change_working_directory",
     kind: "daemon",
     family: "change_working_directory",
-    description: "SDK method daemon.change_working_directory. Inputs: sessionId, workingDirectory.",
+    description: "Change working directory (SDK method daemon.change_working_directory).",
     params: {
       type: "object",
       properties: {
@@ -938,7 +936,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.check_folder_trust",
     kind: "daemon",
     family: "check_folder_trust",
-    description: "SDK method daemon.check_folder_trust. Inputs: path.",
+    description: "Check folder trust (SDK method daemon.check_folder_trust).",
     params: {
       type: "object",
       properties: {
@@ -971,8 +969,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.checkout_git_branch",
     kind: "daemon",
     family: "checkout_git_branch",
-    description:
-      "SDK method daemon.checkout_git_branch. Inputs: cwd, branch, create, createFromOrigin, pullFromOrigin, resolution.",
+    description: "Checkout git branch (SDK method daemon.checkout_git_branch).",
     params: {
       type: "object",
       properties: {
@@ -1050,7 +1047,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "cleanup_worktree",
     description:
-      "SDK method daemon.cleanup_worktree. Inputs: worktreePath, deleteLocalBranch, deleteRemoteBranch, force. Destructive; confirm before calling.",
+      "Cleanup worktree (SDK method daemon.cleanup_worktree). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -1081,7 +1078,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.clear_mcp_auth",
     kind: "daemon",
     family: "clear_mcp_auth",
-    description: "SDK method daemon.clear_mcp_auth. Inputs: serverName, sessionId.",
+    description: "Clear mcp auth (SDK method daemon.clear_mcp_auth).",
     params: {
       type: "object",
       properties: {
@@ -1106,7 +1103,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.close_session",
     kind: "daemon",
     family: "close_session",
-    description: "SDK method daemon.close_session. Inputs: sessionId, preserveEmptyDraft.",
+    description: "Close session (SDK method daemon.close_session).",
     params: {
       type: "object",
       properties: {
@@ -1131,7 +1128,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.close_terminal",
     kind: "daemon",
     family: "close_terminal",
-    description: "SDK method daemon.close_terminal. Inputs: terminalId, sessionId.",
+    description: "Close terminal (SDK method daemon.close_terminal).",
     params: {
       type: "object",
       properties: {
@@ -1156,7 +1153,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.compact_session",
     kind: "daemon",
     family: "compact_session",
-    description: "SDK method daemon.compact_session. Inputs: sessionId, customInstructions, mode.",
+    description: "Compact session (SDK method daemon.compact_session).",
     params: {
       type: "object",
       properties: {
@@ -1192,8 +1189,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.create_automation",
     kind: "daemon",
     family: "create_automation",
-    description:
-      "SDK method daemon.create_automation. Inputs: id, uuid, name, description, instructions, schedule, model, reasoningEffort, basePath, visualDescription, memoryStrategy, skipFirstRun, paused, workstreamId, creationSource, skills, sessionPrivacy, tags, privacyLevel, targetSessionId.",
+    description: "Create automation (SDK method daemon.create_automation).",
     params: {
       type: "object",
       properties: {
@@ -1321,8 +1317,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.create_cron",
     kind: "daemon",
     family: "create_cron",
-    description:
-      "SDK method daemon.create_cron. Inputs: source, schedule, runImmediately, kind, scope, runPolicy, payload.",
+    description: "Create cron (SDK method daemon.create_cron).",
     params: {
       type: "object",
       properties: {
@@ -1710,8 +1705,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.create_pr",
     kind: "daemon",
     family: "create_pr",
-    description:
-      "SDK method daemon.create_pr. Inputs: sessionId, title, body, baseBranch, draft, linkedTicketIds, linkedTicketUrls, jiraIssueKeys, linearIssueIds.",
+    description: "Create pr (SDK method daemon.create_pr).",
     params: {
       type: "object",
       properties: {
@@ -1786,8 +1780,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.create_terminal",
     kind: "daemon",
     family: "create_terminal",
-    description:
-      "SDK method daemon.create_terminal. Inputs: terminalId, cols, rows, cwd, env, sessionId.",
+    description: "Create terminal (SDK method daemon.create_terminal).",
     params: {
       type: "object",
       properties: {
@@ -1828,7 +1821,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "delete_automation",
     description:
-      "SDK method daemon.delete_automation. Inputs: automationId, automationDirName, basePath. Destructive; confirm before calling.",
+      "Delete automation (SDK method daemon.delete_automation). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -1865,7 +1858,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "delete_cron",
     description:
-      "SDK method daemon.delete_cron. Inputs: cronId, sessionId. Destructive; confirm before calling.",
+      "Delete cron (SDK method daemon.delete_cron). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -1896,7 +1889,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "delete_custom_model",
     description:
-      "SDK method daemon.delete_custom_model. Inputs: rawIndex, expectedModel, expectedRevision. Destructive; confirm before calling.",
+      "Delete custom model (SDK method daemon.delete_custom_model). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -2044,7 +2037,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "delete_worktree_setup_profile",
     description:
-      "SDK method daemon.delete_worktree_setup_profile. Inputs: cwd, profileId. Destructive; confirm before calling.",
+      "Delete worktree setup profile (SDK method daemon.delete_worktree_setup_profile). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -2070,8 +2063,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.dispatch_automation_run",
     kind: "daemon",
     family: "dispatch_automation_run",
-    description:
-      "SDK method daemon.dispatch_automation_run. Inputs: automationId, basePath, triggerSource, sourceAutomationId, sourceRunId.",
+    description: "Dispatch automation run (SDK method daemon.dispatch_automation_run).",
     params: {
       type: "object",
       properties: {
@@ -2141,7 +2133,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "execute_rewind",
     description:
-      "SDK method daemon.execute_rewind. Inputs: sessionId, messageId, filesToRestore, filesToDelete, forkTitle. Destructive; confirm before calling.",
+      "Execute rewind (SDK method daemon.execute_rewind). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -2224,8 +2216,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.fork_automation",
     kind: "daemon",
     family: "fork_automation",
-    description:
-      "SDK method daemon.fork_automation. Inputs: automationId, name, description, schedule, tags, model, reasoningEffort, prompt, forkedFrom, localDirName, skills.",
+    description: "Fork automation (SDK method daemon.fork_automation).",
     params: {
       type: "object",
       properties: {
@@ -2326,7 +2317,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.fork_session",
     kind: "daemon",
     family: "fork_session",
-    description: "SDK method daemon.fork_session. Inputs: sessionId, title, tags.",
+    description: "Fork session (SDK method daemon.fork_session).",
     params: {
       type: "object",
       properties: {
@@ -2375,8 +2366,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.generate_semantic_diff",
     kind: "daemon",
     family: "generate_semantic_diff",
-    description:
-      "SDK method daemon.generate_semantic_diff. Inputs: sessionId, diff, baseBranch, currentBranch, commitHash, modelId, unstagedDiff.",
+    description: "Generate semantic diff (SDK method daemon.generate_semantic_diff).",
     params: {
       type: "object",
       properties: {
@@ -2427,8 +2417,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_automation_history",
     kind: "daemon",
     family: "get_automation_history",
-    description:
-      "SDK method daemon.get_automation_history. Inputs: automationId, automationDirName, limit, offset, basePath.",
+    description: "Get automation history (SDK method daemon.get_automation_history).",
     params: {
       type: "object",
       properties: {
@@ -2538,8 +2527,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_automation_visual",
     kind: "daemon",
     family: "get_automation_visual",
-    description:
-      "SDK method daemon.get_automation_visual. Inputs: automationId, automationDirName, basePath, sessionId.",
+    description: "Get automation visual (SDK method daemon.get_automation_visual).",
     params: {
       type: "object",
       properties: {
@@ -2587,8 +2575,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_checkout_metadata",
     kind: "daemon",
     family: "get_checkout_metadata",
-    description:
-      "SDK method daemon.get_checkout_metadata. Inputs: subscriptionId, directories, includePullRequest.",
+    description: "Get checkout metadata (SDK method daemon.get_checkout_metadata).",
     params: {
       type: "object",
       properties: {
@@ -2619,7 +2606,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_context_breakdown",
     kind: "daemon",
     family: "get_context_breakdown",
-    description: "SDK method daemon.get_context_breakdown. Inputs: sessionId.",
+    description: "Get context breakdown (SDK method daemon.get_context_breakdown).",
     params: {
       type: "object",
       properties: {
@@ -2756,7 +2743,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_default_settings",
     kind: "daemon",
     family: "get_default_settings",
-    description: "SDK method daemon.get_default_settings. Inputs: cwd.",
+    description: "Get default settings (SDK method daemon.get_default_settings).",
     params: {
       type: "object",
       properties: {
@@ -3873,7 +3860,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_git_diff",
     kind: "daemon",
     family: "get_git_diff",
-    description: "SDK method daemon.get_git_diff. Inputs: sessionId, cwd, baseBranch, statsOnly.",
+    description: "Get git diff (SDK method daemon.get_git_diff).",
     params: {
       type: "object",
       properties: {
@@ -4164,8 +4151,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_git_diff_file_contents",
     kind: "daemon",
     family: "get_git_diff_file_contents",
-    description:
-      "SDK method daemon.get_git_diff_file_contents. Inputs: sessionId, source, filePath, prevFilePath, baseBranch, diffCapturedAtMs, diffHeadCommitSha, diffBaseCommitSha, cwd.",
+    description: "Get git diff file contents (SDK method daemon.get_git_diff_file_contents).",
     params: {
       type: "object",
       properties: {
@@ -4221,7 +4207,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_mcp_config",
     kind: "daemon",
     family: "get_mcp_config",
-    description: "SDK method daemon.get_mcp_config.",
+    description: "Get mcp config (SDK method daemon.get_mcp_config).",
     params: {
       type: "object",
       additionalProperties: false,
@@ -4431,7 +4417,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_rewind_info",
     kind: "daemon",
     family: "get_rewind_info",
-    description: "SDK method daemon.get_rewind_info. Inputs: sessionId, messageId.",
+    description: "Get rewind info (SDK method daemon.get_rewind_info).",
     params: {
       type: "object",
       properties: {
@@ -4506,7 +4492,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_semantic_diff_cache",
     kind: "daemon",
     family: "get_semantic_diff_cache",
-    description: "SDK method daemon.get_semantic_diff_cache. Inputs: currentBranch, baseBranch.",
+    description: "Get semantic diff cache (SDK method daemon.get_semantic_diff_cache).",
     params: {
       type: "object",
       properties: {
@@ -4542,7 +4528,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_session_messages",
     kind: "daemon",
     family: "get_session_messages",
-    description: "SDK method daemon.get_session_messages. Inputs: sessionId, limit, cursor, role.",
+    description: "Get session messages (SDK method daemon.get_session_messages).",
     params: {
       type: "object",
       properties: {
@@ -5197,8 +5183,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_session_turn_outcome",
     kind: "daemon",
     family: "get_session_turn_outcome",
-    description:
-      "SDK method daemon.get_session_turn_outcome. Inputs: sessionId, turnId, timeoutMs.",
+    description: "Get session turn outcome (SDK method daemon.get_session_turn_outcome).",
     params: {
       type: "object",
       properties: {
@@ -5395,8 +5380,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_user_preferences_state",
     kind: "daemon",
     family: "get_user_preferences_state",
-    description:
-      "SDK method daemon.get_user_preferences_state. Inputs: includeSyncStatus, refresh, cwd.",
+    description: "Get user preferences state (SDK method daemon.get_user_preferences_state).",
     params: {
       type: "object",
       properties: {
@@ -5535,8 +5519,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.get_workspace_file_content",
     kind: "daemon",
     family: "get_workspace_file_content",
-    description:
-      "SDK method daemon.get_workspace_file_content. Inputs: sessionId, cwd, filePath, metadataOnly, encoding.",
+    description: "Get workspace file content (SDK method daemon.get_workspace_file_content).",
     params: {
       type: "object",
       properties: {
@@ -5590,7 +5573,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.git_commit",
     kind: "daemon",
     family: "git_commit",
-    description: "SDK method daemon.git_commit. Inputs: sessionId, message.",
+    description: "Git commit (SDK method daemon.git_commit).",
     params: {
       type: "object",
       properties: {
@@ -5620,7 +5603,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.git_push",
     kind: "daemon",
     family: "git_push",
-    description: "SDK method daemon.git_push. Inputs: sessionId.",
+    description: "Git push (SDK method daemon.git_push). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -5647,7 +5630,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.hold_session_crons",
     kind: "daemon",
     family: "hold_session_crons",
-    description: "SDK method daemon.hold_session_crons. Inputs: sessionId, reason.",
+    description: "Hold session crons (SDK method daemon.hold_session_crons).",
     params: {
       type: "object",
       properties: {
@@ -5677,8 +5660,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.initialize_session",
     kind: "daemon",
     family: "initialize_session",
-    description:
-      "SDK method daemon.initialize_session. Inputs: machineId, cwd, workspaceId, sessionId, mcpServers, autonomyMode, interactionMode, autonomyLevel, modelId, reasoningEffort, systemPromptOverride, systemPrompt, specModeModelId, specModeReasoningEffort, missionSettings, compactionThresholdCheckEnabled, decompSessionType, decompMissionId, skipPermissionsUnsafe, sessionLocation, sessionSource, sessionOriginHint, tags, privacyLevel, organizationId, title, autoRejectPermissionRequests, disableBuiltinSkills, mcpOAuthCallbackUri, blockOnMcpLoad, worktree, worktreeDir, structuredOutputFormat, toolExecutionMode, allowSubagentsInScripts, worktreeLifecycle, worktreeBranchMode, worktreeBaseBranch, worktreeBaseBranchFromOrigin, worktreeNewBranch, worktreePromptSlug, worktreeSetupProfileId, callingMetadata, additionalToolIds, enabledToolIds, disabledToolIds, restrictToolIds, token, inactivityTimeoutMs, disableInactivityTimeout, runtimeSettingsPath, pullFromOrigin.",
+    description: "Initialize session (SDK method daemon.initialize_session).",
     params: {
       type: "object",
       properties: {
@@ -6473,7 +6455,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.inspect_mission_readiness",
     kind: "daemon",
     family: "inspect_mission_readiness",
-    description: "SDK method daemon.inspect_mission_readiness. Inputs: cwd.",
+    description: "Inspect mission readiness (SDK method daemon.inspect_mission_readiness).",
     params: {
       type: "object",
       properties: {
@@ -6541,7 +6523,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.inspect_worktree_deletion",
     kind: "daemon",
     family: "inspect_worktree_deletion",
-    description: "SDK method daemon.inspect_worktree_deletion. Inputs: worktreePath.",
+    description: "Inspect worktree deletion (SDK method daemon.inspect_worktree_deletion).",
     params: {
       type: "object",
       properties: {
@@ -6564,8 +6546,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.install_plugin",
     kind: "daemon",
     family: "install_plugin",
-    description:
-      "SDK method daemon.install_plugin. Inputs: sessionId, marketplace, pluginName, scope.",
+    description: "Install plugin (SDK method daemon.install_plugin).",
     params: {
       type: "object",
       properties: {
@@ -6607,7 +6588,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.interrupt_session",
     kind: "daemon",
     family: "interrupt_session",
-    description: "SDK method daemon.interrupt_session. Inputs: sessionId.",
+    description: "Interrupt session (SDK method daemon.interrupt_session).",
     params: {
       type: "object",
       properties: {
@@ -6630,7 +6611,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "kill_worker_session",
     description:
-      "SDK method daemon.kill_worker_session. Inputs: sessionId, workerSessionId. Destructive; confirm before calling.",
+      "Kill worker session (SDK method daemon.kill_worker_session). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -6655,7 +6636,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_automations",
     kind: "daemon",
     family: "list_automations",
-    description: "SDK method daemon.list_automations. Inputs: basePath.",
+    description: "List automations (SDK method daemon.list_automations).",
     params: {
       type: "object",
       properties: {
@@ -6837,7 +6818,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_available_plugins",
     kind: "daemon",
     family: "list_available_plugins",
-    description: "SDK method daemon.list_available_plugins. Inputs: sessionId.",
+    description: "List available plugins (SDK method daemon.list_available_plugins).",
     params: {
       type: "object",
       properties: {
@@ -6880,8 +6861,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_available_sessions",
     kind: "daemon",
     family: "list_available_sessions",
-    description:
-      "SDK method daemon.list_available_sessions. Inputs: limit, endBefore, includeArchived, includeMissionMetadata, filter.",
+    description: "List available sessions (SDK method daemon.list_available_sessions).",
     params: {
       type: "object",
       properties: {
@@ -7126,7 +7106,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_commands",
     kind: "daemon",
     family: "list_commands",
-    description: "SDK method daemon.list_commands. Inputs: sessionId.",
+    description: "List commands (SDK method daemon.list_commands).",
     params: {
       type: "object",
       properties: {
@@ -7172,7 +7152,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_crons",
     kind: "daemon",
     family: "list_crons",
-    description: "SDK method daemon.list_crons. Inputs: sessionId, includeInactive.",
+    description: "List crons (SDK method daemon.list_crons).",
     params: {
       type: "object",
       properties: {
@@ -7498,7 +7478,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_files",
     kind: "daemon",
     family: "list_files",
-    description: "SDK method daemon.list_files. Inputs: sessionId, cwd, showHidden, path.",
+    description: "List files (SDK method daemon.list_files).",
     params: {
       type: "object",
       properties: {
@@ -7552,7 +7532,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_git_branches",
     kind: "daemon",
     family: "list_git_branches",
-    description: "SDK method daemon.list_git_branches. Inputs: cwd, includeOriginBranches.",
+    description: "List git branches (SDK method daemon.list_git_branches).",
     params: {
       type: "object",
       properties: {
@@ -7668,7 +7648,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_installed_plugins",
     kind: "daemon",
     family: "list_installed_plugins",
-    description: "SDK method daemon.list_installed_plugins. Inputs: sessionId, scope.",
+    description: "List installed plugins (SDK method daemon.list_installed_plugins).",
     params: {
       type: "object",
       properties: {
@@ -7743,7 +7723,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_managed_worktrees",
     kind: "daemon",
     family: "list_managed_worktrees",
-    description: "SDK method daemon.list_managed_worktrees. Inputs: includeSizes.",
+    description: "List managed worktrees (SDK method daemon.list_managed_worktrees).",
     params: {
       type: "object",
       properties: {
@@ -7764,7 +7744,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_marketplaces",
     kind: "daemon",
     family: "list_marketplaces",
-    description: "SDK method daemon.list_marketplaces. Inputs: sessionId.",
+    description: "List marketplaces (SDK method daemon.list_marketplaces).",
     params: {
       type: "object",
       properties: {
@@ -7872,7 +7852,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_mcp_registry",
     kind: "daemon",
     family: "list_mcp_registry",
-    description: "SDK method daemon.list_mcp_registry. Inputs: sessionId.",
+    description: "List mcp registry (SDK method daemon.list_mcp_registry).",
     params: {
       type: "object",
       properties: {
@@ -7936,7 +7916,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_mcp_servers",
     kind: "daemon",
     family: "list_mcp_servers",
-    description: "SDK method daemon.list_mcp_servers. Inputs: sessionId.",
+    description: "List mcp servers (SDK method daemon.list_mcp_servers).",
     params: {
       type: "object",
       properties: {
@@ -8047,7 +8027,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_mcp_tools",
     kind: "daemon",
     family: "list_mcp_tools",
-    description: "SDK method daemon.list_mcp_tools. Inputs: sessionId.",
+    description: "List mcp tools (SDK method daemon.list_mcp_tools).",
     params: {
       type: "object",
       properties: {
@@ -8115,7 +8095,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_models",
     kind: "daemon",
     family: "list_models",
-    description: "SDK method daemon.list_models. Inputs: includeDisabled.",
+    description: "List models (SDK method daemon.list_models).",
     params: {
       type: "object",
       properties: {
@@ -8136,7 +8116,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_opened_sessions",
     kind: "daemon",
     family: "list_opened_sessions",
-    description: "SDK method daemon.list_opened_sessions. Inputs: filter.",
+    description: "List opened sessions (SDK method daemon.list_opened_sessions).",
     params: {
       type: "object",
       properties: {
@@ -8265,7 +8245,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_skills",
     kind: "daemon",
     family: "list_skills",
-    description: "SDK method daemon.list_skills. Inputs: includeContent, sessionId.",
+    description: "List skills (SDK method daemon.list_skills).",
     params: {
       type: "object",
       properties: {
@@ -8402,7 +8382,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_terminals",
     kind: "daemon",
     family: "list_terminals",
-    description: "SDK method daemon.list_terminals. Inputs: sessionId.",
+    description: "List terminals (SDK method daemon.list_terminals).",
     params: {
       type: "object",
       properties: {
@@ -8424,7 +8404,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.list_worktree_setup_profiles",
     kind: "daemon",
     family: "list_worktree_setup_profiles",
-    description: "SDK method daemon.list_worktree_setup_profiles. Inputs: cwd.",
+    description: "List worktree setup profiles (SDK method daemon.list_worktree_setup_profiles).",
     params: {
       type: "object",
       properties: {
@@ -8447,8 +8427,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.load_session",
     kind: "daemon",
     family: "load_session",
-    description:
-      "SDK method daemon.load_session. Inputs: sessionId, agentTurnOutcomeTurnId, mcpServers, loadAllMessages, messageLimit, mcpOAuthCallbackUri, sessionOriginHint, autoRejectPermissionRequests, sessionLocation, sessionSource, additionalToolIds, enabledToolIds, disabledToolIds, disableInactivityTimeout, disableBuiltinSkills, skipPermissionsUnsafe, runtimeSettingsPath, structuredOutputFormat, taskSubagentProcess, token.",
+    description: "Load session (SDK method daemon.load_session).",
     params: {
       type: "object",
       properties: {
@@ -9101,8 +9080,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.pause_automation",
     kind: "daemon",
     family: "pause_automation",
-    description:
-      "SDK method daemon.pause_automation. Inputs: automationId, automationDirName, basePath.",
+    description: "Pause automation (SDK method daemon.pause_automation).",
     params: {
       type: "object",
       properties: {
@@ -9145,7 +9123,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "remove_marketplace",
     description:
-      "SDK method daemon.remove_marketplace. Inputs: sessionId, name. Destructive; confirm before calling.",
+      "Remove marketplace (SDK method daemon.remove_marketplace). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -9179,7 +9157,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "remove_mcp_server",
     description:
-      "SDK method daemon.remove_mcp_server. Inputs: serverName, settingsLevel, sessionId. Destructive; confirm before calling.",
+      "Remove mcp server (SDK method daemon.remove_mcp_server). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -9207,8 +9185,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.rename_automation",
     kind: "daemon",
     family: "rename_automation",
-    description:
-      "SDK method daemon.rename_automation. Inputs: automationId, automationDirName, newName, basePath.",
+    description: "Rename automation (SDK method daemon.rename_automation).",
     params: {
       type: "object",
       properties: {
@@ -9247,7 +9224,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.rename_session",
     kind: "daemon",
     family: "rename_session",
-    description: "SDK method daemon.rename_session. Inputs: sessionId, title.",
+    description: "Rename session (SDK method daemon.rename_session).",
     params: {
       type: "object",
       properties: {
@@ -9277,7 +9254,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.resize_terminal",
     kind: "daemon",
     family: "resize_terminal",
-    description: "SDK method daemon.resize_terminal. Inputs: terminalId, cols, rows, sessionId.",
+    description: "Resize terminal (SDK method daemon.resize_terminal).",
     params: {
       type: "object",
       properties: {
@@ -9308,7 +9285,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.resolve_pull_request_statuses",
     kind: "daemon",
     family: "resolve_pull_request_statuses",
-    description: "SDK method daemon.resolve_pull_request_statuses. Inputs: lookups.",
+    description: "Resolve pull request statuses (SDK method daemon.resolve_pull_request_statuses).",
     params: {
       type: "object",
       properties: {
@@ -9458,7 +9435,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.resolve_queued_user_message",
     kind: "daemon",
     family: "resolve_queued_user_message",
-    description: "SDK method daemon.resolve_queued_user_message.",
+    description: "Resolve queued user message (SDK method daemon.resolve_queued_user_message).",
     params: {
       type: "object",
       properties: {},
@@ -9476,7 +9453,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.resolve_user_preferences",
     kind: "daemon",
     family: "resolve_user_preferences",
-    description: "SDK method daemon.resolve_user_preferences. Inputs: token, resolution, cwd.",
+    description: "Resolve user preferences (SDK method daemon.resolve_user_preferences).",
     params: {
       type: "object",
       properties: {
@@ -9552,8 +9529,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.resume_automation",
     kind: "daemon",
     family: "resume_automation",
-    description:
-      "SDK method daemon.resume_automation. Inputs: automationId, automationDirName, basePath.",
+    description: "Resume automation (SDK method daemon.resume_automation).",
     params: {
       type: "object",
       properties: {
@@ -9595,7 +9571,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.resume_session_crons",
     kind: "daemon",
     family: "resume_session_crons",
-    description: "SDK method daemon.resume_session_crons. Inputs: sessionId.",
+    description: "Resume session crons (SDK method daemon.resume_session_crons).",
     params: {
       type: "object",
       properties: {
@@ -9622,8 +9598,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.run_automation",
     kind: "daemon",
     family: "run_automation",
-    description:
-      "SDK method daemon.run_automation. Inputs: automationId, automationDirName, basePath, computerId, skills, memoryFiles.",
+    description: "Run automation (SDK method daemon.run_automation).",
     params: {
       type: "object",
       properties: {
@@ -9783,8 +9758,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.save_semantic_diff_cache",
     kind: "daemon",
     family: "save_semantic_diff_cache",
-    description:
-      "SDK method daemon.save_semantic_diff_cache. Inputs: currentBranch, baseBranch, commitHash, content, truncated.",
+    description: "Save semantic diff cache (SDK method daemon.save_semantic_diff_cache).",
     params: {
       type: "object",
       properties: {
@@ -9823,8 +9797,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.save_worktree_setup_profile",
     kind: "daemon",
     family: "save_worktree_setup_profile",
-    description:
-      "SDK method daemon.save_worktree_setup_profile. Inputs: cwd, name, script, initialPrompt, cleanupScript, profileId.",
+    description: "Save worktree setup profile (SDK method daemon.save_worktree_setup_profile).",
     params: {
       type: "object",
       properties: {
@@ -9862,8 +9835,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.search_files",
     kind: "daemon",
     family: "search_files",
-    description:
-      "SDK method daemon.search_files. Inputs: sessionId, cwd, query, maxResults, showHidden.",
+    description: "Search files (SDK method daemon.search_files).",
     params: {
       type: "object",
       properties: {
@@ -9897,8 +9869,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.search_sessions",
     kind: "daemon",
     family: "search_sessions",
-    description:
-      "SDK method daemon.search_sessions. Inputs: query, kind, limitSessions, limitHitsPerSession, contextChars, updatedAfterMs, updatedBeforeMs.",
+    description: "Search sessions (SDK method daemon.search_sessions).",
     params: {
       type: "object",
       properties: {
@@ -10027,8 +9998,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.set_plugin_enabled",
     kind: "daemon",
     family: "set_plugin_enabled",
-    description:
-      "SDK method daemon.set_plugin_enabled. Inputs: sessionId, pluginId, scope, enabled.",
+    description: "Set plugin enabled (SDK method daemon.set_plugin_enabled).",
     params: {
       type: "object",
       properties: {
@@ -10067,8 +10037,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.set_skill_disabled",
     kind: "daemon",
     family: "set_skill_disabled",
-    description:
-      "SDK method daemon.set_skill_disabled. Inputs: sessionId, skillName, disabled, settingsLevel.",
+    description: "Set skill disabled (SDK method daemon.set_skill_disabled).",
     params: {
       type: "object",
       properties: {
@@ -10111,8 +10080,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.create_workstream",
     kind: "daemon",
     family: "sf",
-    description:
-      "SDK method daemon.sf.create_workstream. Inputs: title, goal, slug, userId, owningTeamId, missionId, accessMode, creationSessionId, executionTemplateId, environmentId, connectors, repos, workerConcurrency, stewardConcurrency, taskLimit, specLimit, prLimit, requireChangeApproval, requireApproval, autoMerge, reviewers.",
+    description: "Sf create workstream (SDK method daemon.sf.create_workstream).",
     params: {
       type: "object",
       properties: {
@@ -10327,7 +10295,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "sf",
     description:
-      "SDK method daemon.sf.delete_workstream. Inputs: idOrSlug. Destructive; confirm before calling.",
+      "Sf delete workstream (SDK method daemon.sf.delete_workstream). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -10483,7 +10451,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.get_workstream",
     kind: "daemon",
     family: "sf",
-    description: "SDK method daemon.sf.get_workstream. Inputs: idOrSlug.",
+    description: "Sf get workstream (SDK method daemon.sf.get_workstream).",
     params: {
       type: "object",
       properties: {
@@ -10629,7 +10597,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.hydrate_workstream_content",
     kind: "daemon",
     family: "sf",
-    description: "SDK method daemon.sf.hydrate_workstream_content. Inputs: workstreamId.",
+    description: "Sf hydrate workstream content (SDK method daemon.sf.hydrate_workstream_content).",
     params: {
       type: "object",
       properties: {
@@ -10652,8 +10620,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.list_activities",
     kind: "daemon",
     family: "sf",
-    description:
-      "SDK method daemon.sf.list_activities. Inputs: workstreamIdOrSlug, changeId, awaitingReviewOnly, limit.",
+    description: "Sf list activities (SDK method daemon.sf.list_activities).",
     params: {
       type: "object",
       properties: {
@@ -10759,7 +10726,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.list_changes",
     kind: "daemon",
     family: "sf",
-    description: "SDK method daemon.sf.list_changes. Inputs: workstreamIdOrSlug, status, limit.",
+    description: "Sf list changes (SDK method daemon.sf.list_changes).",
     params: {
       type: "object",
       properties: {
@@ -10856,7 +10823,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.list_events",
     kind: "daemon",
     family: "sf",
-    description: "SDK method daemon.sf.list_events. Inputs: workstreamIdOrSlug, unreadOnly, limit.",
+    description: "Sf list events (SDK method daemon.sf.list_events).",
     params: {
       type: "object",
       properties: {
@@ -10928,7 +10895,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.list_signals",
     kind: "daemon",
     family: "sf",
-    description: "SDK method daemon.sf.list_signals. Inputs: workstreamIdOrSlug, status, limit.",
+    description: "Sf list signals (SDK method daemon.sf.list_signals).",
     params: {
       type: "object",
       properties: {
@@ -11010,7 +10977,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.list_workstreams",
     kind: "daemon",
     family: "sf",
-    description: "SDK method daemon.sf.list_workstreams. Inputs: state.",
+    description: "Sf list workstreams (SDK method daemon.sf.list_workstreams).",
     params: {
       type: "object",
       properties: {
@@ -11159,7 +11126,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.mark_events_read",
     kind: "daemon",
     family: "sf",
-    description: "SDK method daemon.sf.mark_events_read. Inputs: workstreamIdOrSlug, eventIds.",
+    description: "Sf mark events read (SDK method daemon.sf.mark_events_read).",
     params: {
       type: "object",
       properties: {
@@ -11192,7 +11159,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.mark_events_unread",
     kind: "daemon",
     family: "sf",
-    description: "SDK method daemon.sf.mark_events_unread. Inputs: workstreamIdOrSlug, eventIds.",
+    description: "Sf mark events unread (SDK method daemon.sf.mark_events_unread).",
     params: {
       type: "object",
       properties: {
@@ -11225,8 +11192,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.publish_workstream_content",
     kind: "daemon",
     family: "sf",
-    description:
-      "SDK method daemon.sf.publish_workstream_content. Inputs: workstreamId, expectedGeneration.",
+    description: "Sf publish workstream content (SDK method daemon.sf.publish_workstream_content).",
     params: {
       type: "object",
       properties: {
@@ -11252,8 +11218,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.resolve_activity_review",
     kind: "daemon",
     family: "sf",
-    description:
-      "SDK method daemon.sf.resolve_activity_review. Inputs: activityId, decision, comment.",
+    description: "Sf resolve activity review (SDK method daemon.sf.resolve_activity_review).",
     params: {
       type: "object",
       properties: {
@@ -11425,8 +11390,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.sf.update_workstream",
     kind: "daemon",
     family: "sf",
-    description:
-      "SDK method daemon.sf.update_workstream. Inputs: idOrSlug, state, title, owningTeamId, missionId, goal, icon, userId, creationSessionId, connectors, repos, workerConcurrency, stewardConcurrency, dashboardPort, taskLimit, specLimit, prLimit, dashboardUrl, dashboardHtml, requireChangeApproval, requireApproval, autoMerge, reviewers.",
+    description: "Sf update workstream (SDK method daemon.sf.update_workstream).",
     params: {
       type: "object",
       properties: {
@@ -11647,7 +11611,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "start_pull_request_layer_manifest_generation",
     description:
-      "SDK method daemon.start_pull_request_layer_manifest_generation. Inputs: sessionId, prUrl, repoDir, baseSha, headSha, operation, modelId, reasoningEffort.",
+      "Start pull request layer manifest generation (SDK method daemon.start_pull_request_layer_manifest_generation).",
     params: {
       type: "object",
       properties: {
@@ -11691,8 +11655,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.submit_bug_report",
     kind: "daemon",
     family: "submit_bug_report",
-    description:
-      "SDK method daemon.submit_bug_report. Inputs: sessionId, userComment, clientLogs, source.",
+    description: "Submit bug report (SDK method daemon.submit_bug_report).",
     params: {
       type: "object",
       properties: {
@@ -11753,8 +11716,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.submit_mcp_auth_code",
     kind: "daemon",
     family: "submit_mcp_auth_code",
-    description:
-      "SDK method daemon.submit_mcp_auth_code. Inputs: sessionId, serverName, code, state.",
+    description: "Submit mcp auth code (SDK method daemon.submit_mcp_auth_code).",
     params: {
       type: "object",
       properties: {
@@ -11785,8 +11747,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.submit_mcp_auth_error",
     kind: "daemon",
     family: "submit_mcp_auth_error",
-    description:
-      "SDK method daemon.submit_mcp_auth_error. Inputs: sessionId, serverName, error, errorDescription, state.",
+    description: "Submit mcp auth error (SDK method daemon.submit_mcp_auth_error).",
     params: {
       type: "object",
       properties: {
@@ -11820,8 +11781,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.toggle_mcp_server",
     kind: "daemon",
     family: "toggle_mcp_server",
-    description:
-      "SDK method daemon.toggle_mcp_server. Inputs: serverName, enabled, settingsLevel, sessionId.",
+    description: "Toggle mcp server (SDK method daemon.toggle_mcp_server).",
     params: {
       type: "object",
       properties: {
@@ -11852,8 +11812,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.toggle_mcp_tool",
     kind: "daemon",
     family: "toggle_mcp_tool",
-    description:
-      "SDK method daemon.toggle_mcp_tool. Inputs: serverName, toolName, enabled, sessionId.",
+    description: "Toggle mcp tool (SDK method daemon.toggle_mcp_tool).",
     params: {
       type: "object",
       properties: {
@@ -11884,7 +11843,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.trust_folder",
     kind: "daemon",
     family: "trust_folder",
-    description: "SDK method daemon.trust_folder. Inputs: path.",
+    description: "Trust folder (SDK method daemon.trust_folder).",
     params: {
       type: "object",
       properties: {
@@ -11911,7 +11870,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.unarchive_session",
     kind: "daemon",
     family: "unarchive_session",
-    description: "SDK method daemon.unarchive_session. Inputs: sessionId.",
+    description: "Unarchive session (SDK method daemon.unarchive_session).",
     params: {
       type: "object",
       properties: {
@@ -11939,7 +11898,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "uninstall_plugin",
     description:
-      "SDK method daemon.uninstall_plugin. Inputs: sessionId, pluginId, scope. Destructive; confirm before calling.",
+      "Uninstall plugin (SDK method daemon.uninstall_plugin). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -11975,8 +11934,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_automation",
     kind: "daemon",
     family: "update_automation",
-    description:
-      "SDK method daemon.update_automation. Inputs: automationId, automationDirName, basePath, name, description, schedule, model, reasoningEffort, prompt, tags, privacyLevel, sessionPrivacy, paused, workingDirectory, workstreamId.",
+    description: "Update automation (SDK method daemon.update_automation).",
     params: {
       type: "object",
       properties: {
@@ -12051,8 +12009,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_automation_model",
     kind: "daemon",
     family: "update_automation_model",
-    description:
-      "SDK method daemon.update_automation_model. Inputs: automationId, automationDirName, model, basePath.",
+    description: "Update automation model (SDK method daemon.update_automation_model).",
     params: {
       type: "object",
       properties: {
@@ -12091,8 +12048,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_automation_privacy",
     kind: "daemon",
     family: "update_automation_privacy",
-    description:
-      "SDK method daemon.update_automation_privacy. Inputs: automationId, automationDirName, privacyLevel, sessionPrivacy, createdBy, basePath.",
+    description: "Update automation privacy (SDK method daemon.update_automation_privacy).",
     params: {
       type: "object",
       properties: {
@@ -12150,8 +12106,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_automation_prompt",
     kind: "daemon",
     family: "update_automation_prompt",
-    description:
-      "SDK method daemon.update_automation_prompt. Inputs: automationId, automationDirName, prompt, basePath.",
+    description: "Update automation prompt (SDK method daemon.update_automation_prompt).",
     params: {
       type: "object",
       properties: {
@@ -12190,8 +12145,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_automation_schedule",
     kind: "daemon",
     family: "update_automation_schedule",
-    description:
-      "SDK method daemon.update_automation_schedule. Inputs: automationId, automationDirName, schedule, basePath.",
+    description: "Update automation schedule (SDK method daemon.update_automation_schedule).",
     params: {
       type: "object",
       properties: {
@@ -12230,7 +12184,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_cron",
     kind: "daemon",
     family: "update_cron",
-    description: "SDK method daemon.update_cron. Inputs: cronId, status, schedule, payload.",
+    description: "Update cron (SDK method daemon.update_cron).",
     params: {
       type: "object",
       properties: {
@@ -12576,7 +12530,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_marketplace",
     kind: "daemon",
     family: "update_marketplace",
-    description: "SDK method daemon.update_marketplace. Inputs: sessionId, name.",
+    description: "Update marketplace (SDK method daemon.update_marketplace).",
     params: {
       type: "object",
       properties: {
@@ -12622,7 +12576,8 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_mcp_config",
     kind: "daemon",
     family: "update_mcp_config",
-    description: "SDK method daemon.update_mcp_config. Inputs: action, serverNames, serverConfig.",
+    description:
+      "Update mcp config (SDK method daemon.update_mcp_config). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -13006,7 +12961,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_plugin",
     kind: "daemon",
     family: "update_plugin",
-    description: "SDK method daemon.update_plugin. Inputs: sessionId, pluginId, scope.",
+    description: "Update plugin (SDK method daemon.update_plugin).",
     params: {
       type: "object",
       properties: {
@@ -13055,8 +13010,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_session_defaults",
     kind: "daemon",
     family: "update_session_defaults",
-    description:
-      "SDK method daemon.update_session_defaults. Inputs: acknowledgeLegacyModelId, modelId, reasoningEffort, interactionMode, autonomyLevel, specModeModelId, specModeReasoningEffort, compactionTokenLimit, compactionTokenLimitPerModel, compactionModel, compactionThresholdCheckEnabled, enableOneHourAnthropicCaching, compactionModelMode, cloudSessionSync, cloudConfigSync, cloudItemPull, routedModelVisibilityEnabled, subagentModelSettings, subagentInheritTiers, subagentAutonomyLevel, specSaveDir, missionOrchestratorModel, missionOrchestratorReasoningEffort, missionModelSettings, imageGenerationModel, runInWorktree, worktreeDirectory, worktreeAutoDeleteLimit.",
+    description: "Update session defaults (SDK method daemon.update_session_defaults).",
     params: {
       type: "object",
       properties: {
@@ -14474,8 +14428,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.update_session_settings",
     kind: "daemon",
     family: "update_session_settings",
-    description:
-      "SDK method daemon.update_session_settings. Inputs: modelId, reasoningEffort, autonomyMode, interactionMode, autonomyLevel, specModeModelId, specModeReasoningEffort, missionSettings, tags, compactionTokenLimit, compactionThresholdCheckEnabled, additionalToolIds, enabledToolIds, disabledToolIds, restrictToolIds, sessionId.",
+    description: "Update session settings (SDK method daemon.update_session_settings).",
     params: {
       type: "object",
       properties: {
@@ -14591,8 +14544,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.upsert_custom_model",
     kind: "daemon",
     family: "upsert_custom_model",
-    description:
-      "SDK method daemon.upsert_custom_model. Inputs: rawIndex, expectedModel, model, displayName, provider, baseUrl, apiKey, maxOutputTokens, noImageSupport, configuration, preservedSecrets, expectedRevision.",
+    description: "Upsert custom model (SDK method daemon.upsert_custom_model).",
     params: {
       type: "object",
       properties: {
@@ -14828,7 +14780,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.validate_working_directory",
     kind: "daemon",
     family: "validate_working_directory",
-    description: "SDK method daemon.validate_working_directory. Inputs: workingDirectory.",
+    description: "Validate working directory (SDK method daemon.validate_working_directory).",
     params: {
       type: "object",
       properties: {
@@ -14861,7 +14813,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.warmup_cache",
     kind: "daemon",
     family: "warmup_cache",
-    description: "SDK method daemon.warmup_cache. Inputs: sessionId.",
+    description: "Warmup cache (SDK method daemon.warmup_cache).",
     params: {
       type: "object",
       properties: {
@@ -14883,7 +14835,8 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "daemon.write_terminal_data",
     kind: "daemon",
     family: "write_terminal_data",
-    description: "SDK method daemon.write_terminal_data. Inputs: terminalId, data, sessionId.",
+    description:
+      "Write terminal data (SDK method daemon.write_terminal_data). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -14912,7 +14865,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "daemon",
     family: "write_workspace_file_content",
     description:
-      "SDK method daemon.write_workspace_file_content. Inputs: sessionId, cwd, filePath, content, baseFingerprint.",
+      "Write workspace file content (SDK method daemon.write_workspace_file_content). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -14954,8 +14907,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.add_mcp_server",
     kind: "droid",
     family: "add_mcp_server",
-    description:
-      "SDK method droid.add_mcp_server. Inputs: name, type, url, headers, oauth, command, args, env.",
+    description: "Add mcp server (SDK method droid.add_mcp_server).",
     params: {
       type: "object",
       properties: {
@@ -15056,8 +15008,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.add_user_message",
     kind: "droid",
     family: "add_user_message",
-    description:
-      "SDK method droid.add_user_message. Inputs: messageId, text, content, images, imagePaths, files, outputFormat, skipAgentLoop, queuePlacement, role, visibility, userMessageSource, sender, author, chatSettingsCatalog.",
+    description: "Add user message (SDK method droid.add_user_message).",
     params: {
       type: "object",
       properties: {
@@ -15373,7 +15324,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.append_messages",
     kind: "droid",
     family: "append_messages",
-    description: "SDK method droid.append_messages. Inputs: messages.",
+    description: "Append messages (SDK method droid.append_messages).",
     params: {
       type: "object",
       properties: {
@@ -16008,7 +15959,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.ask_user",
     kind: "droid",
     family: "ask_user",
-    description: "SDK method droid.ask_user. Inputs: toolCallId, questions.",
+    description: "Ask user (SDK method droid.ask_user).",
     params: {
       type: "object",
       properties: {
@@ -16139,7 +16090,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.authenticate_mcp_server",
     kind: "droid",
     family: "authenticate_mcp_server",
-    description: "SDK method droid.authenticate_mcp_server. Inputs: serverName.",
+    description: "Authenticate mcp server (SDK method droid.authenticate_mcp_server).",
     params: {
       type: "object",
       properties: {
@@ -16166,7 +16117,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.cancel_mcp_auth",
     kind: "droid",
     family: "cancel_mcp_auth",
-    description: "SDK method droid.cancel_mcp_auth. Inputs: serverName.",
+    description: "Cancel mcp auth (SDK method droid.cancel_mcp_auth).",
     params: {
       type: "object",
       properties: {
@@ -16193,7 +16144,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.change_working_directory",
     kind: "droid",
     family: "change_working_directory",
-    description: "SDK method droid.change_working_directory. Inputs: workingDirectory.",
+    description: "Change working directory (SDK method droid.change_working_directory).",
     params: {
       type: "object",
       properties: {
@@ -16220,7 +16171,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.clear_mcp_auth",
     kind: "droid",
     family: "clear_mcp_auth",
-    description: "SDK method droid.clear_mcp_auth. Inputs: serverName.",
+    description: "Clear mcp auth (SDK method droid.clear_mcp_auth).",
     params: {
       type: "object",
       properties: {
@@ -16247,7 +16198,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.close_session",
     kind: "droid",
     family: "close_session",
-    description: "SDK method droid.close_session. Inputs: reason.",
+    description: "Close session (SDK method droid.close_session).",
     params: {
       type: "object",
       properties: {
@@ -16268,7 +16219,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.compact_session",
     kind: "droid",
     family: "compact_session",
-    description: "SDK method droid.compact_session. Inputs: customInstructions, mode.",
+    description: "Compact session (SDK method droid.compact_session).",
     params: {
       type: "object",
       properties: {
@@ -16301,7 +16252,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "droid",
     family: "execute_rewind",
     description:
-      "SDK method droid.execute_rewind. Inputs: sessionId, messageId, filesToRestore, filesToDelete, forkTitle. Destructive; confirm before calling.",
+      "Execute rewind (SDK method droid.execute_rewind). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -16384,7 +16335,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.fork_session",
     kind: "droid",
     family: "fork_session",
-    description: "SDK method droid.fork_session. Inputs: title, tags.",
+    description: "Fork session (SDK method droid.fork_session).",
     params: {
       type: "object",
       properties: {
@@ -16429,7 +16380,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.get_context_stats",
     kind: "droid",
     family: "get_context_stats",
-    description: "SDK method droid.get_context_stats.",
+    description: "Get context stats (SDK method droid.get_context_stats).",
     params: {
       type: "object",
       additionalProperties: false,
@@ -16445,7 +16396,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.get_rewind_info",
     kind: "droid",
     family: "get_rewind_info",
-    description: "SDK method droid.get_rewind_info. Inputs: sessionId, messageId.",
+    description: "Get rewind info (SDK method droid.get_rewind_info).",
     params: {
       type: "object",
       properties: {
@@ -16520,8 +16471,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.initialize_session",
     kind: "droid",
     family: "initialize_session",
-    description:
-      "SDK method droid.initialize_session. Inputs: machineId, cwd, workspaceId, sessionId, mcpServers, interactionMode, autonomyLevel, modelId, reasoningEffort, systemPromptOverride, systemPrompt, specModeModelId, specModeReasoningEffort, missionSettings, compactionThresholdCheckEnabled, decompSessionType, decompMissionId, skipPermissionsUnsafe, sessionLocation, sessionSource, sessionOriginHint, tags, privacyLevel, organizationId, title, autoRejectPermissionRequests, disableBuiltinSkills, mcpOAuthCallbackUri, blockOnMcpLoad, worktree, worktreeDir, structuredOutputFormat, toolExecutionMode, allowSubagentsInScripts, worktreeLifecycle, worktreeBranchMode, worktreeBaseBranch, worktreeBaseBranchFromOrigin, worktreeNewBranch, worktreePromptSlug, worktreeSetupProfileId, callingMetadata, disabledToolIds.",
+    description: "Initialize session (SDK method droid.initialize_session).",
     params: {
       type: "object",
       properties: {
@@ -18491,7 +18441,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.interrupt_session",
     kind: "droid",
     family: "interrupt_session",
-    description: "SDK method droid.interrupt_session.",
+    description: "Interrupt session (SDK method droid.interrupt_session).",
     params: {
       type: "object",
       additionalProperties: false,
@@ -18508,7 +18458,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "droid",
     family: "kill_worker_session",
     description:
-      "SDK method droid.kill_worker_session. Inputs: workerSessionId. Destructive; confirm before calling.",
+      "Kill worker session (SDK method droid.kill_worker_session). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -18530,7 +18480,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.list_mcp_registry",
     kind: "droid",
     family: "list_mcp_registry",
-    description: "SDK method droid.list_mcp_registry.",
+    description: "List mcp registry (SDK method droid.list_mcp_registry).",
     params: {
       type: "object",
       additionalProperties: false,
@@ -18588,7 +18538,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.list_mcp_servers",
     kind: "droid",
     family: "list_mcp_servers",
-    description: "SDK method droid.list_mcp_servers.",
+    description: "List mcp servers (SDK method droid.list_mcp_servers).",
     params: {
       type: "object",
       additionalProperties: false,
@@ -18693,7 +18643,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.list_mcp_tools",
     kind: "droid",
     family: "list_mcp_tools",
-    description: "SDK method droid.list_mcp_tools.",
+    description: "List mcp tools (SDK method droid.list_mcp_tools).",
     params: {
       type: "object",
       additionalProperties: false,
@@ -18755,7 +18705,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.list_skills",
     kind: "droid",
     family: "list_skills",
-    description: "SDK method droid.list_skills. Inputs: includeContent.",
+    description: "List skills (SDK method droid.list_skills).",
     params: {
       type: "object",
       properties: {
@@ -18888,8 +18838,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.list_tools",
     kind: "droid",
     family: "list_tools",
-    description:
-      "SDK method droid.list_tools. Inputs: modelId, interactionMode, autonomyLevel, specModeModelId, disabledToolIds, skipPermissionsUnsafe, depth, includeSchemas, toolIds.",
+    description: "List tools (SDK method droid.list_tools).",
     params: {
       type: "object",
       properties: {
@@ -19014,8 +18963,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.load_session",
     kind: "droid",
     family: "load_session",
-    description:
-      "SDK method droid.load_session. Inputs: sessionId, agentTurnOutcomeTurnId, mcpServers, loadAllMessages, messageLimit, mcpOAuthCallbackUri, sessionOriginHint, autoRejectPermissionRequests, disableBuiltinSkills, sessionLocation, sessionSource, structuredOutputFormat, disabledToolIds.",
+    description: "Load session (SDK method droid.load_session).",
     params: {
       type: "object",
       properties: {
@@ -23082,8 +23030,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.pick_options",
     kind: "droid",
     family: "pick_options",
-    description:
-      "SDK method droid.pick_options. Inputs: toolCallId, title, hint, emptyText, rows, multi, preselectedIds, initialSearch.",
+    description: "Pick options (SDK method droid.pick_options).",
     params: {
       type: "object",
       properties: {
@@ -23159,7 +23106,8 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.refresh_connector_tool_catalog",
     kind: "droid",
     family: "refresh_connector_tool_catalog",
-    description: "SDK method droid.refresh_connector_tool_catalog.",
+    description:
+      "Refresh connector tool catalog (SDK method droid.refresh_connector_tool_catalog).",
     params: {
       type: "object",
       additionalProperties: false,
@@ -23177,7 +23125,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     kind: "droid",
     family: "remove_mcp_server",
     description:
-      "SDK method droid.remove_mcp_server. Inputs: serverName, settingsLevel. Destructive; confirm before calling.",
+      "Remove mcp server (SDK method droid.remove_mcp_server). Destructive; confirm before calling.",
     params: {
       type: "object",
       properties: {
@@ -23207,7 +23155,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.rename_session",
     kind: "droid",
     family: "rename_session",
-    description: "SDK method droid.rename_session. Inputs: title.",
+    description: "Rename session (SDK method droid.rename_session).",
     params: {
       type: "object",
       properties: {
@@ -23234,8 +23182,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.request_permission",
     kind: "droid",
     family: "request_permission",
-    description:
-      "SDK method droid.request_permission. Inputs: toolUses, options, associatedSessionIds.",
+    description: "Request permission (SDK method droid.request_permission).",
     params: {
       type: "object",
       properties: {
@@ -24109,8 +24056,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.resolve_queued_user_message",
     kind: "droid",
     family: "resolve_queued_user_message",
-    description:
-      "SDK method droid.resolve_queued_user_message. Inputs: requestId, action, queuePlacement.",
+    description: "Resolve queued user message (SDK method droid.resolve_queued_user_message).",
     params: {
       type: "object",
       properties: {
@@ -24137,7 +24083,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.set_skill_disabled",
     kind: "droid",
     family: "set_skill_disabled",
-    description: "SDK method droid.set_skill_disabled. Inputs: skillName, disabled, settingsLevel.",
+    description: "Set skill disabled (SDK method droid.set_skill_disabled).",
     params: {
       type: "object",
       properties: {
@@ -24177,7 +24123,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.submit_bug_report",
     kind: "droid",
     family: "submit_bug_report",
-    description: "SDK method droid.submit_bug_report. Inputs: userComment, clientLogs, source.",
+    description: "Submit bug report (SDK method droid.submit_bug_report).",
     params: {
       type: "object",
       properties: {
@@ -24235,7 +24181,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.submit_mcp_auth_code",
     kind: "droid",
     family: "submit_mcp_auth_code",
-    description: "SDK method droid.submit_mcp_auth_code. Inputs: serverName, code, state.",
+    description: "Submit mcp auth code (SDK method droid.submit_mcp_auth_code).",
     params: {
       type: "object",
       properties: {
@@ -24268,7 +24214,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.toggle_mcp_server",
     kind: "droid",
     family: "toggle_mcp_server",
-    description: "SDK method droid.toggle_mcp_server. Inputs: serverName, enabled, settingsLevel.",
+    description: "Toggle mcp server (SDK method droid.toggle_mcp_server).",
     params: {
       type: "object",
       properties: {
@@ -24301,7 +24247,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.toggle_mcp_tool",
     kind: "droid",
     family: "toggle_mcp_tool",
-    description: "SDK method droid.toggle_mcp_tool. Inputs: serverName, toolName, enabled.",
+    description: "Toggle mcp tool (SDK method droid.toggle_mcp_tool).",
     params: {
       type: "object",
       properties: {
@@ -24334,8 +24280,7 @@ export const SURFACE: ReadonlyArray<WireEntry> = [
     method: "droid.update_session_settings",
     kind: "droid",
     family: "update_session_settings",
-    description:
-      "SDK method droid.update_session_settings. Inputs: modelId, reasoningEffort, interactionMode, autonomyLevel, specModeModelId, specModeReasoningEffort, missionSettings, tags, compactionTokenLimit, compactionThresholdCheckEnabled, disabledToolIds.",
+    description: "Update session settings (SDK method droid.update_session_settings).",
     params: {
       type: "object",
       properties: {

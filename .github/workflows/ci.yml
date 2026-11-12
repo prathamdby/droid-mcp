@@ -34,3 +34,8 @@ jobs:
 
       # unit, http, process, and integration (tests that need no model or key).
       - run: pnpm vitest run --project unit --project http --project process --project integration
+
+      # The same suite through the default compact profile's tool_call and result_read.
+      - run: pnpm vitest run --project unit --project http --project process --project integration
+        env:
+          DROID_MCP_TEST_PROFILE: compact

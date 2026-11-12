@@ -67,7 +67,36 @@ export interface ConnectOptions {
   readonly config: Config
 }
 
-/** An authenticated MCP client over the real `/mcp` layer, in process. */
+const Bounded = Schema.Struct({
+  result: Schema.optional(Schema.Json),
+  truncated: Schema.optional(Schema.Boolean),
+  ref: Schema.optional(Schema.String),
+})
+
+const Chunk = Schema.Struct({ chunk: Schema.String, nextOffset: Schema.optional(Schema.Number) })
+
+const SearchPage = Schema.Struct({
+  nextOffset: Schema.optional(Schema.Number),
+  tools: Schema.Array(Schema.Struct({ name: Schema.String })),
+})
+
+const Described = Schema.Struct({
+  tools: Schema.Array(
+    Schema.Struct({ name: Schema.String, description: Schema.String, inputSchema: Schema.Json }),
+  ),
+})
+
+const RESULT_BYTES_MAX = 262_144
+
+/**
+ * An authenticated MCP client over the real `/mcp` layer, in process.
+ *
+ * Under the compact profile, a call to an operation the server does not list
+ * goes through `tool_call`, and `list` walks `tools_search` and
+ * `tools_describe`. The returned outcome has the shape a direct call would
+ * have, so every test written against the full profile also exercises the
+ * compact dispatch path when `DROID_MCP_TEST_PROFILE=compact`.
+ */
 export const connect = async (options: ConnectOptions): Promise<ToolClient> => {
   const server = await startServer({ config: options.config, keys: [MCP_KEY] })
   const authorization = "Bearer " + MCP_KEY
@@ -88,7 +117,7 @@ export const connect = async (options: ConnectOptions): Promise<ToolClient> => {
     return readBody(response)
   }
 
-  const call = async (name: string, args: Json = {}): Promise<ToolCall> => {
+  const direct = async (name: string, args: Json = {}): Promise<ToolCall> => {
     const envelope = Schema.decodeUnknownSync(CallEnvelope)(
       await rpc("tools/call", { name, arguments: args }),
     )
@@ -99,6 +128,117 @@ export const connect = async (options: ConnectOptions): Promise<ToolClient> => {
       text: envelope.result?.content?.[0]?.text ?? "",
       rpcError: envelope.error,
     }
+  }
+
+  const listed = async (): Promise<ReadonlyArray<ListedTool>> => {
+    const tools: Array<ListedTool> = []
+    let cursor: string | undefined
+
+    do {
+      const envelope = Schema.decodeUnknownSync(ListEnvelope)(
+        await rpc("tools/list", cursor === undefined ? {} : { cursor }),
+      )
+
+      tools.push(...envelope.result.tools)
+      cursor = envelope.result.nextCursor
+    } while (cursor !== undefined)
+
+    return tools
+  }
+
+  const compact = options.config.toolProfile === "compact"
+  let advertised: ReadonlySet<string> | undefined
+
+  const isAdvertised = async (name: string): Promise<boolean> => {
+    advertised ??= new Set((await listed()).map((tool) => tool.name))
+
+    return advertised.has(name)
+  }
+
+  const okOf = async (name: string, args: Json): Promise<Json | undefined> => {
+    const outcome = await direct(name, args)
+
+    if (outcome.isError || outcome.rpcError !== undefined) {
+      throw new Error(name + " failed: " + (outcome.rpcError?.message ?? outcome.text))
+    }
+
+    return outcome.structured
+  }
+
+  /** Reassembles a stored result by following `nextOffset` to the end. */
+  const readAll = async (ref: string): Promise<Json> => {
+    let text = ""
+    let offset: number | undefined = 0
+
+    while (offset !== undefined) {
+      const page = Schema.decodeUnknownSync(Chunk)(
+        await okOf("result_read", { ref, offset, length: RESULT_BYTES_MAX }),
+      )
+
+      text += page.chunk
+      offset = page.nextOffset
+    }
+
+    return Schema.decodeUnknownSync(Schema.Json)(JSON.parse(text))
+  }
+
+  const dispatched = async (name: string, args: Json): Promise<ToolCall> => {
+    const outcome = await direct("tool_call", { name, arguments: args, maxBytes: RESULT_BYTES_MAX })
+
+    if (outcome.rpcError !== undefined) return outcome
+
+    if (outcome.isError) {
+      const failure = Schema.decodeUnknownSync(Failure)(JSON.parse(outcome.text))
+
+      // A direct call reports arguments that fail the schema as plain text, not { code, message }.
+      if (failure.code === "invalid_arguments") return { ...outcome, text: failure.message }
+
+      return outcome
+    }
+
+    const bounded = Schema.decodeUnknownSync(Bounded)(outcome.structured)
+
+    const structured =
+      bounded.truncated === true && bounded.ref !== undefined
+        ? await readAll(bounded.ref)
+        : bounded.result
+
+    return {
+      isError: false,
+      structured,
+      text: structured === undefined ? "" : JSON.stringify(structured),
+      rpcError: undefined,
+    }
+  }
+
+  const call = async (name: string, args: Json = {}): Promise<ToolCall> =>
+    compact && !(await isAdvertised(name)) ? dispatched(name, args) : direct(name, args)
+
+  /** Every operation, through search and describe, in catalog order. */
+  const catalog = async (): Promise<ReadonlyArray<ListedTool>> => {
+    const names: Array<string> = []
+    let offset: number | undefined = 0
+
+    while (offset !== undefined) {
+      const page = Schema.decodeUnknownSync(SearchPage)(
+        await okOf("tools_search", { limit: 50, offset }),
+      )
+
+      names.push(...page.tools.map((tool) => tool.name))
+      offset = page.nextOffset
+    }
+
+    const tools: Array<ListedTool> = []
+
+    for (let start = 0; start < names.length; start += 20) {
+      const described = Schema.decodeUnknownSync(Described)(
+        await okOf("tools_describe", { names: names.slice(start, start + 20) }),
+      )
+
+      tools.push(...described.tools)
+    }
+
+    return tools
   }
 
   return {
@@ -121,21 +261,7 @@ export const connect = async (options: ConnectOptions): Promise<ToolClient> => {
 
       return Schema.decodeUnknownSync(Failure)(JSON.parse(outcome.text))
     },
-    list: async () => {
-      const tools: Array<ListedTool> = []
-      let cursor: string | undefined
-
-      do {
-        const envelope = Schema.decodeUnknownSync(ListEnvelope)(
-          await rpc("tools/list", cursor === undefined ? {} : { cursor }),
-        )
-
-        tools.push(...envelope.result.tools)
-        cursor = envelope.result.nextCursor
-      } while (cursor !== undefined)
-
-      return tools
-    },
+    list: () => (compact ? catalog() : listed()),
     dispose: () => server.dispose(),
   }
 }

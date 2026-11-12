@@ -13,6 +13,14 @@ export type AutonomyLevel = "off" | "low" | "medium" | "high"
 
 export const AUTONOMY_LEVELS: ReadonlyArray<AutonomyLevel> = ["off", "low", "medium", "high"]
 
+/**
+ * `compact` advertises a small fixed tool list and reaches every operation
+ * through `tool_call`; `full` advertises one MCP tool per operation.
+ */
+export type ToolProfile = "compact" | "full"
+
+export const TOOL_PROFILES: ReadonlyArray<ToolProfile> = ["compact", "full"]
+
 export interface Config {
   readonly command: Command
   readonly socketPath: string
@@ -23,6 +31,7 @@ export interface Config {
   readonly keys: ReadonlyArray<string>
   readonly keysFile: string | undefined
   readonly maxAutonomy: AutonomyLevel
+  readonly toolProfile: ToolProfile
   readonly allowedOrigins: ReadonlyArray<string>
   readonly daemonUrl: string | undefined
   readonly factoryApiKey: string | undefined
@@ -47,6 +56,7 @@ const flagValues: ReadonlyArray<string> = [
   "--port",
   "--keys-file",
   "--max-autonomy",
+  "--tool-profile",
   "--allow-origin",
   "--runtime-dir",
   "--daemon-url",
@@ -96,6 +106,13 @@ const parseAutonomy = (raw: string): AutonomyLevel => {
   if (raw === "off" || raw === "low" || raw === "medium" || raw === "high") return raw
   throw new ConfigError({
     message: "--max-autonomy must be one of " + AUTONOMY_LEVELS.join(", "),
+  })
+}
+
+const parseToolProfile = (raw: string): ToolProfile => {
+  if (raw === "compact" || raw === "full") return raw
+  throw new ConfigError({
+    message: "--tool-profile must be one of " + TOOL_PROFILES.join(", "),
   })
 }
 
@@ -297,6 +314,9 @@ export const parseConfig = (
     keys: splitKeys(env["DROID_MCP_KEYS"]),
     keysFile: values.get("--keys-file"),
     maxAutonomy: parseAutonomy(maxAutonomyRaw),
+    toolProfile: parseToolProfile(
+      values.get("--tool-profile") ?? env["DROID_MCP_TOOL_PROFILE"] ?? "compact",
+    ),
     allowedOrigins,
     daemonUrl: values.get("--daemon-url") ?? env["DROID_MCP_DAEMON_URL"],
     factoryApiKey: env["FACTORY_API_KEY"],

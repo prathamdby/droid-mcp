@@ -38,7 +38,10 @@ describe("generated surface", () => {
     )
 
     expect(acks?.params).toMatchObject({ required: ["cwd"] })
-    expect(acks?.description).toContain("Inputs: cwd")
+    expect(acks?.description).toBe(
+      "Acknowledge mission readiness warning (SDK method " +
+        "daemon.acknowledge_mission_readiness_warning).",
+    )
   })
 
   it("marks destructive methods and not their harmless inverses", () => {
@@ -50,6 +53,7 @@ describe("generated surface", () => {
     }
 
     const expected = [
+      "daemon.apply_automation_config",
       "daemon.archive_session",
       "daemon.cleanup_worktree",
       "daemon.delete_automation",
@@ -57,11 +61,15 @@ describe("generated surface", () => {
       "daemon.delete_custom_model",
       "daemon.delete_worktree_setup_profile",
       "daemon.execute_rewind",
+      "daemon.git_push",
       "daemon.kill_worker_session",
       "daemon.remove_marketplace",
       "daemon.remove_mcp_server",
       "daemon.sf.delete_workstream",
       "daemon.uninstall_plugin",
+      "daemon.update_mcp_config",
+      "daemon.write_terminal_data",
+      "daemon.write_workspace_file_content",
       "droid.execute_rewind",
       "droid.kill_worker_session",
       "droid.remove_mcp_server",

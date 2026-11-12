@@ -4,7 +4,7 @@ import { Option, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
 import { testConfig } from "../support/config.ts"
-import { initialize, readBody, startServer } from "../support/mcp-http.ts"
+import { type Json, initialize, readBody, startServer } from "../support/mcp-http.ts"
 
 const KEY = "generated-failure-key"
 
@@ -41,13 +41,17 @@ describe("generated tool failures", () => {
   it("reports an unreachable daemon as a typed failure, not an internal error", async () => {
     const port = await closedPort()
 
-    const server = await startServer({
-      config: testConfig({
-        daemonUrl: "http://127.0.0.1:" + String(port),
-        factoryApiKey: "test-key",
-      }),
-      keys: [KEY],
+    const config = testConfig({
+      daemonUrl: "http://127.0.0.1:" + String(port),
+      factoryApiKey: "test-key",
     })
+
+    const server = await startServer({ config, keys: [KEY] })
+
+    const call: Record<string, Json> =
+      config.toolProfile === "compact"
+        ? { name: "tool_call", arguments: { name: "daemon_list_models" } }
+        : { name: "daemon_list_models", arguments: {} }
 
     try {
       const { sessionId } = await initialize(server, "2025-11-25", {
@@ -59,7 +63,7 @@ describe("generated tool failures", () => {
           jsonrpc: "2.0",
           id: 2,
           method: "tools/call",
-          params: { name: "daemon_list_models", arguments: {} },
+          params: call,
         },
         {
           authorization: "Bearer " + KEY,

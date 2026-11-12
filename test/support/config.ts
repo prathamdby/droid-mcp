@@ -10,6 +10,7 @@ export const testConfig = (overrides: Partial<Config> = {}): Config => ({
   keys: [],
   keysFile: undefined,
   maxAutonomy: "medium",
+  toolProfile: process.env["DROID_MCP_TEST_PROFILE"] === "compact" ? "compact" : "full",
   allowedOrigins: [],
   daemonUrl: undefined,
   factoryApiKey: undefined,

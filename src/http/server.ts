@@ -13,8 +13,13 @@ import type { SessionHubOptions } from "../droid/turns.ts"
 import { effectLoggingLayer } from "../log.ts"
 import { createLogger } from "../log.ts"
 import { MCP_PROTOCOLS } from "../mcp-protocols.ts"
-import { toolsFor } from "../tools/index.ts"
-import { INSTRUCTIONS, registrations as skillRegistrations } from "../tools/skill.ts"
+import { surfaceFor } from "../tools/compact.ts"
+import { resultStoreLayer } from "../tools/results.ts"
+import {
+  INSTRUCTIONS,
+  instructionsFor,
+  registrations as skillRegistrations,
+} from "../tools/skill.ts"
 import { VERSION } from "../version.ts"
 import * as auth from "./auth.ts"
 import { keyringFrom } from "./auth.ts"
@@ -35,7 +40,7 @@ const httpLayerOptions = (options: ServerOptions): HttpLayerOptions => {
   const base: HttpLayerOptions = {
     name: "droid-mcp",
     version: VERSION,
-    instructions: INSTRUCTIONS,
+    instructions: instructionsFor(options.config.toolProfile),
     path: "/mcp",
     protocols: [...MCP_PROTOCOLS],
     allowSessionTermination: true,
@@ -66,12 +71,13 @@ const hubOptions = (config: Config): SessionHubOptions => ({
 })
 
 export const mcpLayer = (options: ServerOptions) => {
-  const { toolkit, handlers } = toolsFor(options.config)
+  const { toolkit, handlers } = surfaceFor(options.config)
 
   // SAFETY: every handler this layer needs is provided just above; the
   // registration's requirement type is widened by the generated toolkit.
   const toolRegistrations = McpServer.toolkit(toolkit).pipe(
     Layer.provide(handlers),
+    Layer.provide(resultStoreLayer),
     Layer.provide(sessionHubLayer(hubOptions(options.config))),
     Layer.provide(daemonLayer(options.config)),
     Layer.provide(restLayer(options.config, options.keys)),

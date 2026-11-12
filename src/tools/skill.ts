@@ -3,6 +3,7 @@ import type * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 
+import type { ToolProfile } from "../config.ts"
 import { SKILL_FILES, SKILL_MD, SKILL_URI } from "../generated/skill.ts"
 
 /**
@@ -34,5 +35,16 @@ export const INSTRUCTIONS =
   "Answer pending prompts with session_respond_permission, " +
   "session_answer_question, or session_pick_options, and call session_close when " +
   "the work is done. server_info reports the version and the autonomy cap."
+
+/** The compact profile adds how to reach the operations it does not list. */
+export const COMPACT_INSTRUCTIONS =
+  INSTRUCTIONS +
+  " Every other operation (daemon, hosted REST, Context, session administration) is not " +
+  "listed: find it with tools_search, read its schema with tools_describe, and run it with " +
+  "tool_call, or chain up to 20 with batch. Results over maxBytes return a preview and a " +
+  "ref; read the rest with result_read."
+
+export const instructionsFor = (profile: ToolProfile): string =>
+  profile === "compact" ? COMPACT_INSTRUCTIONS : INSTRUCTIONS
 
 export const registrations = Layer.mergeAll(droidSkill(), droidPrompt())

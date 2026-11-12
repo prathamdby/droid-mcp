@@ -262,7 +262,12 @@ describe("serve process", () => {
       const callTool = async (id: number, name: string): Promise<string> => {
         const response = await post(
           server,
-          { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } },
+          {
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name: "tool_call", arguments: { name, arguments: {} } },
+          },
           headers,
         )
 

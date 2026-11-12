@@ -57,8 +57,11 @@ export const TurnStatusSchema = Schema.Literals(["running", "completed", "interr
 
 export type TurnStatus = typeof TurnStatusSchema.Type
 
+/** Sequence numbers and cursors; finite, so the advertised schema has no NaN/Infinity branch. */
+const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
 export const TurnEventSchema = Schema.Struct({
-  seq: Schema.Number,
+  seq: Count,
   kind: Schema.String,
   text: Schema.optional(Schema.String),
   messageId: Schema.optional(Schema.String),
@@ -73,7 +76,7 @@ export const TurnEventSchema = Schema.Struct({
   status: Schema.optional(TurnStatusSchema),
   reason: Schema.optional(Schema.String),
   promptType: Schema.optional(Schema.String),
-  deadline: Schema.optional(Schema.Number),
+  deadline: Schema.optional(Schema.Finite),
   options: Schema.optional(Schema.Array(Schema.String)),
   toolUses: Schema.optional(Schema.Array(Schema.Json)),
   questions: Schema.optional(Schema.Array(Schema.Json)),
@@ -86,14 +89,14 @@ export type TurnEvent = typeof TurnEventSchema.Type
 export const TurnResultSchema = Schema.Struct({
   sessionId: Schema.String,
   status: TurnStatusSchema,
-  cursor: Schema.Number,
+  cursor: Count,
   events: Schema.Array(TurnEventSchema),
   truncated: Schema.Boolean,
   result: Schema.optional(
     Schema.Struct({
       reason: Schema.String,
       turnId: Schema.optional(Schema.String),
-      durationMs: Schema.optional(Schema.Number),
+      durationMs: Schema.optional(Schema.Finite),
       tokenUsage: Schema.optional(Schema.Json),
       structuredOutput: Schema.optional(Schema.Json),
     }),

@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
-import { INSTRUCTIONS } from "../../src/tools/skill.ts"
+import { instructionsFor } from "../../src/tools/skill.ts"
 import { testConfig } from "../support/config.ts"
 import { expectBody, initialize, readBody, startServer } from "../support/mcp-http.ts"
 import type { TestServer } from "../support/mcp-http.ts"
@@ -91,7 +91,7 @@ describe("the droid skill", () => {
     const { body } = await initialize(server, "2025-11-25", authorized)
     const instructions = expectBody(InitializeSchema, body).result.instructions ?? ""
 
-    expect(instructions).toBe(INSTRUCTIONS)
+    expect(instructions).toBe(instructionsFor(testConfig().toolProfile))
 
     for (const tool of [
       "session_create",

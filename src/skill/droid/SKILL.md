@@ -28,7 +28,16 @@ and a model. You talk to it in turns.
    you unless it returns `running`; then poll, answer prompts, and close.
    Sessions idle for 30 minutes are reaped for you, but close what you opened.
 
-`session_interrupt` stops a turn that is going the wrong way.
+`session_interrupt` stops a turn that is going the wrong way. `session_list`
+shows the live sessions with their status and next cursor.
+
+## Reaching every other operation
+
+The compact profile lists only the turn loop. The daemon, hosted REST,
+Context, and session administration operations are found with
+`tools_search`, described with `tools_describe`, and run with `tool_call`
+or `batch`. Results over `maxBytes` return a `ref` for `result_read`.
+`server_info.profile` says which profile is running.
 
 ## Reading a turn
 
@@ -136,4 +145,4 @@ resend the same write.
 - `references/session-loop.md`: the loop with real arguments and cursors.
 - `references/prompts.md`: the three prompts, outcomes, and deadlines.
 - `references/delegation.md`: the four backends, and the Environment-to-hosted-session flow.
-- `references/tool-families.md`: what the 287 tool names mean and how to find one.
+- `references/tool-families.md`: what the 288 tool names mean, how to find one, and how to read large results.

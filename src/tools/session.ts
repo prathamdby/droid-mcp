@@ -9,6 +9,7 @@ import {
   SessionHubService,
   SessionSettingsSchema,
   TurnResultSchema,
+  TurnStatusSchema,
 } from "../droid/turns.ts"
 import { ToolFailure } from "./failure.ts"
 import { requireAutonomy, requireCwd, toolFailure } from "./guards.ts"
@@ -87,8 +88,28 @@ const Close = Tool.make("session_close", {
   dependencies: [SessionHubService],
 })
 
+const List = Tool.make("session_list", {
+  description:
+    "List the live local sessions: sessionId, cwd, turn status, next cursor, and settings. " +
+    "Use it to recover a sessionId or cursor; it starts nothing.",
+  parameters: Tool.EmptyParams,
+  success: Schema.Struct({
+    sessions: Schema.Array(
+      Schema.Struct({
+        sessionId: Schema.String,
+        cwd: Schema.String,
+        status: TurnStatusSchema,
+        cursor: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+        settings: SessionSettingsSchema,
+      }),
+    ),
+  }),
+  failure: ToolFailure,
+  dependencies: [SessionHubService],
+})
+
 export const sessionTools = (config: Config) => {
-  const SessionTools = Toolkit.make(Create, Stream, Events, Interrupt, Close)
+  const SessionTools = Toolkit.make(Create, Stream, Events, Interrupt, Close, List)
 
   const handlers = SessionTools.of({
     session_create: (params) =>
@@ -133,7 +154,11 @@ export const sessionTools = (config: Config) => {
       SessionHubService.use((hub) =>
         hub.close(params.sessionId).pipe(Effect.mapError(toolFailure)),
       ),
+    session_list: () =>
+      SessionHubService.use((hub) =>
+        Effect.map(hub.sessions, (sessions) => ({ sessions: [...sessions] })),
+      ),
   })
 
-  return { tools: [Create, Stream, Events, Interrupt, Close], handlers }
+  return { tools: [Create, Stream, Events, Interrupt, Close, List], handlers }
 }

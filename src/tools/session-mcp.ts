@@ -20,7 +20,7 @@ const McpOAuthConfig = Schema.Struct({
   clientMetadataUrl: Schema.optional(Schema.String),
   clientId: Schema.optional(Schema.String),
   clientSecret: Schema.optional(Schema.String),
-  callbackPort: Schema.optional(Schema.Number),
+  callbackPort: Schema.optional(Schema.Finite),
   tokenEndpointAuthMethod: Schema.optional(
     Schema.Literals(["none", "client_secret_basic", "client_secret_post"]),
   ),
