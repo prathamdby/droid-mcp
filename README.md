@@ -12,7 +12,7 @@ Read https://raw.githubusercontent.com/prathamdby/droid-mcp/main/SETUP.md and fo
 
 ## What it does
 
-The server provides 284 tools in six families. 154 are generated from the Factory Droid SDK, one per wire method, and 130 are hand-written.
+The server provides 285 tools in seven families. 154 are generated from the Factory Droid SDK, one per wire method, and 131 are hand-written.
 
 | Prefix     | Count | What the tools cover                                                                                            |
 | ---------- | ----- | --------------------------------------------------------------------------------------------------------------- |
@@ -22,22 +22,23 @@ The server provides 284 tools in six families. 154 are generated from the Factor
 | `rest_`    | 79    | The hosted Factory API: computers, Environments, hosted sessions, wiki, CI, organization, and service accounts. |
 | `context_` | 18    | The Context API on a Prem origin: spaces, documents, files, and stored session records.                         |
 | `server_`  | 1     | `server_info`.                                                                                                  |
+| `skill_`   | 1     | `skill_read`.                                                                                                   |
 
 The 79 `rest_*` tools cover the 77 operations of the published Factory OpenAPI document (version 0.1.0) plus the two machine-template operations the SDK still calls.
 
 ### Tool profiles
 
-By default the server runs the `compact` profile. `tools/list` advertises 15 tools instead of 284, so a client spends about 22 KB of context on the list instead of about 340 KB:
+By default the server runs the `compact` profile. `tools/list` advertises 16 tools instead of 285, so a client spends about 23 KB of context on the list instead of about 340 KB:
 
-- The turn loop as first-class tools: `server_info`, `session_create`, `session_stream`, `session_events`, `session_interrupt`, `session_close`, `session_list`, and the three prompt answers.
-- `tools_search` finds any of the 284 operations by keyword, family, or read-only hint, and `tools_describe` returns the full description and input schema of up to 20 of them.
+- The turn loop as first-class tools: `server_info`, `skill_read`, `session_create`, `session_stream`, `session_events`, `session_interrupt`, `session_close`, `session_list`, and the three prompt answers.
+- `tools_search` finds any of the 285 operations by keyword, family, or read-only hint, and `tools_describe` returns the full description and input schema of up to 20 of them.
 - `tool_call` runs one operation by name with its arguments. It uses the same handler, validation, autonomy cap, and `{ code, message }` failures as the operation's own tool in the full profile.
 - `batch` runs up to 20 operations in order in one call. An argument `{ "$from": "<step id>", "path": "/json/pointer" }` takes part of an earlier step's result, so intermediate results never return to the client.
 - A result larger than `maxBytes` (16 KB by default) returns a preview and a `ref`. `result_read` reads the stored result by byte range or by JSON Pointer, so no data is lost. Refs expire 15 minutes after their last use and only the key that created a ref can read it.
 
 If `select` fails after an operation completes, `tool_call` or the batch step returns `invalid_select` with a `ref` to its full result. Read that ref instead of repeating the operation. Byte offsets for `result_read` must fall on UTF-8 character boundaries; use `nextOffset` to page, or expect `invalid_offset` for an offset inside a character.
 
-`--tool-profile full` advertises all 284 tools, one per operation. Every tool in both profiles carries MCP hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a client can skip confirmation for reads and ask before destructive calls.
+`--tool-profile full` advertises all 285 tools, one per operation. Every tool in both profiles carries MCP hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a client can skip confirmation for reads and ask before destructive calls.
 
 `node --experimental-strip-types scripts/measure.ts` prints the `initialize` and `tools/list` sizes for both profiles.
 
@@ -62,7 +63,7 @@ A turn works like this.
 
 Release surface checked on 2026-11-13: [Droid CLI 1.9.0](https://www.npmjs.com/package/@factory/cli)
 and [Droid SDK 0.10.0](https://www.npmjs.com/package/@factory/droid-sdk) are current.
-The SDK still declares 165 wire methods and protocol `1.269.0`; the 284-operation
+The SDK still declares 165 wire methods and protocol `1.269.0`; the 285-operation
 inventory excludes four confirmed daemon-unserved `droid.*` reads.
 CLI versions and wire protocol versions are separate.
 The daemon client adopts the peer's protocol version and retries once on a mismatch.
@@ -112,24 +113,25 @@ If you run the server on another machine, put a TLS proxy in front of it and kee
 
 Each flag also has an environment variable. The defaults work for a local install.
 
-| Flag                 | Environment                 | Default                                             |
-| -------------------- | --------------------------- | --------------------------------------------------- |
-| `--host`             | `DROID_MCP_HOST`            | `127.0.0.1`                                         |
-| `--port`             | `DROID_MCP_PORT`            | `7337`                                              |
-| `--keys-file`        | `DROID_MCP_KEYS`            | none, startup fails without a key                   |
-| `--max-autonomy`     | `DROID_MCP_MAX_AUTONOMY`    | `medium`                                            |
-| `--tool-profile`     | `DROID_MCP_TOOL_PROFILE`    | `compact`; `full` lists every operation as a tool   |
-| `--droid-path`       | `DROID_MCP_DROID_PATH`      | `droid`                                             |
-| `--socket`           | `DROID_MCP_SOCKET`          | `$XDG_RUNTIME_DIR/droid-mcp/daemon.sock`            |
-| `--daemon-url`       | `DROID_MCP_DAEMON_URL`      | none, the server spawns a daemon                    |
-| `--runtime-dir`      | `DROID_MCP_RUNTIME_DIR`     |                                                     |
-| `--allow-origin`     | `DROID_MCP_ALLOWED_ORIGINS` | none, requests with an `Origin` header are rejected |
-| `--factory-base-url` | `FACTORY_BASE_URL`          | `https://api.factory.ai`                            |
-|                      | `FACTORY_CONTEXT_BASE_URL`  | none, the `context_*` tools fail until it is set    |
-|                      | `FACTORY_CONTEXT_HEADERS`   | none                                                |
-| `--log-level`        | `DROID_MCP_LOG_LEVEL`       | `info`                                              |
-| `--prompt-timeout`   |                             | `300000` ms                                         |
-| `--request-timeout`  |                             | `30000` ms                                          |
+| Flag                 | Environment                 | Default                                              |
+| -------------------- | --------------------------- | ---------------------------------------------------- |
+| `--host`             | `DROID_MCP_HOST`            | `127.0.0.1`                                          |
+| `--port`             | `DROID_MCP_PORT`            | `7337`                                               |
+| `--keys-file`        | `DROID_MCP_KEYS`            | none, startup fails without a key                    |
+| `--max-autonomy`     | `DROID_MCP_MAX_AUTONOMY`    | `medium`                                             |
+| `--tool-profile`     | `DROID_MCP_TOOL_PROFILE`    | `compact`; `full` lists every operation as a tool    |
+| `--droid-path`       | `DROID_MCP_DROID_PATH`      | `droid`                                              |
+| `--socket`           | `DROID_MCP_SOCKET`          | `$XDG_RUNTIME_DIR/droid-mcp/daemon.sock`             |
+| `--daemon-url`       | `DROID_MCP_DAEMON_URL`      | none, the server spawns a daemon                     |
+| `--runtime-dir`      | `DROID_MCP_RUNTIME_DIR`     |                                                      |
+| `--allow-origin`     | `DROID_MCP_ALLOWED_ORIGINS` | none, requests with an `Origin` header are rejected  |
+| `--factory-base-url` | `FACTORY_BASE_URL`          | `https://api.factory.ai`                             |
+|                      | `FACTORY_CONTEXT_BASE_URL`  | none, the `context_*` tools fail until it is set     |
+|                      | `FACTORY_CONTEXT_HEADERS`   | none                                                 |
+| `--log-level`        | `DROID_MCP_LOG_LEVEL`       | `info`                                               |
+| `--prompt-timeout`   |                             | `300000` ms                                          |
+| `--request-timeout`  |                             | `30000` ms                                           |
+| `--require-skill`    | `DROID_MCP_REQUIRE_SKILL`   | `true`; require reading the skill before `session_*` |
 
 `--max-autonomy` accepts `off`, `low`, `medium`, or `high`. `FACTORY_API_KEY` is read from the environment and is never logged and never returned by a tool.
 

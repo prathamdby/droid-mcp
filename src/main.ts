@@ -35,6 +35,7 @@ Flags:
   --log-level <level>          debug | info | warn | error (default: info)
   --prompt-timeout <ms>        Pending prompt deadline (default: 300000)
   --request-timeout <ms>       Request timeout (default: 30000)
+  --require-skill <bool>       Require reading skill before session_* (default: true)
   -h, --help                   Show this help
   -v, --version                Show the version
 `

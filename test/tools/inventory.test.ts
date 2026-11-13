@@ -8,6 +8,7 @@ import { testConfig } from "../support/config.ts"
 /** Every hand-written tool that is not generated from the SDK surface. */
 const HAND_WRITTEN = [
   "server_info",
+  "skill_read",
   "session_create",
   "session_stream",
   "session_events",
@@ -139,7 +140,7 @@ const HAND_WRITTEN = [
   "context_read_session_records",
 ] as const
 
-const FAMILIES = ["server", "session", "rest", "context", "daemon", "droid"] as const
+const FAMILIES = ["server", "skill", "session", "rest", "context", "daemon", "droid"] as const
 
 const familyOf = (name: string): string => name.slice(0, name.indexOf("_"))
 
@@ -156,16 +157,16 @@ describe("tool inventory", () => {
     expect(toolNames()).toHaveLength(generated.length + HAND_WRITTEN.length)
   })
 
-  it("exposes 284 tools in the expected families", () => {
+  it("exposes 285 tools in the expected families", () => {
     const counts = new Map<string, number>()
 
     for (const name of toolNames()) {
       counts.set(familyOf(name), (counts.get(familyOf(name)) ?? 0) + 1)
     }
 
-    expect(toolNames()).toHaveLength(284)
+    expect(toolNames()).toHaveLength(285)
     expect(Object.fromEntries(FAMILIES.map((family) => [family, counts.get(family) ?? 0]))).toEqual(
-      { server: 1, session: 32, rest: 79, context: 18, daemon: 130, droid: 24 },
+      { server: 1, skill: 1, session: 32, rest: 79, context: 18, daemon: 130, droid: 24 },
     )
     expect([...counts.keys()].every((family) => FAMILIES.some((known) => known === family))).toBe(
       true,

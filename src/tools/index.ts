@@ -1,8 +1,11 @@
 import * as Tool from "effect/ai/Tool"
 import * as Toolkit from "effect/ai/Toolkit"
+import * as Effect from "effect/Effect"
 
 import type { Config } from "../config.ts"
+import type { SessionHubService } from "../droid/turns.ts"
 import { contextTools } from "./context.ts"
+import type { ToolFailure } from "./failure.ts"
 import { generatedSurface } from "./generated.ts"
 import { annotate } from "./policy.ts"
 import { restTools } from "./rest.ts"
@@ -14,6 +17,30 @@ import { sessionHistoryTools } from "./session-history.ts"
 import { sessionMcpTools } from "./session-mcp.ts"
 import { sessionPromptTools } from "./session-prompts.ts"
 import { sessionTools } from "./session.ts"
+import { SkillGate, SkillRead, skillReadHandler } from "./skill.ts"
+
+const gateSessionHandlers = (
+  // SAFETY: each handler object is keyed by tool name with its own parameter
+  // schema; erasing to `never` here lets one wrapper gate every session tool.
+  handlers: Readonly<
+    Record<string, (params: never) => Effect.Effect<unknown, ToolFailure, SessionHubService>>
+  >,
+) => {
+  const gated: Record<
+    string,
+    (params: never) => Effect.Effect<unknown, ToolFailure, SkillGate | SessionHubService>
+  > = {}
+
+  for (const [name, handler] of Object.entries(handlers)) {
+    gated[name] = (params: never) =>
+      Effect.flatMap(
+        SkillGate.use((gate) => gate.requireRead),
+        () => handler(params),
+      )
+  }
+
+  return gated
+}
 
 /**
  * One toolkit holding every operation: the hand-written tools first, then one
@@ -34,6 +61,7 @@ export const toolsFor = (config: Config, advertised?: Omit<Advertised, "operatio
 
   const tools: Array<Tool.Any> = [
     Info,
+    SkillRead,
     ...session.tools,
     ...prompts.tools,
     ...admin.tools,
@@ -56,12 +84,13 @@ export const toolsFor = (config: Config, advertised?: Omit<Advertised, "operatio
       toolCount: advertised?.toolCount ?? count,
       operationCount: count,
     }),
-    ...session.handlers,
-    ...prompts.handlers,
-    ...admin.handlers,
-    ...mcp.handlers,
-    ...history.handlers,
-    ...discover.handlers,
+    skill_read: skillReadHandler,
+    ...gateSessionHandlers(session.handlers),
+    ...gateSessionHandlers(prompts.handlers),
+    ...gateSessionHandlers(admin.handlers),
+    ...gateSessionHandlers(mcp.handlers),
+    ...gateSessionHandlers(history.handlers),
+    ...gateSessionHandlers(discover.handlers),
     ...rest.handlers,
     ...context.handlers,
     ...generated.handlers,

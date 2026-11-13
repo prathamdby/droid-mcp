@@ -31,7 +31,7 @@ import {
 import type { Bounded, ResultStoreApi } from "./results.ts"
 
 /**
- * The compact profile: a fixed list of 15 tools instead of one per operation.
+ * The compact profile: a fixed list of 16 tools instead of one per operation.
  * The turn loop keeps its own tools; every other operation is found with
  * tools_search, read with tools_describe, and run with tool_call or batch,
  * through the same handlers, decoding, and autonomy checks the full profile
@@ -41,6 +41,7 @@ import type { Bounded, ResultStoreApi } from "./results.ts"
 /** Operations that stay first-class tools, because every turn uses them. */
 export const DIRECT_TOOLS: ReadonlyArray<string> = [
   "server_info",
+  "skill_read",
   "session_create",
   "session_stream",
   "session_events",
@@ -61,7 +62,7 @@ const DEFAULT_SEARCH_LIMIT = 15
 const DESCRIBE_LIMIT = 20
 const SUMMARY_CHARS = 140
 
-const FAMILIES = ["server", "session", "rest", "context", "daemon", "droid"] as const
+const FAMILIES = ["server", "skill", "session", "rest", "context", "daemon", "droid"] as const
 
 const Arguments = Schema.Record(Schema.String, Schema.Json).annotate({
   description: "The operation's arguments, as tools_describe shows its inputSchema.",

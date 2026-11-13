@@ -61,9 +61,9 @@ for wait behavior, event limits, streaming alternatives, and one-shot
 
 ## Compact dispatch
 
-Compact advertises 15 tools: `server_info`, nine local turn/prompt tools, and
-`tools_search`, `tools_describe`, `tool_call`, `batch`, `result_read`.
-All 284 operations remain reachable. Full advertises each operation directly;
+Compact advertises 16 tools: `server_info`, `skill_read`, nine local turn/prompt
+tools, and `tools_search`, `tools_describe`, `tool_call`, `batch`, `result_read`.
+All 285 operations remain reachable. Full advertises each operation directly;
 the five dispatch tools are compact-only.
 
 For an unknown operation: `tools_search { query, family?, readOnly?, limit }`
@@ -74,5 +74,5 @@ or event filter. A truncated response carries a `ref` for `result_read`.
 
 Read [tool families](references/tool-families.md) when discovering a capability,
 chaining calls, recovering a result, or handling a failure. It explains
-what the 284 tool names mean, indexes every capability family, and groups the server's
+what the 285 tool names mean, indexes every capability family, and groups the server's
 failure codes with recovery actions.

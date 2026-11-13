@@ -19,6 +19,7 @@ import {
   INSTRUCTIONS,
   instructionsFor,
   registrations as skillRegistrations,
+  skillGateLayer,
 } from "../tools/skill.ts"
 import { VERSION } from "../version.ts"
 import * as auth from "./auth.ts"
@@ -72,18 +73,23 @@ const hubOptions = (config: Config): SessionHubOptions => ({
 
 export const mcpLayer = (options: ServerOptions) => {
   const { toolkit, handlers } = surfaceFor(options.config)
+  const skillGate = skillGateLayer(options.config.requireSkill)
 
   // SAFETY: every handler this layer needs is provided just above; the
   // registration's requirement type is widened by the generated toolkit.
   const toolRegistrations = McpServer.toolkit(toolkit).pipe(
     Layer.provide(handlers),
+    Layer.provide(skillGate),
     Layer.provide(resultStoreLayer),
     Layer.provide(sessionHubLayer(hubOptions(options.config))),
     Layer.provide(daemonLayer(options.config)),
     Layer.provide(restLayer(options.config, options.keys)),
   ) as Layer.Layer<never, never, never>
 
-  const registrations = Layer.mergeAll(toolRegistrations, skillRegistrations)
+  const registrations = Layer.mergeAll(
+    toolRegistrations,
+    skillRegistrations.pipe(Layer.provide(skillGate)),
+  )
 
   return McpServer.layerHttp({ ...httpLayerOptions(options), registrations })
 }

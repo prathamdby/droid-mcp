@@ -65,6 +65,7 @@ export interface ToolClient {
 
 export interface ConnectOptions {
   readonly config: Config
+  readonly readSkill?: boolean
 }
 
 const Bounded = Schema.Struct({
@@ -164,6 +165,8 @@ export const connect = async (options: ConnectOptions): Promise<ToolClient> => {
 
     return outcome.structured
   }
+
+  if (options.readSkill !== false) await okOf("skill_read", {})
 
   /** Reassembles a stored result by following `nextOffset` to the end. */
   const readAll = async (ref: string): Promise<Json> => {
