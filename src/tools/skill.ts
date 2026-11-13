@@ -58,28 +58,50 @@ export interface SkillGateApi {
 
 export class SkillGate extends Context.Service<SkillGate, SkillGateApi>()("droid-mcp/SkillGate") {}
 
-export const makeSkillGate = (requireSkill: boolean): SkillGateApi => {
+/**
+ * The MCP runtime does not expose session termination, so the read set is
+ * bounded instead: past the limit the least recently used key is dropped and
+ * that session reads the skill again.
+ */
+export const SKILL_GATE_LIMIT = 4096
+
+export const makeSkillGate = (
+  requireSkill: boolean,
+  limit: number = SKILL_GATE_LIMIT,
+): SkillGateApi => {
+  // A Set iterates in insertion order; re-adding a key moves it to the newest end.
   const read = new Set<string>()
 
+  const touch = (key: string): void => {
+    read.delete(key)
+    read.add(key)
+
+    if (read.size > limit) {
+      const oldest = read.values().next().value
+
+      if (oldest !== undefined) read.delete(oldest)
+    }
+  }
+
   const markSessionRead = (sessionId: string | undefined): Effect.Effect<void> =>
-    currentSessionKey(sessionId).pipe(
-      Effect.tap((key) =>
-        Effect.sync(() => {
-          read.add(key)
-        }),
-      ),
-      Effect.asVoid,
-    )
+    Effect.map(currentSessionKey(sessionId), touch)
 
   return {
     markRead: markSessionRead(undefined),
     markSessionRead,
     requireRead: requireSkill
-      ? Effect.flatMap(currentSessionKey(), (key) =>
-          read.has(key)
-            ? Effect.void
-            : Effect.fail<ToolFailure>({ code: "skill_not_read", message: SKILL_NOT_READ_MESSAGE }),
-        )
+      ? Effect.flatMap(currentSessionKey(), (key) => {
+          if (!read.has(key)) {
+            return Effect.fail<ToolFailure>({
+              code: "skill_not_read",
+              message: SKILL_NOT_READ_MESSAGE,
+            })
+          }
+
+          touch(key)
+
+          return Effect.void
+        })
       : Effect.void,
   }
 }

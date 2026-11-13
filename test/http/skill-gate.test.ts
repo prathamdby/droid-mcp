@@ -1,7 +1,12 @@
+import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
+import * as HttpServerRequest from "effect/http/HttpServerRequest"
 import * as Schema from "effect/Schema"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { SKILL_MD, SKILL_URI } from "../../src/generated/skill.ts"
+import { makeSkillGate } from "../../src/tools/skill.ts"
+import type { SkillGateApi } from "../../src/tools/skill.ts"
 import { testConfig } from "../support/config.ts"
 import { expectBody, initialize, readBody, startServer } from "../support/mcp-http.ts"
 import type { Json, TestServer } from "../support/mcp-http.ts"
@@ -172,5 +177,35 @@ describe("skill-read gating", () => {
     clients.push(client)
 
     expect(await client.ok("session_list")).toEqual({ sessions: [] })
+  })
+})
+
+describe("skill gate read set", () => {
+  const requireFor = (gate: SkillGateApi, sessionId: string) =>
+    Effect.runPromiseExit(
+      gate.requireRead.pipe(
+        Effect.provideService(
+          HttpServerRequest.HttpServerRequest,
+          HttpServerRequest.fromWeb(
+            new Request("http://localhost/mcp", { headers: { "mcp-session-id": sessionId } }),
+          ),
+        ),
+      ),
+    )
+
+  it("drops the least recently used session past its limit", async () => {
+    const gate = makeSkillGate(true, 2)
+
+    await Effect.runPromise(gate.markSessionRead("a"))
+    await Effect.runPromise(gate.markSessionRead("b"))
+
+    // Using "a" makes "b" the oldest key.
+    expect(Exit.isSuccess(await requireFor(gate, "a"))).toBe(true)
+
+    await Effect.runPromise(gate.markSessionRead("c"))
+
+    expect(Exit.isSuccess(await requireFor(gate, "a"))).toBe(true)
+    expect(Exit.isSuccess(await requireFor(gate, "b"))).toBe(false)
+    expect(Exit.isSuccess(await requireFor(gate, "c"))).toBe(true)
   })
 })
