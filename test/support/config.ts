@@ -21,5 +21,6 @@ export const testConfig = (overrides: Partial<Config> = {}): Config => ({
   promptTimeoutMs: 300_000,
   requestTimeoutMs: 30_000,
   initializeTimeoutMs: 60_000,
+  requireSkill: true,
   ...overrides,
 })

@@ -90,17 +90,21 @@ const open = async (server: TestServer, key: string): Promise<Client> => {
     return { bytes: Buffer.byteLength(JSON.stringify(body), "utf8"), body }
   }
 
+  const call = async (name: string, args: Json) => {
+    const { bytes, body } = await rpc("tools/call", { name, arguments: args })
+
+    return { bytes, body: Schema.decodeUnknownSync(Called)(body) }
+  }
+
+  await call("skill_read", {})
+
   return {
     list: async () => {
       const { bytes, body } = await rpc("tools/list", {})
 
       return { bytes, body: Schema.decodeUnknownSync(Listed)(body) }
     },
-    call: async (name, args) => {
-      const { bytes, body } = await rpc("tools/call", { name, arguments: args })
-
-      return { bytes, body: Schema.decodeUnknownSync(Called)(body) }
-    },
+    call,
   }
 }
 
@@ -252,7 +256,7 @@ describe("compact profile", () => {
     },
   )
 
-  it("advertises 15 tools at under a tenth of the full list's bytes", async () => {
+  it("advertises 16 tools at under a tenth of the full list's bytes", async () => {
     const compact = await (await open(await serve({ toolProfile: "compact" }), KEY)).list()
     const full = await (await open(await serve({ toolProfile: "full" }), KEY)).list()
     const names = compact.body.result.tools.map((tool) => tool.name)
@@ -265,7 +269,7 @@ describe("compact profile", () => {
       "batch",
       "result_read",
     ])
-    expect(full.body.result.tools).toHaveLength(284)
+    expect(full.body.result.tools).toHaveLength(285)
     expect(compact.bytes).toBeLessThan(24 * 1024)
     expect(compact.bytes).toBeLessThan(full.bytes / 10)
 
@@ -439,8 +443,8 @@ describe("compact profile", () => {
       )
 
       if (name === "server_info") {
-        expect(viaCall).toMatchObject({ kind: "ok", result: { profile: "compact", toolCount: 15 } })
-        expect(direct).toMatchObject({ kind: "ok", result: { profile: "full", toolCount: 284 } })
+        expect(viaCall).toMatchObject({ kind: "ok", result: { profile: "compact", toolCount: 16 } })
+        expect(direct).toMatchObject({ kind: "ok", result: { profile: "full", toolCount: 285 } })
       } else {
         expect(viaCall, name).toEqual(direct)
       }
@@ -448,9 +452,9 @@ describe("compact profile", () => {
       kinds.set(direct.kind, (kinds.get(direct.kind) ?? 0) + 1)
     }
 
-    expect(names).toHaveLength(284)
+    expect(names).toHaveLength(285)
     console.info(
-      "parity outcomes across 284 operations: " + JSON.stringify(Object.fromEntries(kinds)),
+      "parity outcomes across 285 operations: " + JSON.stringify(Object.fromEntries(kinds)),
     )
   })
 

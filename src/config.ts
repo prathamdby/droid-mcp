@@ -44,6 +44,7 @@ export interface Config {
   readonly promptTimeoutMs: number
   readonly requestTimeoutMs: number
   readonly initializeTimeoutMs: number
+  readonly requireSkill: boolean
 }
 
 const DEFAULT_PORT = 7337
@@ -65,6 +66,7 @@ const flagValues: ReadonlyArray<string> = [
   "--prompt-timeout",
   "--request-timeout",
   "--initialize-timeout",
+  "--require-skill",
 ]
 
 const isFlagValue = (name: string): boolean => flagValues.some((flag) => flag === name)
@@ -119,6 +121,14 @@ const parseToolProfile = (raw: string): ToolProfile => {
 const parseLogLevel = (raw: string): LogLevel => {
   if (isLogLevel(raw)) return raw
   throw new ConfigError({ message: "--log-level must be one of " + LOG_LEVELS.join(", ") })
+}
+
+const parseRequireSkill = (raw: string): boolean => {
+  if (raw === "true" || raw === "1") return true
+
+  if (raw === "false" || raw === "0") return false
+
+  throw new ConfigError({ message: "--require-skill must be true or false" })
 }
 
 /**
@@ -344,6 +354,9 @@ export const parseConfig = (
       values.get("--initialize-timeout") !== undefined
         ? parseTimeout("--initialize-timeout", values.get("--initialize-timeout") ?? "")
         : 60_000,
+    requireSkill: parseRequireSkill(
+      values.get("--require-skill") ?? env["DROID_MCP_REQUIRE_SKILL"] ?? "true",
+    ),
   }
 }
 

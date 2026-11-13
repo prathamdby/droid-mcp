@@ -300,8 +300,8 @@ describe("hosted REST coverage", () => {
     const listed = await client.list()
     const info = Schema.decodeUnknownSync(ServerInfo)(await client.ok("server_info"))
 
-    expect(listed).toHaveLength(284)
+    expect(listed).toHaveLength(285)
     expect(info.operationCount).toBe(listed.length)
-    expect(info.toolCount).toBe(info.profile === "compact" ? 15 : listed.length)
+    expect(info.toolCount).toBe(info.profile === "compact" ? 16 : listed.length)
   })
 })

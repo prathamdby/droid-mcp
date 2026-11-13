@@ -57,6 +57,7 @@ const nonCodeIdentifiers = new Set([
 ])
 
 const failureSources = [
+  "src/tools/skill.ts",
   "src/tools/compact.ts",
   "src/tools/generated.ts",
   "src/tools/results.ts",
@@ -136,7 +137,7 @@ const generated = SURFACE.filter(
 describe("documented tool counts", () => {
   it("match the families the server exposes in README.md", () => {
     expect(documentedFamilies(README)).toEqual(computedFamilies())
-    expect(README).toContain("provides " + String(names.length) + " tools in six families")
+    expect(README).toContain("provides " + String(names.length) + " tools in seven families")
     expect(README).toContain(
       String(generated) +
         " are generated from the Factory Droid SDK, one per wire method, and " +
