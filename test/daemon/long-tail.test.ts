@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vitest"
 
 import { SURFACE } from "../../src/generated/surface.ts"
-import { SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
+import { DAEMON_UNSERVED_METHODS, SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
 import { toolsFor } from "../../src/tools/index.ts"
 import { testConfig } from "../support/config.ts"
 
 /**
- * The daemon namespaces are not hand-picked: every method the SDK declares has
- * a tool, and every one of those tools has a handler. A method that slips out
- * of codegen would otherwise only show up when an agent needed it.
+ * Every SDK method except the explicitly suppressed methods has a tool.
+ * A method that slips out of codegen would otherwise only show up when an
+ * agent needed it.
  */
 
-const generated = SURFACE.filter((entry) => !SESSION_OWNED_METHODS.includes(entry.method))
+const generated = SURFACE.filter(
+  (entry) =>
+    !SESSION_OWNED_METHODS.includes(entry.method) && !DAEMON_UNSERVED_METHODS.has(entry.method),
+)
+
 const daemonMethods = generated.filter((entry) => entry.kind === "daemon")
 const droidMethods = generated.filter((entry) => entry.kind === "droid")
 
@@ -27,7 +31,7 @@ describe("daemon long tail", () => {
     for (const entry of daemonMethods) expect(tools.has(entry.tool), entry.method).toBe(true)
   })
 
-  it("has a tool for every droid method the session tools do not own", () => {
+  it("has a tool for every droid method not explicitly suppressed", () => {
     const tools = new Set(surface())
 
     expect(droidMethods.length).toBeGreaterThan(0)

@@ -17,8 +17,6 @@ const status: DaemonStatus = {
 const replyFor = (method: string): JsonValue => {
   if (method === "daemon.update_session_defaults") return { success: true, defaults: {} }
 
-  if (method === "droid.list_tools") return { tools: [] }
-
   return { ok: true }
 }
 
@@ -185,17 +183,11 @@ describe("generated autonomy cap", () => {
     }
   })
 
-  it("does not cap tool queries or tag text that mentions autonomy", async () => {
+  it("omits unserved tool queries and does not cap tag text that mentions autonomy", async () => {
     const surface = generatedSurface({ maxAutonomy: "off" })
     const calls: Array<DaemonRequest> = []
 
-    await run(
-      surface.handlers.droid_list_tools({
-        autonomyLevel: "high",
-        skipPermissionsUnsafe: true,
-      }),
-      stub(calls),
-    )
+    expect(surface.handlers.droid_list_tools).toBeUndefined()
 
     await run(
       surface.handlers.daemon_update_session_settings({
@@ -205,10 +197,7 @@ describe("generated autonomy cap", () => {
       stub(calls),
     )
 
-    expect(calls.map((call) => call.method)).toEqual([
-      "droid.list_tools",
-      "daemon.update_session_settings",
-    ])
+    expect(calls.map((call) => call.method)).toEqual(["daemon.update_session_settings"])
   })
 
   it("still sends initialize and load when authority fields are omitted", async () => {

@@ -192,6 +192,66 @@ afterAll(async () => {
 })
 
 describe("compact profile", () => {
+  it.each([
+    ["droid_list_skills", "session_list_skills or daemon_list_skills"],
+    ["droid_list_tools", "session_list_tools"],
+    ["droid_list_mcp_tools", "session_list_mcp_tools or daemon_list_mcp_tools"],
+    ["droid_list_mcp_registry", "daemon_list_mcp_registry"],
+  ])(
+    "does not advertise %s and names its replacements across dispatch tools",
+    async (name, replacements) => {
+      const compact = await open(await serve({ toolProfile: "compact" }), KEY)
+      const before = daemon.requests.length
+
+      const failure = {
+        code: "unknown_tool",
+        message: name + " is not served by the daemon; use " + replacements,
+      }
+
+      expect(
+        structured((await compact.call("tools_search", { query: name, limit: 50 })).body),
+      ).toEqual({ total: 0, tools: [] })
+      expect(failureOf((await compact.call("tool_call", { name })).body)).toEqual(failure)
+      const validNames = ["session_list_tools", "daemon_list_models"]
+
+      const valid = Schema.decodeUnknownSync(Schema.Struct({ tools: Schema.Array(Schema.Json) }))(
+        structured((await compact.call("tools_describe", { names: validNames })).body),
+      )
+
+      for (const names of [
+        [name, validNames[0], "no_such_operation", validNames[1]],
+        [validNames[0], "no_such_operation", validNames[1], name],
+      ]) {
+        expect(structured((await compact.call("tools_describe", { names })).body)).toEqual({
+          tools: valid.tools,
+          unknown: names.filter((candidate) => !validNames.includes(candidate)),
+        })
+      }
+
+      expect(structured((await compact.call("tools_describe", { names: [name] })).body)).toEqual({
+        tools: [],
+        unknown: [name],
+      })
+      expect(structured((await compact.call("batch", { steps: [{ name }] })).body)).toMatchObject({
+        completed: 0,
+        failed: 1,
+        steps: [{ status: "failed", error: failure }],
+      })
+      expect(
+        structured(
+          (await compact.call("tools_describe", { names: replacements.split(" or ") })).body,
+        ),
+      ).toMatchObject({
+        tools: replacements.split(" or ").map((replacement) => ({
+          name: replacement,
+          policy: { readOnly: true, destructive: false },
+        })),
+        unknown: [],
+      })
+      expect(daemon.requests).toHaveLength(before)
+    },
+  )
+
   it("advertises 15 tools at under a tenth of the full list's bytes", async () => {
     const compact = await (await open(await serve({ toolProfile: "compact" }), KEY)).list()
     const full = await (await open(await serve({ toolProfile: "full" }), KEY)).list()
@@ -205,7 +265,7 @@ describe("compact profile", () => {
       "batch",
       "result_read",
     ])
-    expect(full.body.result.tools).toHaveLength(288)
+    expect(full.body.result.tools).toHaveLength(284)
     expect(compact.bytes).toBeLessThan(24 * 1024)
     expect(compact.bytes).toBeLessThan(full.bytes / 10)
 
@@ -380,7 +440,7 @@ describe("compact profile", () => {
 
       if (name === "server_info") {
         expect(viaCall).toMatchObject({ kind: "ok", result: { profile: "compact", toolCount: 15 } })
-        expect(direct).toMatchObject({ kind: "ok", result: { profile: "full", toolCount: 288 } })
+        expect(direct).toMatchObject({ kind: "ok", result: { profile: "full", toolCount: 284 } })
       } else {
         expect(viaCall, name).toEqual(direct)
       }
@@ -388,9 +448,9 @@ describe("compact profile", () => {
       kinds.set(direct.kind, (kinds.get(direct.kind) ?? 0) + 1)
     }
 
-    expect(names).toHaveLength(288)
+    expect(names).toHaveLength(284)
     console.info(
-      "parity outcomes across 288 operations: " + JSON.stringify(Object.fromEntries(kinds)),
+      "parity outcomes across 284 operations: " + JSON.stringify(Object.fromEntries(kinds)),
     )
   })
 

@@ -88,7 +88,6 @@ const OPEN_WORLD_TOOLS = new Set([
   "daemon_add_marketplace",
   "daemon_update_marketplace",
   "daemon_list_mcp_registry",
-  "droid_list_mcp_registry",
   "daemon_authenticate_mcp_server",
   "droid_authenticate_mcp_server",
   "daemon_run_automation",
