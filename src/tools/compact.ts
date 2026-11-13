@@ -527,7 +527,7 @@ export const compactSurface = (config: Config) => {
           return found
         }),
       tools_describe: (params: { readonly names: ReadonlyArray<string> }) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           const found: Array<ReturnType<typeof describeEntry>> = []
           const unknown: Array<string> = []
 
@@ -535,7 +535,6 @@ export const compactSurface = (config: Config) => {
             const entry = byName.get(name)
 
             if (entry === undefined) {
-              if (DAEMON_UNSERVED_METHODS.has(name.replace("_", "."))) yield* known(name)
               unknown.push(name)
             } else found.push(describeEntry(entry))
           }

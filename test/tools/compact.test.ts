@@ -212,9 +212,26 @@ describe("compact profile", () => {
         structured((await compact.call("tools_search", { query: name, limit: 50 })).body),
       ).toEqual({ total: 0, tools: [] })
       expect(failureOf((await compact.call("tool_call", { name })).body)).toEqual(failure)
-      expect(failureOf((await compact.call("tools_describe", { names: [name] })).body)).toEqual(
-        failure,
+      const validNames = ["session_list_tools", "daemon_list_models"]
+
+      const valid = Schema.decodeUnknownSync(Schema.Struct({ tools: Schema.Array(Schema.Json) }))(
+        structured((await compact.call("tools_describe", { names: validNames })).body),
       )
+
+      for (const names of [
+        [name, validNames[0], "no_such_operation", validNames[1]],
+        [validNames[0], "no_such_operation", validNames[1], name],
+      ]) {
+        expect(structured((await compact.call("tools_describe", { names })).body)).toEqual({
+          tools: valid.tools,
+          unknown: names.filter((candidate) => !validNames.includes(candidate)),
+        })
+      }
+
+      expect(structured((await compact.call("tools_describe", { names: [name] })).body)).toEqual({
+        tools: [],
+        unknown: [name],
+      })
       expect(structured((await compact.call("batch", { steps: [{ name }] })).body)).toMatchObject({
         completed: 0,
         failed: 1,

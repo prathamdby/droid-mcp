@@ -67,10 +67,11 @@ inventory excludes four confirmed daemon-unserved `droid.*` reads.
 CLI versions and wire protocol versions are separate.
 The daemon client adopts the peer's protocol version and retries once on a mismatch.
 `droid_list_skills`, `droid_list_tools`, `droid_list_mcp_tools`, and
-`droid_list_mcp_registry` are not advertised. Compact dispatch returns `unknown_tool`
+`droid_list_mcp_registry` are not advertised. `tool_call` and `batch` return `unknown_tool`
 with supported replacements: `session_list_skills` or `daemon_list_skills`,
 `session_list_tools`, `session_list_mcp_tools` or `daemon_list_mcp_tools`, and
 `daemon_list_mcp_registry`, respectively. These replacements require a session id.
+`tools_describe` lists removed names in `unknown` without discarding valid descriptions.
 Other methods rejected as unimplemented return `daemon_method_unsupported` with
 the method and peer protocol version. Transport failures retain their codes;
 malformed replies and schema failures remain `daemon_protocol_error`.
