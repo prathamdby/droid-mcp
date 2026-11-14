@@ -269,7 +269,7 @@ describe("compact profile", () => {
       "batch",
       "result_read",
     ])
-    expect(full.body.result.tools).toHaveLength(285)
+    expect(full.body.result.tools).toHaveLength(287)
     expect(compact.bytes).toBeLessThan(24 * 1024)
     expect(compact.bytes).toBeLessThan(full.bytes / 10)
 
@@ -444,7 +444,7 @@ describe("compact profile", () => {
 
       if (name === "server_info") {
         expect(viaCall).toMatchObject({ kind: "ok", result: { profile: "compact", toolCount: 16 } })
-        expect(direct).toMatchObject({ kind: "ok", result: { profile: "full", toolCount: 285 } })
+        expect(direct).toMatchObject({ kind: "ok", result: { profile: "full", toolCount: 287 } })
       } else {
         expect(viaCall, name).toEqual(direct)
       }
@@ -452,9 +452,9 @@ describe("compact profile", () => {
       kinds.set(direct.kind, (kinds.get(direct.kind) ?? 0) + 1)
     }
 
-    expect(names).toHaveLength(285)
+    expect(names).toHaveLength(287)
     console.info(
-      "parity outcomes across 285 operations: " + JSON.stringify(Object.fromEntries(kinds)),
+      "parity outcomes across 287 operations: " + JSON.stringify(Object.fromEntries(kinds)),
     )
   })
 

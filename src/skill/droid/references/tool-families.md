@@ -1,16 +1,16 @@
 # Tool families and dispatch
 
-The full profile publishes 285 tools: 154 generated from the SDK's method surface and
-131 hand-written for server/skill, local sessions, hosted REST, and Context.
+The full profile publishes 287 tools: 154 generated from the SDK's method surface and
+133 hand-written for server/skill, local sessions, hosted REST, and Context.
 Compact advertises `server_info`, `skill_read`, nine turn/prompt tools, and five dispatch tools
-(16 total); all 285 operations remain callable by name.
+(16 total); all 287 operations remain callable by name.
 
 | Prefix     | Count | Backend/capability                                              |
 | ---------- | ----- | --------------------------------------------------------------- |
 | `daemon_`  | 130   | Daemon SDK methods.                                             |
 | `droid_`   | 24    | Remaining session SDK methods, transported through the daemon.  |
 | `session_` | 32    | Local hub turns, prompts, administration.                       |
-| `rest_`    | 79    | Hosted Factory REST API.                                        |
+| `rest_`    | 81    | Hosted Factory REST API.                                        |
 | `context_` | 18    | Prem Context API.                                               |
 | `server_`  | 1     | `server_info`: version, protocols, profile/counts, cap, daemon. |
 | `skill_`   | 1     | `skill_read`: read the embedded droid skill markdown.           |
@@ -172,6 +172,8 @@ establish that every daemon implements them.
 - Wiki: create/get/list/delete runs, pages/search/history/export, privacy,
   upload access and video-upload URLs.
 - CI: repository owners/repositories/scan, jobs/runs, workflow editing.
+- Billing: subscription token rate-limit windows (`/limits`: Standard and Droid Core
+  5-hour, weekly, and monthly usage), Extra Usage balance, and overage preference.
 - Organization: users/invitations/removal, global/group/user limits,
   computer secrets, enterprise-control history.
 - Service account: CRUD, API-key list/create/revoke/rotate.

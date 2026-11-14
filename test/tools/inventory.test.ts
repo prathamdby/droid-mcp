@@ -99,6 +99,8 @@ const HAND_WRITTEN = [
   "rest_list_ci_jobs",
   "rest_list_ci_runs",
   "rest_edit_ci_workflow",
+  "rest_get_billing_limits",
+  "rest_set_billing_overage_preference",
   "rest_list_organization_users",
   "rest_invite_organization_user",
   "rest_remove_organization_user",
@@ -157,16 +159,16 @@ describe("tool inventory", () => {
     expect(toolNames()).toHaveLength(generated.length + HAND_WRITTEN.length)
   })
 
-  it("exposes 285 tools in the expected families", () => {
+  it("exposes 287 tools in the expected families", () => {
     const counts = new Map<string, number>()
 
     for (const name of toolNames()) {
       counts.set(familyOf(name), (counts.get(familyOf(name)) ?? 0) + 1)
     }
 
-    expect(toolNames()).toHaveLength(285)
+    expect(toolNames()).toHaveLength(287)
     expect(Object.fromEntries(FAMILIES.map((family) => [family, counts.get(family) ?? 0]))).toEqual(
-      { server: 1, skill: 1, session: 32, rest: 79, context: 18, daemon: 130, droid: 24 },
+      { server: 1, skill: 1, session: 32, rest: 81, context: 18, daemon: 130, droid: 24 },
     )
     expect([...counts.keys()].every((family) => FAMILIES.some((known) => known === family))).toBe(
       true,
