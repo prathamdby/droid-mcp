@@ -1600,24 +1600,40 @@ export const SEED_BILLING_LIMITS: JsonObject = {
   },
 }
 
+const hasBearerAuth = (request: FakeRequest): boolean => {
+  const header = request.headers.authorization ?? ""
+
+  return header.startsWith("Bearer ") && header.length > "Bearer ".length
+}
+
 const BILLING_ROUTES: ReadonlyArray<readonly [string, RouteHandler]> = [
   [
     "GET /api/billing/limits",
-    (_request, state) => ({
-      json: {
-        usesTokenRateLimitsBilling: true,
-        hasActiveSubscription: true,
-        limits: SEED_BILLING_LIMITS,
-        overagePreference: state.overagePreference,
-        canManageOverage: state.canManageOverage,
-        extraUsageBalanceCents: state.extraUsageBalanceCents,
-        extraUsageAllowed: true,
-      },
-    }),
+    (request, state) => {
+      if (!hasBearerAuth(request)) {
+        return apiError(401, "Missing Bearer authorization", "Unauthorized")
+      }
+
+      return {
+        json: {
+          usesTokenRateLimitsBilling: true,
+          hasActiveSubscription: true,
+          limits: SEED_BILLING_LIMITS,
+          overagePreference: state.overagePreference,
+          canManageOverage: state.canManageOverage,
+          extraUsageBalanceCents: state.extraUsageBalanceCents,
+          extraUsageAllowed: true,
+        },
+      }
+    },
   ],
   [
     "POST /api/organization/subscription/set-overage-preference",
     (request, state) => {
+      if (!hasBearerAuth(request)) {
+        return apiError(401, "Missing Bearer authorization", "Unauthorized")
+      }
+
       const { overagePreference } = bodyOf(request)
 
       if (overagePreference !== "droidCore" && overagePreference !== "extraUsage") {

@@ -78,11 +78,24 @@ describe("rest billing /limits tools over MCP", () => {
 
     expect(api.last()?.method).toBe("POST")
     expect(api.last()?.path).toBe("/api/organization/subscription/set-overage-preference")
+    expect(api.last()?.headers.authorization).toBe("Bearer factory-billing-key")
+    expect(api.last()?.headers["content-type"]).toBe("application/json")
     expect(JSON.parse(api.last()?.body ?? "null")).toEqual({ overagePreference: "extraUsage" })
     expect(updated).toEqual({ ok: true, overagePreference: "extraUsage" })
 
     expect(await client.ok("rest_get_billing_limits")).toMatchObject({
       overagePreference: "extraUsage",
+    })
+
+    const reverted = await client.ok("rest_set_billing_overage_preference", {
+      body: { overagePreference: "droidCore" },
+    })
+
+    expect(api.last()?.headers.authorization).toBe("Bearer factory-billing-key")
+    expect(JSON.parse(api.last()?.body ?? "null")).toEqual({ overagePreference: "droidCore" })
+    expect(reverted).toEqual({ ok: true, overagePreference: "droidCore" })
+    expect(await client.ok("rest_get_billing_limits")).toMatchObject({
+      overagePreference: "droidCore",
     })
   })
 
@@ -96,6 +109,7 @@ describe("rest billing /limits tools over MCP", () => {
         body: { overagePreference: "droidCore" },
       }),
     ).toEqual({ ok: true })
+    expect(api.last()?.headers.authorization).toBe("Bearer factory-billing-key")
   })
 
   it("rejects missing or invalid overagePreference before sending a request", async () => {
@@ -113,16 +127,44 @@ describe("rest billing /limits tools over MCP", () => {
     }
 
     expect(api.requests).toHaveLength(0)
+    expect(api.state.overagePreference).toBe("droidCore")
   })
 
-  it("maps a 403 when canManageOverage is false to rest_rejected", async () => {
+  it("maps a 403 when canManageOverage is false to rest_rejected and keeps the prior preference", async () => {
     api.state.canManageOverage = false
 
     const failure = await client.fail("rest_set_billing_overage_preference", {
       body: { overagePreference: "extraUsage" },
     })
 
+    expect(api.last()?.headers.authorization).toBe("Bearer factory-billing-key")
     expect(failure.code).toBe("rest_rejected")
     expect(failure.message).toContain("403")
+    expect(api.state.overagePreference).toBe("droidCore")
+    expect(await client.ok("rest_get_billing_limits")).toMatchObject({
+      overagePreference: "droidCore",
+      canManageOverage: false,
+    })
+  })
+
+  it("fails with factory_api_key_missing before I/O when FACTORY_API_KEY is unset", async () => {
+    const keyless = await connect({
+      config: testConfig({ factoryApiKey: undefined, factoryBaseUrl: api.baseUrl }),
+    })
+
+    try {
+      expect((await keyless.fail("rest_get_billing_limits")).code).toBe("factory_api_key_missing")
+      expect(
+        (
+          await keyless.fail("rest_set_billing_overage_preference", {
+            body: { overagePreference: "extraUsage" },
+          })
+        ).code,
+      ).toBe("factory_api_key_missing")
+      expect(api.requests).toHaveLength(0)
+      expect(api.state.overagePreference).toBe("droidCore")
+    } finally {
+      await keyless.dispose()
+    }
   })
 })
