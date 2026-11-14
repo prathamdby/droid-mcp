@@ -23,6 +23,12 @@ const LEGACY_ROUTES = [
   "GET /api/v0/machines/templates/{templateId}",
 ]
 
+/** The `/limits` billing routes Droid CLI and Factory App call; they are absent from the snapshot. */
+const BILLING_ROUTES = [
+  "GET /api/billing/limits",
+  "POST /api/organization/subscription/set-overage-preference",
+]
+
 /** The hosted and Context tools that must carry the destructive sentence, and no others. */
 const DESIGNATED_DESTRUCTIVE = [
   "rest_delete_computer",
@@ -228,6 +234,11 @@ describe("hosted REST coverage", () => {
     await hit("rest_list_ci_runs")
     await hit("rest_edit_ci_workflow", { body: { repoUrl: REPO, action: "create" } })
 
+    await hit("rest_get_billing_limits")
+    await hit("rest_set_billing_overage_preference", {
+      body: { overagePreference: "droidCore" },
+    })
+
     await hit("rest_list_organization_users")
     await hit("rest_invite_organization_user", { body: { email: "new@example.test" } })
     await hit("rest_remove_organization_user", { email: "linus@example.test" })
@@ -278,13 +289,15 @@ describe("hosted REST coverage", () => {
       tool.name.startsWith("rest_") ? [tool.name] : [],
     )
 
-    expect(restTools).toHaveLength(79)
+    expect(restTools).toHaveLength(81)
     expect([...routeOf.keys()].sort()).toEqual([...restTools].sort())
 
     const routes = [...routeOf.values()]
 
     expect(new Set(routes).size).toBe(routes.length)
-    expect([...routes].sort()).toEqual([...fixture.operations, ...LEGACY_ROUTES].sort())
+    expect([...routes].sort()).toEqual(
+      [...fixture.operations, ...LEGACY_ROUTES, ...BILLING_ROUTES].sort(),
+    )
   })
 
   it("puts the destructive sentence on exactly the designated hosted and Context tools", async () => {
@@ -300,7 +313,7 @@ describe("hosted REST coverage", () => {
     const listed = await client.list()
     const info = Schema.decodeUnknownSync(ServerInfo)(await client.ok("server_info"))
 
-    expect(listed).toHaveLength(285)
+    expect(listed).toHaveLength(287)
     expect(info.operationCount).toBe(listed.length)
     expect(info.toolCount).toBe(info.profile === "compact" ? 16 : listed.length)
   })

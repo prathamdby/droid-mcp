@@ -60,6 +60,9 @@ export interface FakeState {
   /** Members by email. */
   readonly users: Map<string, JsonObject>
   readonly invites: Map<string, JsonObject>
+  overagePreference: "droidCore" | "extraUsage" | null
+  canManageOverage: boolean
+  extraUsageBalanceCents: number
   globalLimit: number | null
   readonly groupLimits: Map<string, JsonObject>
   /** Individual limit overrides by email. */
@@ -215,6 +218,9 @@ const seedState = (): FakeState => ({
   ciPullRequests: [],
   users: byKey("email", SEED_USERS),
   invites: new Map(),
+  overagePreference: "droidCore",
+  canManageOverage: true,
+  extraUsageBalanceCents: 0,
   globalLimit: 2_000_000,
   groupLimits: byKey("groupId", SEED_GROUP_LIMITS),
   userLimits: new Map([["grace@example.test", 3_000_000]]),
@@ -1573,12 +1579,73 @@ const SERVICE_ACCOUNT_ROUTES: ReadonlyArray<readonly [string, RouteHandler]> = [
   ],
 ]
 
+export const SEED_BILLING_LIMITS: JsonObject = {
+  standard: {
+    fiveHour: { usedPercent: 42, windowEnd: "2026-11-14T06:00:00.000Z", secondsRemaining: 3600 },
+    weekly: { usedPercent: 68, windowEnd: "2026-11-18T00:00:00.000Z", secondsRemaining: 300_000 },
+    monthly: {
+      usedPercent: 35,
+      windowEnd: "2026-12-01T00:00:00.000Z",
+      secondsRemaining: 1_400_000,
+    },
+  },
+  core: {
+    fiveHour: { usedPercent: 0, windowEnd: null, secondsRemaining: null },
+    weekly: { usedPercent: 12, windowEnd: "2026-11-18T00:00:00.000Z", secondsRemaining: 300_000 },
+    monthly: {
+      usedPercent: 8,
+      windowEnd: "2026-12-01T00:00:00.000Z",
+      secondsRemaining: 1_400_000,
+    },
+  },
+}
+
+const BILLING_ROUTES: ReadonlyArray<readonly [string, RouteHandler]> = [
+  [
+    "GET /api/billing/limits",
+    (_request, state) => ({
+      json: {
+        usesTokenRateLimitsBilling: true,
+        hasActiveSubscription: true,
+        limits: SEED_BILLING_LIMITS,
+        overagePreference: state.overagePreference,
+        canManageOverage: state.canManageOverage,
+        extraUsageBalanceCents: state.extraUsageBalanceCents,
+        extraUsageAllowed: true,
+      },
+    }),
+  ],
+  [
+    "POST /api/organization/subscription/set-overage-preference",
+    (request, state) => {
+      const { overagePreference } = bodyOf(request)
+
+      if (overagePreference !== "droidCore" && overagePreference !== "extraUsage") {
+        return badRequest("overagePreference must be droidCore or extraUsage")
+      }
+
+      if (!state.canManageOverage) {
+        return apiError(
+          403,
+          "Only organization managers or owners can update overage preferences",
+          "Forbidden",
+        )
+      }
+
+      state.overagePreference = overagePreference
+
+      return { json: { ok: true, overagePreference } }
+    },
+  ],
+]
+
 const DEFAULT_ROUTES: ReadonlyArray<readonly [string, RouteHandler]> = [
   ...COMPUTER_ROUTES,
   ...ENVIRONMENT_ROUTES,
   ...SESSION_ROUTES.map(([key, handler]) => [key, gated(handler)] as const),
   ...WIKI_ROUTES,
   ...CI_ROUTES,
+  ...BILLING_ROUTES,
   ...ORGANIZATION_ROUTES,
   ...SERVICE_ACCOUNT_ROUTES,
 ]

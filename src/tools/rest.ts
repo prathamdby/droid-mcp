@@ -1,3 +1,4 @@
+import { billingTools } from "./rest-billing.ts"
 import { ciTools } from "./rest-ci.ts"
 import { computerTools } from "./rest-computers.ts"
 import { environmentTools } from "./rest-environments.ts"
@@ -9,8 +10,9 @@ import { remoteSessionTools } from "./rest-sessions.ts"
 import { wikiTools } from "./rest-wiki.ts"
 
 /**
- * Factory API tools. They call the hosted API (`/api/v0/...`) with
- * `FACTORY_API_KEY` through `RestService`, not the daemon.
+ * Factory API tools. They call the hosted API (`/api/v0/...` and the CLI's
+ * `/api/...` billing routes) with `FACTORY_API_KEY` through `RestService`, not
+ * the daemon.
  */
 export const restTools = (): RestDomain =>
   mergeDomains([
@@ -19,6 +21,7 @@ export const restTools = (): RestDomain =>
     remoteSessionTools(),
     wikiTools(),
     ciTools(),
+    billingTools(),
     organizationTools(),
     serviceAccountTools(),
   ])

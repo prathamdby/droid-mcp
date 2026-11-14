@@ -12,12 +12,12 @@ description: Drive Factory Droid through MCP for local coding turns and prompts,
 Call `server_info` once for `profile`, counts, and `maxAutonomy`; reuse known
 schemas and settings. Choose the backend before choosing an operation:
 
-| Backend | Family                | Use                                                                                      |
-| ------- | --------------------- | ---------------------------------------------------------------------------------------- |
-| Local   | `session_*`           | Coding turns in a `droid exec` child on this host; client answers prompts.               |
-| Daemon  | `daemon_*`, `droid_*` | Daemon-managed sessions, automation, git/worktrees, terminals, configuration.            |
-| Hosted  | `rest_*`              | Factory computers, Environments, remote sessions, wiki, CI, organization administration. |
-| Stored  | `context_*`           | Spaces, documents, files, append-only transcripts. Nothing runs.                         |
+| Backend | Family                | Use                                                                                               |
+| ------- | --------------------- | ------------------------------------------------------------------------------------------------- |
+| Local   | `session_*`           | Coding turns in a `droid exec` child on this host; client answers prompts.                        |
+| Daemon  | `daemon_*`, `droid_*` | Daemon-managed sessions, automation, git/worktrees, terminals, configuration.                     |
+| Hosted  | `rest_*`              | Factory computers, Environments, remote sessions, wiki, CI, billing, organization administration. |
+| Stored  | `context_*`           | Spaces, documents, files, append-only transcripts. Nothing runs.                                  |
 
 Keep ids within their backend. For daemon authority, hosted provisioning, or
 Context writes, read [delegation](references/delegation.md) before acting.
@@ -63,7 +63,7 @@ for wait behavior, event limits, streaming alternatives, and one-shot
 
 Compact advertises 16 tools: `server_info`, `skill_read`, nine local turn/prompt
 tools, and `tools_search`, `tools_describe`, `tool_call`, `batch`, `result_read`.
-All 285 operations remain reachable. Full advertises each operation directly;
+All 287 operations remain reachable. Full advertises each operation directly;
 the five dispatch tools are compact-only.
 
 For an unknown operation: `tools_search { query, family?, readOnly?, limit }`
@@ -74,5 +74,5 @@ or event filter. A truncated response carries a `ref` for `result_read`.
 
 Read [tool families](references/tool-families.md) when discovering a capability,
 chaining calls, recovering a result, or handling a failure. It explains
-what the 285 tool names mean, indexes every capability family, and groups the server's
+what the 287 tool names mean, indexes every capability family, and groups the server's
 failure codes with recovery actions.
