@@ -106,6 +106,7 @@ export const TurnResultSchema = Schema.Struct({
   ),
   uri: Schema.optional(Schema.String),
   summary: Schema.optional(Schema.String),
+  eventsOmitted: Schema.optional(Schema.Literal(true)),
 })
 
 export type TurnResult = typeof TurnResultSchema.Type

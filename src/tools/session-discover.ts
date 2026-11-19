@@ -150,7 +150,12 @@ export const sessionDiscoverTools = (config: Config) => {
 
               const blocked =
                 delivery === "block"
-                  ? yield* blockUntilSettled(created.sessionId, streamed, config.maxAutonomy)
+                  ? yield* blockUntilSettled(
+                      created.sessionId,
+                      streamed,
+                      config.maxAutonomy,
+                      params.waitMs,
+                    )
                   : streamed
 
               const result = delivery === "detach" ? presentTurn(blocked) : blocked

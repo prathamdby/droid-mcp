@@ -172,10 +172,11 @@ export const blockUntilSettled = (
   sessionId: string,
   started: TurnResult,
   maxAutonomy: AutonomyLevel | undefined,
+  waitMs: number = MAX_WAIT_MS,
 ) =>
   Effect.gen(function* () {
     const hub = yield* SessionHubService
-    const deadline = Date.now() + MAX_WAIT_MS
+    const deadline = Date.now() + waitMs
     let current = started
 
     for (let round = 0; round < 32; round += 1) {

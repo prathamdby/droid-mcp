@@ -180,7 +180,17 @@ export const createWorktree = (
 
     if (mode === "existing") yield* verifyRef(repo, branch)
 
-    mkdirSync(parent, { recursive: true })
+    yield* Effect.try({
+      try: () => {
+        mkdirSync(parent, { recursive: true })
+      },
+      catch: (cause) =>
+        problem(
+          "invalid_worktree",
+          cause instanceof Error ? cause.message : "cannot create the worktree directory",
+        ),
+    })
+
     const path = join(parent, id)
 
     const args =

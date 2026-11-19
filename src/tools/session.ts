@@ -198,7 +198,7 @@ export const sessionTools = (config: Config) => {
 
         if (delivery === "block") {
           return Effect.flatMap(turn, (result) =>
-            blockUntilSettled(params.sessionId, result, config.maxAutonomy),
+            blockUntilSettled(params.sessionId, result, config.maxAutonomy, params.waitMs),
           )
         }
 

@@ -60,7 +60,7 @@ const eventsResource =
         const cursor = Number(cursorText)
 
         if (!Number.isInteger(cursor) || cursor < 0) {
-          return Effect.succeed(JSON.stringify({ error: "invalid_cursor", cursor: cursorText }))
+          return Effect.succeed(JSON.stringify({ error: "invalid_cursor" }))
         }
 
         return hub.events({ sessionId, cursor, waitMs: 0 }).pipe(

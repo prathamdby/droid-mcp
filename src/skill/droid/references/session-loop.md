@@ -17,7 +17,11 @@ or `existing` (`worktreeNewBranch` must already exist). Send one prompt:
 ```
 
 `session_stream` returns `{ sessionId, status, cursor, events, truncated, result? }`.
-A short wait hands control back with `running`; it does not detach ownership
+`delivery: "detach"` returns at once with `uri` and `eventsOmitted` when the
+dump was left out. The cursor is still the resume point. `truncated` means the
+ring dropped history, not that delivery filtered the payload. `delivery: "block"`
+waits up to `waitMs`, or 300000 ms when `waitMs` is omitted. A short wait without
+`delivery` hands control back with `running`; it does not detach ownership
 or close the session. Continue with `session_events`:
 
 ```json

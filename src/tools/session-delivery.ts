@@ -21,14 +21,18 @@ export const presentTurn = (result: TurnResult): TurnResult => {
     }
   }
 
+  const prompts = result.events.filter(pending)
+  const omitted = prompts.length !== result.events.length
+
   return {
     sessionId: result.sessionId,
     status: result.status,
     cursor: result.cursor,
-    events: result.events.filter(pending),
-    truncated: false,
+    events: prompts,
+    truncated: result.truncated,
     result: result.result,
     uri: sessionUri(result.sessionId),
     summary,
+    eventsOmitted: omitted ? true : undefined,
   }
 }
