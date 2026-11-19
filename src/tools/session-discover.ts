@@ -7,9 +7,18 @@ import type { Config } from "../config.ts"
 import { presentFields, toJsonValue } from "../droid/protocol.ts"
 import type { JsonValue } from "../droid/protocol.ts"
 import { SessionHubService, TurnResultSchema } from "../droid/turns.ts"
+import { removeWorktree } from "../droid/worktree.ts"
 import { ToolFailure } from "./failure.ts"
-import { requireAutonomy, requireCwd, toolFailure } from "./guards.ts"
-import { AutonomySchema, WaitMsSchema } from "./session.ts"
+import { requireAutonomy, toolFailure } from "./guards.ts"
+import { presentTurn } from "./session-delivery.ts"
+import { blockUntilSettled } from "./session-elicit.ts"
+import {
+  AutonomySchema,
+  DeliverySchema,
+  WaitMsSchema,
+  spawnCwd,
+  worktreeFields,
+} from "./session.ts"
 
 const send = (
   sessionId: string,
@@ -64,16 +73,16 @@ const Models = Tool.make("session_models", {
 
 const Run = Tool.make("session_run", {
   description:
-    "Create a session and run one turn. The session is closed when the turn completes, fails, " +
-    "or is interrupted. A running result keeps the session: poll session_events with the " +
-    "returned cursor, answer prompts, then call session_close. Use session_create when you " +
-    "need more than one turn.",
+    "Create a session and run one turn. Closed when the turn ends, unless it is still running. " +
+    "delivery detach returns a URI; delivery block waits. Set worktree for a separate git checkout.",
   parameters: Schema.Struct({
     cwd: Schema.String,
     prompt: Schema.String,
     autonomyLevel: AutonomySchema,
     modelId: Schema.optionalKey(Schema.String),
     waitMs: Schema.optionalKey(WaitMsSchema),
+    delivery: Schema.optionalKey(DeliverySchema),
+    ...worktreeFields,
   }),
   success: TurnResultSchema,
   failure: ToolFailure,
@@ -104,21 +113,29 @@ export const sessionDiscoverTools = (config: Config) => {
     session_run: (params) =>
       SessionHubService.use((hub) =>
         Effect.gen(function* () {
-          const cwd = yield* requireCwd(params.cwd)
           const autonomyLevel = yield* requireAutonomy(config.maxAutonomy, params.autonomyLevel)
-
+          const spawned = yield* spawnCwd(params.cwd, params)
           const modelId = params.modelId
 
           const created = yield* hub
             .create({
-              cwd,
+              cwd: spawned.cwd,
               autonomyLevel,
               maxAutonomy: config.maxAutonomy,
               modelId,
+              worktree: spawned.worktree,
             })
-            .pipe(Effect.mapError(toolFailure))
+            .pipe(
+              Effect.mapError(toolFailure),
+              Effect.tapError(() =>
+                spawned.worktree?.lifecycle === "ephemeral"
+                  ? removeWorktree(spawned.worktree)
+                  : Effect.void,
+              ),
+            )
 
-          const waitMs = params.waitMs
+          const delivery = params.delivery
+          const waitMs = delivery === undefined ? params.waitMs : 0
 
           const turn =
             waitMs === undefined
@@ -129,7 +146,14 @@ export const sessionDiscoverTools = (config: Config) => {
 
           return yield* Effect.ensuring(
             Effect.gen(function* () {
-              const result = yield* hub.stream(turn).pipe(Effect.mapError(toolFailure))
+              const streamed = yield* hub.stream(turn).pipe(Effect.mapError(toolFailure))
+
+              const blocked =
+                delivery === "block"
+                  ? yield* blockUntilSettled(created.sessionId, streamed, config.maxAutonomy)
+                  : streamed
+
+              const result = delivery === "detach" ? presentTurn(blocked) : blocked
 
               if (result.status === "running") retain = true
 

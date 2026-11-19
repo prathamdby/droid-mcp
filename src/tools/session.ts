@@ -10,9 +10,16 @@ import {
   SessionSettingsSchema,
   TurnResultSchema,
   TurnStatusSchema,
+  WorktreeInfoSchema,
 } from "../droid/turns.ts"
+import type { TurnResult } from "../droid/turns.ts"
+import { createWorktree, removeWorktree } from "../droid/worktree.ts"
+import type { WorktreeFields } from "../droid/worktree.ts"
 import { ToolFailure } from "./failure.ts"
 import { requireAutonomy, requireCwd, toolFailure } from "./guards.ts"
+import { DELIVERIES } from "./session-delivery.ts"
+import { presentTurn } from "./session-delivery.ts"
+import { blockUntilSettled } from "./session-elicit.ts"
 
 export const AutonomySchema = Schema.Literals(["off", "low", "medium", "high"])
 
@@ -20,9 +27,42 @@ export const WaitMsSchema = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: MAX_WAIT_MS }),
 ).annotate({ description: "How long to wait, in milliseconds: 20000 by default, 300000 at most." })
 
+export const DeliverySchema = Schema.Literals(DELIVERIES).annotate({
+  description:
+    "detach returns at once with a session URI and no event dump. block waits until the turn ends, a prompt the client cannot answer, or 5 minutes.",
+})
+
+const WorktreeFlag = Schema.optionalKey(Schema.Boolean).annotate({
+  description:
+    "Create a git worktree and run there. Ephemeral worktrees are removed when the session closes.",
+})
+
+export const worktreeFields = {
+  worktree: WorktreeFlag,
+  worktreeLifecycle: Schema.optionalKey(Schema.Literals(["ephemeral", "persistent"])),
+  worktreeBranchMode: Schema.optionalKey(Schema.Literals(["copy", "existing"])),
+  worktreeBaseBranch: Schema.optionalKey(Schema.String),
+  worktreeBaseBranchFromOrigin: Schema.optionalKey(Schema.Boolean),
+  worktreeNewBranch: Schema.optionalKey(Schema.String),
+  worktreeDir: Schema.optionalKey(Schema.String).annotate({
+    description: "Absolute directory that will contain the worktree.",
+  }),
+}
+
+export const spawnCwd = (cwd: string, fields: WorktreeFields) =>
+  Effect.gen(function* () {
+    const checked = yield* requireCwd(cwd)
+
+    const tree = yield* createWorktree(checked, fields).pipe(
+      Effect.mapError((cause) => ({ code: cause.code, message: cause.message })),
+    )
+
+    return { cwd: tree?.path ?? checked, worktree: tree }
+  })
+
 const Create = Tool.make("session_create", {
   description:
-    "Start a Droid session in a directory. Every other session tool takes its sessionId. " +
+    "Start a Droid session. Set worktree to use a separate git checkout. " +
     "Autonomy must not exceed the server's cap.",
   parameters: Schema.Struct({
     cwd: Schema.String,
@@ -31,11 +71,13 @@ const Create = Tool.make("session_create", {
     reasoningEffort: Schema.optionalKey(Schema.String),
     restrictToolIds: Schema.optionalKey(Schema.Array(Schema.String)),
     disabledToolIds: Schema.optionalKey(Schema.Array(Schema.String)),
+    ...worktreeFields,
   }),
   success: Schema.Struct({
     sessionId: Schema.String,
     cwd: Schema.String,
     settings: SessionSettingsSchema,
+    worktree: Schema.optional(WorktreeInfoSchema),
   }),
   failure: ToolFailure,
   dependencies: [SessionHubService],
@@ -43,13 +85,13 @@ const Create = Tool.make("session_create", {
 
 const Stream = Tool.make("session_stream", {
   description:
-    "Send a prompt to a session and wait for the turn. A running result keeps the session; " +
-    "poll session_events with the returned cursor, which is the next sequence number, until " +
-    "status is completed, failed, or interrupted.",
+    "Send a prompt. Omit delivery to wait up to waitMs and return events. " +
+    "detach returns a session URI and no event dump. block waits and uses a form when the client can.",
   parameters: Schema.Struct({
     sessionId: Schema.String,
     prompt: Schema.String,
     waitMs: Schema.optionalKey(WaitMsSchema),
+    delivery: Schema.optionalKey(DeliverySchema),
   }),
   success: TurnResultSchema,
   failure: ToolFailure,
@@ -103,6 +145,7 @@ const List = Tool.make("session_list", {
         status: TurnStatusSchema,
         cursor: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
         settings: SessionSettingsSchema,
+        worktree: Schema.optional(WorktreeInfoSchema),
       }),
     ),
   }),
@@ -117,31 +160,52 @@ export const sessionTools = (config: Config) => {
     session_create: (params) =>
       Effect.gen(function* () {
         const hub = yield* SessionHubService
-        const cwd = yield* requireCwd(params.cwd)
         const autonomyLevel = yield* requireAutonomy(config.maxAutonomy, params.autonomyLevel)
+        const spawned = yield* spawnCwd(params.cwd, params)
 
         return yield* hub
           .create({
-            cwd,
+            cwd: spawned.cwd,
             autonomyLevel,
             maxAutonomy: config.maxAutonomy,
             modelId: params.modelId,
             reasoningEffort: params.reasoningEffort,
             restrictToolIds: params.restrictToolIds,
             disabledToolIds: params.disabledToolIds,
+            worktree: spawned.worktree,
           })
-          .pipe(Effect.mapError(toolFailure))
+          .pipe(
+            Effect.mapError(toolFailure),
+            Effect.tapError(() =>
+              spawned.worktree?.lifecycle === "ephemeral"
+                ? removeWorktree(spawned.worktree)
+                : Effect.void,
+            ),
+          )
       }),
     session_stream: (params) =>
-      SessionHubService.use((hub) =>
-        hub
+      SessionHubService.use((hub) => {
+        const delivery = params.delivery
+        const waited = delivery === undefined ? params.waitMs : 0
+
+        const turn = hub
           .stream({
             sessionId: params.sessionId,
             prompt: params.prompt,
-            waitMs: params.waitMs,
+            waitMs: waited,
           })
-          .pipe(Effect.mapError(toolFailure)),
-      ),
+          .pipe(Effect.mapError(toolFailure))
+
+        if (delivery === "block") {
+          return Effect.flatMap(turn, (result) =>
+            blockUntilSettled(params.sessionId, result, config.maxAutonomy),
+          )
+        }
+
+        return Effect.map(turn, (result): TurnResult =>
+          delivery === "detach" ? presentTurn(result) : result,
+        )
+      }),
     session_events: (params) =>
       SessionHubService.use((hub) =>
         hub

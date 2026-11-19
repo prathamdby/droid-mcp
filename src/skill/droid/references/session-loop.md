@@ -6,7 +6,11 @@
 { "cwd": "/absolute/project", "autonomyLevel": "low", "modelId": "auto" }
 ```
 
-`session_create` returns `{ sessionId, cwd, settings }`. Send one prompt:
+`session_create` returns `{ sessionId, cwd, settings, worktree? }`.
+`worktree: true` creates a git worktree and runs there. `ephemeral` (the
+default) removes it on close. `persistent` leaves the checkout and branch.
+`worktreeBranchMode` is `copy` (new branch from `worktreeBaseBranch` or HEAD)
+or `existing` (`worktreeNewBranch` must already exist). Send one prompt:
 
 ```json
 { "sessionId": "ID", "prompt": "Add and run a test for the retry helper", "waitMs": 0 }

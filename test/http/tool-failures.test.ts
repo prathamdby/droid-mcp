@@ -165,6 +165,20 @@ describe("tool failures over MCP", () => {
         reasoningEffort: { type: "string" },
         restrictToolIds: { type: "array", items: { type: "string" } },
         disabledToolIds: { type: "array", items: { type: "string" } },
+        worktree: {
+          type: "boolean",
+          description:
+            "Create a git worktree and run there. Ephemeral worktrees are removed when the session closes.",
+        },
+        worktreeLifecycle: { type: "string", enum: ["ephemeral", "persistent"] },
+        worktreeBranchMode: { type: "string", enum: ["copy", "existing"] },
+        worktreeBaseBranch: { type: "string" },
+        worktreeBaseBranchFromOrigin: { type: "boolean" },
+        worktreeNewBranch: { type: "string" },
+        worktreeDir: {
+          type: "string",
+          description: "Absolute directory that will contain the worktree.",
+        },
       },
       required: ["cwd", "autonomyLevel"],
       additionalProperties: true,

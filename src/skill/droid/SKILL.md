@@ -48,11 +48,16 @@ Context writes, read [delegation](references/delegation.md) before acting.
 
 1. `session_create` with absolute existing `cwd`, explicit `autonomyLevel`
    (`off|low|medium|high`, within `maxAutonomy`), and optional `modelId`,
-   `reasoningEffort`, `restrictToolIds`, or `disabledToolIds`. Retain `sessionId`.
-2. `session_stream` sends `prompt`; retain its `cursor`. While `status` is
-   `running`, call `session_events` with that cursor unchanged, then replace
-   it with the new returned cursor. It is the next sequence number, not the
-   last event's `seq`.
+   `reasoningEffort`, `restrictToolIds`, or `disabledToolIds`. Set `worktree`
+   to run in a separate git checkout; `worktreeLifecycle: "persistent"` keeps
+   it after close. Retain `sessionId`.
+2. `session_stream` sends `prompt`. `delivery: "detach"` returns a
+   `droid://sessions/{id}` URI and no event dump; read that resource or poll
+   `session_events`. `delivery: "block"` waits until the turn ends or a prompt
+   the client cannot answer as a form. Omit `delivery` to wait up to `waitMs`
+   and receive events. Retain `cursor`. While `status` is `running`, call
+   `session_events` with that cursor unchanged, then replace it with the new
+   returned cursor. It is the next sequence number, not the last event's `seq`.
 3. Answer `pending_permission`, `pending_question`, and `pending_options`
    before their `deadline`. Read [prompts](references/prompts.md) when one
    appears, even if you otherwise ignore intermediate events.
