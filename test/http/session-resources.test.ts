@@ -46,14 +46,8 @@ const CreatedSchema = Schema.Struct({
   }),
 })
 
-interface Headers {
-  readonly authorization: string
-  readonly "mcp-session-id": string
-  readonly "mcp-protocol-version": string
-}
-
 let server: TestServer
-let headers: Headers
+let sessionHeader = ""
 
 beforeAll(async () => {
   server = await startServer({
@@ -62,11 +56,7 @@ beforeAll(async () => {
   })
   const started = await initialize(server, "2025-11-25", { authorization: "Bearer " + KEY })
 
-  headers = {
-    authorization: "Bearer " + KEY,
-    "mcp-session-id": started.sessionId ?? "",
-    "mcp-protocol-version": "2025-11-25",
-  }
+  sessionHeader = started.sessionId ?? ""
 })
 
 afterAll(async () => {
@@ -80,7 +70,11 @@ const read = async (uri: string) => {
     await readBody(
       await server.post(
         { jsonrpc: "2.0", id: 2, method: "resources/read", params: { uri } },
-        headers,
+        {
+          authorization: "Bearer " + KEY,
+          "mcp-session-id": sessionHeader,
+          "mcp-protocol-version": "2025-11-25",
+        },
       ),
     ),
   )
@@ -103,7 +97,11 @@ describe("session resources", () => {
               arguments: { cwd: directory, autonomyLevel: "low" },
             },
           },
-          headers,
+          {
+          authorization: "Bearer " + KEY,
+          "mcp-session-id": sessionHeader,
+          "mcp-protocol-version": "2025-11-25",
+        },
         ),
       ),
     )
@@ -119,7 +117,7 @@ describe("session resources", () => {
     expect(live.sessionId).toBe(sessionId)
     expect(live.cwd).toBe(directory)
     expect(live.cursor).toBe(1)
-    expect(live.worktree).toBeUndefined()
+    expect(Object.hasOwn(live, "worktree")).toBe(false)
     expect(missing.error).toBe("session_not_found")
     expect(badNumber.error).toBe("invalid_cursor")
     expect(badText.error).toBe("invalid_cursor")
