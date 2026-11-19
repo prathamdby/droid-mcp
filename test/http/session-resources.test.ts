@@ -98,10 +98,10 @@ describe("session resources", () => {
             },
           },
           {
-          authorization: "Bearer " + KEY,
-          "mcp-session-id": sessionHeader,
-          "mcp-protocol-version": "2025-11-25",
-        },
+            authorization: "Bearer " + KEY,
+            "mcp-session-id": sessionHeader,
+            "mcp-protocol-version": "2025-11-25",
+          },
         ),
       ),
     )
