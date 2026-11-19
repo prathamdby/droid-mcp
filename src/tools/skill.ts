@@ -166,10 +166,11 @@ export const INSTRUCTIONS =
   SKILL_URI +
   " / prompt droid) before session and work-starting tools; these fail with skill_not_read until you do. " +
   "Reuse server_info profile/cap and known schemas. " +
-  "session_create -> session_stream -> session_events with each returned cursor; " +
-  "use long waitMs and consume only the outcome when enough, but handle pending prompts " +
-  "with session_respond_permission, session_answer_question, or session_pick_options. " +
-  "Stop on terminal status; session_close when done."
+  "Call server_info once. session_create then session_stream. " +
+  "delivery detach returns a droid://sessions URI and no event dump; read that resource or poll session_events. " +
+  "delivery block waits and uses a form when the client can. " +
+  "Answer leftover prompts with session_respond_permission, session_answer_question, or session_pick_options. " +
+  "Set worktree for a separate git checkout. session_close when done."
 
 /** The compact profile adds how to reach the operations it does not list. */
 export const COMPACT_INSTRUCTIONS =

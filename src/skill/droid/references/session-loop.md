@@ -6,14 +6,22 @@
 { "cwd": "/absolute/project", "autonomyLevel": "low", "modelId": "auto" }
 ```
 
-`session_create` returns `{ sessionId, cwd, settings }`. Send one prompt:
+`session_create` returns `{ sessionId, cwd, settings, worktree? }`.
+`worktree: true` creates a git worktree and runs there. `ephemeral` (the
+default) removes it on close. `persistent` leaves the checkout and branch.
+`worktreeBranchMode` is `copy` (new branch from `worktreeBaseBranch` or HEAD)
+or `existing` (`worktreeNewBranch` must already exist). Send one prompt:
 
 ```json
 { "sessionId": "ID", "prompt": "Add and run a test for the retry helper", "waitMs": 0 }
 ```
 
 `session_stream` returns `{ sessionId, status, cursor, events, truncated, result? }`.
-A short wait hands control back with `running`; it does not detach ownership
+`delivery: "detach"` returns at once with `uri` and `eventsOmitted` when the
+dump was left out. The cursor is still the resume point. `truncated` means the
+ring dropped history, not that delivery filtered the payload. `delivery: "block"`
+waits up to `waitMs`, or 300000 ms when `waitMs` is omitted. A short wait without
+`delivery` hands control back with `running`; it does not detach ownership
 or close the session. Continue with `session_events`:
 
 ```json

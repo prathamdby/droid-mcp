@@ -9,6 +9,7 @@ import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as PubSub from "effect/PubSub"
 import * as Schema from "effect/Schema"
 import * as Scope from "effect/Scope"
 import * as Semaphore from "effect/Semaphore"
@@ -24,6 +25,8 @@ import { capPermissionOptions, promptEvent, viewOf } from "./prompts.ts"
 import type { Prompt, PromptView } from "./prompts.ts"
 import type { JsonValue } from "./protocol.ts"
 import { presentFields, toJsonValue } from "./protocol.ts"
+import type { Worktree } from "./worktree.ts"
+import { removeWorktree } from "./worktree.ts"
 
 /** Text in an event is capped so one long block cannot bloat every poll. */
 export const EVENT_TEXT_LIMIT = 4 * 1024
@@ -101,6 +104,9 @@ export const TurnResultSchema = Schema.Struct({
       structuredOutput: Schema.optional(Schema.Json),
     }),
   ),
+  uri: Schema.optional(Schema.String),
+  summary: Schema.optional(Schema.String),
+  eventsOmitted: Schema.optional(Schema.Literal(true)),
 })
 
 export type TurnResult = typeof TurnResultSchema.Type
@@ -113,6 +119,12 @@ export const SessionSettingsSchema = Schema.Struct({
 })
 
 export type SessionSettings = typeof SessionSettingsSchema.Type
+
+export const WorktreeInfoSchema = Schema.Struct({
+  path: Schema.String,
+  branch: Schema.String,
+  lifecycle: Schema.Literals(["ephemeral", "persistent"]),
+})
 
 export class SessionProblem extends Schema.TaggedError<SessionProblem>()("SessionProblem", {
   code: Schema.String,
@@ -138,12 +150,14 @@ export interface CreateSessionOptions {
   readonly disabledToolIds?: ReadonlyArray<string>
   /** Server ceiling applied to permission prompts raised in this session. */
   readonly maxAutonomy?: AutonomyLevel
+  readonly worktree?: Worktree
 }
 
 export interface CreateSessionResult {
   readonly sessionId: string
   readonly cwd: string
   readonly settings: SessionSettings
+  readonly worktree?: typeof WorktreeInfoSchema.Type
 }
 
 export interface StreamOptions {
@@ -177,6 +191,7 @@ export interface SessionSummary {
   readonly settings: SessionSettings
   readonly status: TurnStatus
   readonly cursor: number
+  readonly worktree?: typeof WorktreeInfoSchema.Type
 }
 
 export interface SessionHubApi {
@@ -204,6 +219,7 @@ export interface SessionHubApi {
     requestId: string,
   ) => Effect.Effect<PromptView | undefined, SessionProblem>
   readonly sessions: Effect.Effect<ReadonlyArray<SessionSummary>>
+  readonly changes: Stream.Stream<string>
 }
 
 /** A draft event; `seq` is assigned by the session's ring buffer. */
@@ -352,6 +368,7 @@ interface SessionState {
   turnEpoch: number
   promptSeq: number
   readonly cap: AutonomyLevel | undefined
+  readonly worktree?: Worktree
 }
 
 const InitializeResult = Schema.Struct({
@@ -767,6 +784,13 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
   Effect.gen(function* () {
     const sessions = new Map<string, SessionState>()
     const owned: Array<OwnedExec> = []
+    const changes = yield* PubSub.unbounded<string>()
+
+    const touch = (sessionId: string): void => {
+      PubSub.publishUnsafe(changes, "droid://sessions")
+      PubSub.publishUnsafe(changes, "droid://sessions/" + sessionId)
+    }
+
     const logger = options.logger
     const waitMs = options.waitMs ?? DEFAULT_WAIT_MS
     const idleMs = options.idleMs ?? IDLE_SESSION_MS
@@ -788,6 +812,7 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       const bytes = Buffer.byteLength(JSON.stringify(event), "utf8")
       session.buffer.push({ event, bytes })
       session.bytes += bytes
+      touch(session.id)
 
       while (session.buffer.length > RING_EVENT_LIMIT || session.bytes > RING_BYTE_LIMIT) {
         const removed = session.buffer.shift()
@@ -1483,9 +1508,17 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
               .pipe(Effect.ignore),
           )
           session.phase = "closed"
+          touch(session.id)
 
           return { closed: true }
-        }).pipe(Effect.ensuring(shutdownOwned(session.owned))),
+        }).pipe(
+          Effect.ensuring(shutdownOwned(session.owned)),
+          Effect.ensuring(
+            session.worktree?.lifecycle === "ephemeral"
+              ? removeWorktree(session.worktree)
+              : Effect.void,
+          ),
+        ),
       )
 
     const close = (
@@ -1675,6 +1708,7 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
             turnEpoch: 0,
             promptSeq: 1,
             cap: createOptions.maxAutonomy,
+            worktree: createOptions.worktree,
           }
 
           if (closing) return yield* Effect.fail(shuttingDown())
@@ -1688,7 +1722,21 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
 
           if (closing) return yield* Effect.fail(shuttingDown())
 
-          return { sessionId: session.id, cwd, settings }
+          touch(session.id)
+
+          return {
+            sessionId: session.id,
+            cwd,
+            settings,
+            worktree:
+              createOptions.worktree === undefined
+                ? undefined
+                : {
+                    path: createOptions.worktree.path,
+                    branch: createOptions.worktree.branch,
+                    lifecycle: createOptions.worktree.lifecycle,
+                  },
+          }
         })
 
         return yield* Effect.onExit(work, (exit) => {
@@ -2042,6 +2090,7 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
       command,
       models,
       pendingPrompt,
+      changes: Stream.fromPubSub(changes),
       sessions: Effect.sync(() => {
         const listed: Array<SessionSummary> = []
 
@@ -2052,6 +2101,14 @@ export const sessionHub = (options: SessionHubOptions): Effect.Effect<SessionHub
             settings: session.settings,
             status: listedStatus(session),
             cursor: session.nextSeq,
+            worktree:
+              session.worktree === undefined
+                ? undefined
+                : {
+                    path: session.worktree.path,
+                    branch: session.worktree.branch,
+                    lifecycle: session.worktree.lifecycle,
+                  },
           })
         }
 

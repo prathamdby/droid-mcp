@@ -46,10 +46,10 @@ It also serves a `droid` skill and a `droid` prompt that teach the assistant the
 
 A turn works like this.
 
-1. `session_create` starts a Droid child process for a working directory and an autonomy level. The server rejects any autonomy level above the cap reported by `server_info`.
-2. `session_stream` sends the prompt and waits up to `waitMs`, 20 seconds by default and 300 seconds at most.
-3. If the turn is still running, call `session_events` with the cursor it returned. The cursor is the next sequence number, one past the last event, so pass it back unchanged and events do not repeat. Call it until the status is `completed`, `failed`, or `interrupted`. A `running` result keeps the session; close it when you are done. `session_run` closes the session itself unless it returns `running`, in which case poll, answer prompts, and then `session_close`.
-4. While the turn runs, prompts such as `pending_permission`, `pending_question`, and `pending_options` appear, each with a deadline. Answer them with the matching tool.
+1. `session_create` starts a Droid child process for a working directory and an autonomy level. The server rejects any autonomy level above the cap reported by `server_info`. Set `worktree: true` to run in a new git worktree. Ephemeral worktrees are removed on close. `worktreeLifecycle: "persistent"` keeps the checkout.
+2. `session_stream` sends the prompt. Omit `delivery` to wait up to `waitMs` (20 seconds by default, 300 seconds at most) and receive events. `delivery: "detach"` returns at once with a `droid://sessions/{id}` URI and no event dump. `delivery: "block"` holds the call until the turn ends, a prompt the client cannot answer, or 5 minutes. On the 2025 protocol revisions, a client that advertises elicitation gets that prompt as a form. A 2026-07-28 client gets the pending prompt in the result and answers with the session tools, because that revision does not allow the server to start a request.
+3. If the turn is still running, read the session resource or call `session_events` with the cursor it returned. The cursor is the next sequence number, one past the last event, so pass it back unchanged and events do not repeat. A client that opens `subscriptions/listen` for that URI is notified when it changes. Call until the status is `completed`, `failed`, or `interrupted`. A `running` result keeps the session; close it when you are done. `session_run` closes the session itself unless it returns `running`, in which case poll, answer prompts, and then `session_close`.
+4. While the turn runs, prompts such as `pending_permission`, `pending_question`, and `pending_options` appear, each with a deadline. Answer them with the matching tool, unless the client already answered a form.
 5. `session_close` stops the process. Sessions idle for 30 minutes are closed automatically.
 
 ## Requirements

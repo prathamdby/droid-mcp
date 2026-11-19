@@ -15,6 +15,7 @@ import { createLogger } from "../log.ts"
 import { MCP_PROTOCOLS } from "../mcp-protocols.ts"
 import { surfaceFor } from "../tools/compact.ts"
 import { resultStoreLayer } from "../tools/results.ts"
+import { sessionResources } from "../tools/session-resources.ts"
 import {
   INSTRUCTIONS,
   instructionsFor,
@@ -45,6 +46,14 @@ const httpLayerOptions = (options: ServerOptions): HttpLayerOptions => {
     path: "/mcp",
     protocols: [...MCP_PROTOCOLS],
     allowSessionTermination: true,
+    cacheHints: {
+      discover: { ttl: "5 minutes", cacheScope: "private" },
+      tools: { ttl: "5 minutes", cacheScope: "private" },
+      prompts: { ttl: "5 minutes", cacheScope: "private" },
+      skills: { ttl: "5 minutes", cacheScope: "private" },
+      resources: { ttl: 0, cacheScope: "private" },
+      resourceTemplates: { ttl: "5 minutes", cacheScope: "private" },
+    },
   }
 
   const origins = options.allowedOrigins
@@ -77,8 +86,10 @@ export const mcpLayer = (options: ServerOptions) => {
 
   // SAFETY: every handler this layer needs is provided just above; the
   // registration's requirement type is widened by the generated toolkit.
-  const toolRegistrations = McpServer.toolkit(toolkit).pipe(
-    Layer.provide(handlers),
+  const toolRegistrations = Layer.mergeAll(
+    McpServer.toolkit(toolkit).pipe(Layer.provide(handlers)),
+    sessionResources,
+  ).pipe(
     Layer.provide(skillGate),
     Layer.provide(resultStoreLayer),
     Layer.provide(sessionHubLayer(hubOptions(options.config))),
