@@ -8,6 +8,8 @@ import * as PubSub from "effect/PubSub"
 import * as Stream from "effect/Stream"
 
 import type { Logger } from "../log.ts"
+import { broadcast, endBroadcast, publishItem } from "./broadcast.ts"
+import type { Broadcast } from "./broadcast.ts"
 import { ExecFailed, ExecTimeout } from "./errors.ts"
 import type { ExecError } from "./errors.ts"
 import {
@@ -16,8 +18,8 @@ import {
   execEnvironment,
   responseEnvelope,
 } from "./exec-protocol.ts"
-import type { IncomingRequestEnvelope, JsonValue, NotificationEnvelope } from "./protocol.ts"
-import { SDK_PROTOCOL_VERSION, parseServerMessage } from "./protocol.ts"
+import type { JsonValue } from "./protocol.ts"
+import { SDK_PROTOCOL_VERSION, notificationOf, parseServerMessage, requestOf } from "./protocol.ts"
 
 export interface ExecNotification {
   readonly method: string
@@ -80,41 +82,6 @@ const STDOUT_LINE_LIMIT_BYTES = 1024 * 1024
 
 /** After stdin closes, the CLI exits on its own; these bound how long we wait. */
 const SHUTDOWN_TIMEOUT_MS = 2_000
-
-interface BroadcastItem<A> {
-  readonly kind: "item"
-  readonly value: A
-}
-
-interface BroadcastEnd {
-  readonly kind: "end"
-}
-
-type Broadcast<A> = BroadcastItem<A> | BroadcastEnd
-
-const broadcast = <A>(pubsub: PubSub.PubSub<Broadcast<A>>): Stream.Stream<A> =>
-  Stream.fromPubSub(pubsub).pipe(
-    Stream.takeWhile((event): event is BroadcastItem<A> => event.kind === "item"),
-    Stream.map((event) => event.value),
-  )
-
-const publishItem = <A>(pubsub: PubSub.PubSub<Broadcast<A>>, value: A): void => {
-  PubSub.publishUnsafe(pubsub, { kind: "item", value })
-}
-
-const endBroadcast = <A>(pubsub: PubSub.PubSub<Broadcast<A>>): void => {
-  PubSub.endUnsafe(pubsub, { kind: "end" })
-}
-
-const notificationOf = (message: NotificationEnvelope): ExecNotification =>
-  message.params === undefined
-    ? { method: message.method }
-    : { method: message.method, params: message.params }
-
-const requestOf = (message: IncomingRequestEnvelope): ExecRequest =>
-  message.params === undefined
-    ? { id: message.id, method: message.method }
-    : { id: message.id, method: message.method, params: message.params }
 
 export const start = (options: ExecClientOptions): Effect.Effect<ExecClient, ExecFailed> => {
   let spawnedChild: ReturnType<typeof spawn> | undefined

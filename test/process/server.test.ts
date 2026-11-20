@@ -1,20 +1,19 @@
 import { spawn } from "node:child_process"
-import { createServer } from "node:net"
+import type { ChildProcess } from "node:child_process"
 
-import { Option, Schema } from "effect"
+import { Schema } from "effect"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { startFakeContextApi } from "../support/fake-context-api.ts"
 import { startFakeFactoryApi } from "../support/fake-factory-api.ts"
 import { expectBody, readBody, waitForPort } from "../support/mcp-http.ts"
+import { freePort } from "../support/port.ts"
 
 const KEY = "process-test-key"
 const FACTORY_KEY_CANARY = "fk-process-canary-7f3a"
 const TENANT_HEADER = "x-factory-organization"
 const TENANT_CANARY = "org-process-canary-91c2"
 const root = process.cwd()
-
-const AddressSchema = Schema.Struct({ port: Schema.Number })
 
 const ToolsListSchema = Schema.Struct({
   result: Schema.Struct({
@@ -41,19 +40,9 @@ interface RunningServer {
   readonly stderr: () => string
 }
 
-const freePort = (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const probe = createServer()
-    probe.on("error", reject)
-    probe.listen(0, "127.0.0.1", () => {
-      Option.match(Schema.decodeUnknownOption(AddressSchema)(probe.address()), {
-        onNone: () => reject(new Error("no port")),
-        onSome: ({ port }) => probe.close(() => resolve(port)),
-      })
-    })
-  })
-
-const start = async (env: Record<string, string>): Promise<RunningServer> => {
+const spawnServe = async (
+  env: Record<string, string>,
+): Promise<{ port: number; child: ChildProcess; stderr: () => string }> => {
   const port = await freePort()
 
   const child = spawn(
@@ -71,11 +60,17 @@ const start = async (env: Record<string, string>): Promise<RunningServer> => {
     stderr += String(chunk)
   })
 
+  return { port, child, stderr: () => stderr }
+}
+
+const start = async (env: Record<string, string>): Promise<RunningServer> => {
+  const { port, child, stderr } = await spawnServe(env)
+
   await waitForPort(port)
 
   return {
     port,
-    stderr: () => stderr,
+    stderr,
     stop: async () => {
       child.kill("SIGTERM")
       await new Promise<void>((resolve) => {
@@ -104,22 +99,7 @@ const post = (server: RunningServer, body: Schema.Json, headers: Record<string, 
 const exitOf = async (
   env: Record<string, string>,
 ): Promise<{ code: number | null; stderr: string }> => {
-  const port = await freePort()
-
-  const child = spawn(
-    process.execPath,
-    ["--experimental-strip-types", "src/main.ts", "serve", "--port", String(port)],
-    {
-      cwd: root,
-      env: { ...process.env, DROID_MCP_LOG_LEVEL: "error", ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  )
-
-  let stderr = ""
-  child.stderr.on("data", (chunk) => {
-    stderr += String(chunk)
-  })
+  const { child, stderr } = await spawnServe(env)
 
   const code = await new Promise<number | null>((resolve) => {
     child.once("exit", (exitCode) => resolve(exitCode))
@@ -129,7 +109,7 @@ const exitOf = async (
     }, 20_000)
   })
 
-  return { code, stderr }
+  return { code, stderr: stderr() }
 }
 
 /** Initializes a 2025-11-25 MCP session and returns the headers later calls need. */

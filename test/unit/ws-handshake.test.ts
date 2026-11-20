@@ -10,6 +10,7 @@ import {
   OPCODE,
   buildHandshakeRequest,
   computeAccept,
+  concat,
   connect,
   parseHandshakeResponse,
 } from "../../src/droid/ws.ts"
@@ -70,19 +71,12 @@ const upgrade = (head: string): string => {
   )
 }
 
-const timeouts = (): number =>
-  process.getActiveResourcesInfo().filter((name) => name === "Timeout").length
+const resourceCount = (name: string): number =>
+  process.getActiveResourcesInfo().filter((entry) => entry === name).length
 
-const pipeWraps = (): number =>
-  process.getActiveResourcesInfo().filter((name) => name === "PipeWrap").length
+const timeouts = (): number => resourceCount("Timeout")
 
-const concatBytes = (left: Uint8Array, right: Uint8Array): Uint8Array => {
-  const out = new Uint8Array(left.length + right.length)
-  out.set(left, 0)
-  out.set(right, left.length)
-
-  return out
-}
+const pipeWraps = (): number => resourceCount("PipeWrap")
 
 const expectFewerPipes = async (during: number): Promise<void> => {
   const deadline = Date.now() + 1_500
@@ -550,7 +544,7 @@ describe("websocket connection", () => {
     closePayload[1] = 0xe8
     closePayload.set(reason, 2)
 
-    const frames = concatBytes(
+    const frames = concat(
       encodeServerFrame(OPCODE.text, new TextEncoder().encode('{"final":true}')),
       encodeServerFrame(OPCODE.close, closePayload),
     )

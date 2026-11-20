@@ -1,16 +1,7 @@
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
 
-import type { TurnResult } from "../../src/droid/turns.ts"
-import { settle, withPrompts } from "../support/prompts.ts"
-
-const pending = (turn: TurnResult, kind: string) => {
-  const event = turn.events.find((candidate) => candidate.kind === kind)
-
-  if (event?.requestId === undefined) throw new Error("no " + kind + " event")
-
-  return event
-}
+import { pendingEvent as pending, settle, withPrompts } from "../support/prompts.ts"
 
 const TIMEOUT_MS = 150
 

@@ -1,18 +1,12 @@
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
 
-import type { SessionHub } from "../../src/droid/turns.ts"
-import { createSession, fakeHub } from "../support/hub.ts"
-
-const scoped = <A, E>(run: (hub: SessionHub) => Effect.Effect<A, E>) =>
-  Effect.scoped(
-    Effect.acquireRelease(fakeHub(), (hub) => hub.closeAll).pipe(Effect.flatMap((hub) => run(hub))),
-  )
+import { createSession, fakeHub, scopedHub } from "../support/hub.ts"
 
 describe("session lifecycle", () => {
   it("refuses a second stream while a turn is running", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const running = yield* hub.api.stream({ sessionId, prompt: "hang", waitMs: 50 })
@@ -32,7 +26,7 @@ describe("session lifecycle", () => {
 
   it("reports an interrupt as an interrupted turn", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const running = yield* hub.api.stream({ sessionId, prompt: "interrupt", waitMs: 50 })
@@ -55,7 +49,7 @@ describe("session lifecycle", () => {
 
   it("fails the running turn when the child exits", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const turn = yield* hub.api.stream({ sessionId, prompt: "crash", waitMs: 2_000 })
@@ -72,7 +66,7 @@ describe("session lifecycle", () => {
 
   it("drops the session when closed", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const closed = yield* hub.api.close(sessionId)
@@ -112,7 +106,7 @@ describe("session lifecycle", () => {
 
   it("rejects a blank prompt and an interrupt with nothing to stop", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const blank = yield* hub.api.stream({ sessionId, prompt: "   \n\t " }).pipe(Effect.flip)

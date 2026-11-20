@@ -8,6 +8,14 @@ import type { ToolFailure } from "../../src/tools/failure.ts"
 import { sessionPromptTools } from "../../src/tools/session-prompts.ts"
 import { createSession, fakeHub } from "./hub.ts"
 
+export const pendingEvent = (turn: TurnResult, kind: string, missing = "no " + kind + " event") => {
+  const event = turn.events.find((candidate) => candidate.kind === kind)
+
+  if (event?.requestId === undefined) throw new Error(missing)
+
+  return event
+}
+
 export interface PromptHarness {
   readonly hub: SessionHub
   readonly sessionId: string

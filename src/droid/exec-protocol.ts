@@ -71,16 +71,20 @@ export type PromptMethod = (typeof PROMPT_METHODS)[number]
 export const isPromptMethod = (method: string): method is PromptMethod =>
   PROMPT_METHODS.some((candidate) => candidate === method)
 
+const responseFields = (id: string, protocolVersion: string) => ({
+  jsonrpc: JSONRPC_VERSION,
+  factoryApiVersion: LEGACY_FACTORY_API_VERSION,
+  factoryProtocolVersion: protocolVersion,
+  type: "response" as const,
+  id,
+})
+
 export const responseEnvelope = (
   id: string,
   result: JsonValue,
   protocolVersion: string,
 ): JsonValue => ({
-  jsonrpc: JSONRPC_VERSION,
-  factoryApiVersion: LEGACY_FACTORY_API_VERSION,
-  factoryProtocolVersion: protocolVersion,
-  type: "response",
-  id,
+  ...responseFields(id, protocolVersion),
   result,
 })
 
@@ -90,10 +94,6 @@ export const errorResponseEnvelope = (
   message: string,
   protocolVersion: string,
 ): JsonValue => ({
-  jsonrpc: JSONRPC_VERSION,
-  factoryApiVersion: LEGACY_FACTORY_API_VERSION,
-  factoryProtocolVersion: protocolVersion,
-  type: "response",
-  id,
+  ...responseFields(id, protocolVersion),
   error: { code, message },
 })

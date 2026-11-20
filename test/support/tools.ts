@@ -5,6 +5,7 @@ import type { JsonValue } from "../../src/droid/protocol.ts"
 import { SessionHubService } from "../../src/droid/turns.ts"
 import type { SessionHub } from "../../src/droid/turns.ts"
 import type { ToolFailure } from "../../src/tools/failure.ts"
+import { toolsFor } from "../../src/tools/index.ts"
 import { sessionAdminTools } from "../../src/tools/session-admin.ts"
 import { sessionDiscoverTools } from "../../src/tools/session-discover.ts"
 import { sessionHistoryTools } from "../../src/tools/session-history.ts"
@@ -13,6 +14,9 @@ import { sessionPromptTools } from "../../src/tools/session-prompts.ts"
 import { sessionTools } from "../../src/tools/session.ts"
 import { testConfig } from "./config.ts"
 import { createSession, fakeHub } from "./hub.ts"
+
+export const registeredToolNames = (): ReadonlyArray<string> =>
+  Object.keys(toolsFor(testConfig()).toolkit.tools)
 
 /** Every session tool handler, keyed by tool name. */
 export type ToolHandler = (params: never) => Effect.Effect<unknown, ToolFailure, SessionHubService>

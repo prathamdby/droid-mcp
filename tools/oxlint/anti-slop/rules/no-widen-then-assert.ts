@@ -1,6 +1,9 @@
 import { defineRule } from "@oxlint/plugins";
 import type { ESTree, Variable } from "@oxlint/plugins";
 
+import { unwrapParenthesizedExpression as unwrapExpressionParentheses } from "../shared/parentheses.ts";
+import { typeReferenceName } from "../shared/type-alias-resolution.ts";
+
 type BroadTypeKind = "top" | "object" | "record";
 
 type KnownValueEvidence = {
@@ -15,20 +18,10 @@ const functionBoundaryTypes = new Set([
   "TSEmptyBodyFunctionExpression",
 ]);
 
-function unwrapExpressionParentheses(expression: ESTree.Expression): ESTree.Expression {
-  let current = expression;
-  while (current.type === "ParenthesizedExpression") current = current.expression;
-  return current;
-}
-
 function unwrapTypeParentheses(type: ESTree.TSType): ESTree.TSType {
   let current = type;
   while (current.type === "TSParenthesizedType") current = current.typeAnnotation;
   return current;
-}
-
-function typeReferenceName(type: ESTree.TSTypeReference): string | null {
-  return type.typeName.type === "Identifier" ? type.typeName.name : null;
 }
 
 function isUnknownOrAnyType(type: ESTree.TSType): boolean {

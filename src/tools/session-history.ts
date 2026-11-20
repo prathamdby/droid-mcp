@@ -1,24 +1,10 @@
 import * as Tool from "effect/ai/Tool"
 import * as Toolkit from "effect/ai/Toolkit"
-import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
-import { presentFields, toJsonValue } from "../droid/protocol.ts"
-import type { JsonValue } from "../droid/protocol.ts"
 import { SessionHubService } from "../droid/turns.ts"
 import { ToolFailure } from "./failure.ts"
-import { toolFailure } from "./guards.ts"
-
-const send = (
-  sessionId: string,
-  method: string,
-  payload: Record<string, JsonValue | undefined>,
-): Effect.Effect<JsonValue | undefined, ToolFailure, SessionHubService> =>
-  SessionHubService.use((hub) =>
-    hub
-      .command({ sessionId, method, params: toJsonValue({ sessionId, ...presentFields(payload) }) })
-      .pipe(Effect.mapError(toolFailure)),
-  )
+import { commandSession as send } from "./session.ts"
 
 const RewindInfo = Tool.make("session_get_rewind_info", {
   description: "Describe what rewinding to a message would restore or delete.",

@@ -1,10 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { Option, Schema } from "effect"
+import { Schema } from "effect"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import type { Config } from "../../src/config.ts"
@@ -15,6 +14,7 @@ import { startFakeDaemon } from "../support/fake-daemon.ts"
 import type { FakeDaemon, ScriptedReply } from "../support/fake-daemon.ts"
 import { initialize, readBody, startServer } from "../support/mcp-http.ts"
 import type { Json, TestServer } from "../support/mcp-http.ts"
+import { freePort as closedPort } from "../support/port.ts"
 
 /**
  * The compact profile against the full one, over the real `/mcp` layer:
@@ -122,21 +122,6 @@ const failureOf = (body: typeof Called.Type) =>
 /** The plain-text failure the MCP layer returns when arguments fail a tool's schema. */
 const isSchemaRejection = (body: typeof Called.Type): boolean =>
   (body.result?.content?.[0]?.text ?? "").startsWith("Invalid parameters for tool")
-
-const AddressSchema = Schema.Struct({ port: Schema.Number })
-
-const closedPort = (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const probe = createServer()
-
-    probe.on("error", reject)
-    probe.listen(0, "127.0.0.1", () => {
-      Option.match(Schema.decodeUnknownOption(AddressSchema)(probe.address()), {
-        onNone: () => reject(new Error("no port")),
-        onSome: ({ port }) => probe.close(() => resolve(port)),
-      })
-    })
-  })
 
 const files = Array.from(
   { length: FILE_COUNT },

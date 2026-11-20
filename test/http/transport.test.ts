@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { testConfig } from "../support/config.ts"
-import { expectBody, initialize, readBody, startServer } from "../support/mcp-http.ts"
+import { expectBody, initialize, readBody, startServer, stateless } from "../support/mcp-http.ts"
 import type { TestServer } from "../support/mcp-http.ts"
 
 const KEY = "transport-test-key"
@@ -45,20 +45,6 @@ afterAll(async () => {
 })
 
 const authorized = { authorization: "Bearer " + KEY }
-
-/** Streamable HTTP from a 2026-07-28 client: sessionless, `_meta`-negotiated. */
-const STATELESS_META = {
-  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-  "io.modelcontextprotocol/clientCapabilities": {},
-  "io.modelcontextprotocol/clientInfo": { name: "vitest", version: "1.0.0" },
-}
-
-const stateless = (id: number, method: string, params: Record<string, Schema.Json> = {}) => ({
-  jsonrpc: "2.0",
-  id,
-  method,
-  params: { ...params, _meta: STATELESS_META },
-})
 
 const statelessHeaders = (method: string, extra: Record<string, string> = {}) => ({
   ...authorized,

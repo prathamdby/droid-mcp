@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { instructionsFor } from "../../src/tools/skill.ts"
 import { testConfig } from "../support/config.ts"
-import { expectBody, initialize, readBody, startServer } from "../support/mcp-http.ts"
+import { expectBody, initialize, readBody, startServer, stateless } from "../support/mcp-http.ts"
 import type { TestServer } from "../support/mcp-http.ts"
 
 const KEY = "skill-test-key"
@@ -55,19 +55,6 @@ afterAll(async () => {
 })
 
 const authorized = { authorization: "Bearer " + KEY }
-
-const STATELESS_META = {
-  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-  "io.modelcontextprotocol/clientCapabilities": {},
-  "io.modelcontextprotocol/clientInfo": { name: "vitest", version: "1.0.0" },
-}
-
-const stateless = (id: number, method: string, params: Record<string, Schema.Json> = {}) => ({
-  jsonrpc: "2.0",
-  id,
-  method,
-  params: { ...params, _meta: STATELESS_META },
-})
 
 const statelessHeaders = (method: string, name?: string) =>
   name === undefined

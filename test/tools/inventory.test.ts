@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest"
 
 import { SURFACE, SURFACE_COUNT } from "../../src/generated/surface.ts"
-import { DAEMON_UNSERVED_METHODS, SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
+import {
+  DAEMON_UNSERVED_METHODS,
+  SESSION_OWNED_METHODS,
+  isAdvertisedMethod,
+} from "../../src/tools/generated.ts"
 import { toolsFor } from "../../src/tools/index.ts"
 import { SKILL_GATED_TOOLS, requiresSkill } from "../../src/tools/policy.ts"
 import { testConfig } from "../support/config.ts"
+import { registeredToolNames } from "../support/tools.ts"
 
 /** Every hand-written tool that is not generated from the SDK surface. */
 const HAND_WRITTEN = [
@@ -147,7 +152,7 @@ const FAMILIES = ["server", "skill", "session", "rest", "context", "daemon", "dr
 
 const familyOf = (name: string): string => name.slice(0, name.indexOf("_"))
 
-const toolNames = (): ReadonlyArray<string> => Object.keys(toolsFor(testConfig()).toolkit.tools)
+const toolNames = registeredToolNames
 
 describe("tool inventory", () => {
   it("pins the entire skill gate policy to the served inventory", () => {
@@ -196,10 +201,7 @@ describe("tool inventory", () => {
   })
 
   it("counts one generated tool per SDK method plus the hand-written tools", () => {
-    const generated = SURFACE.filter(
-      (entry) =>
-        !SESSION_OWNED_METHODS.includes(entry.method) && !DAEMON_UNSERVED_METHODS.has(entry.method),
-    )
+    const generated = SURFACE.filter((entry) => isAdvertisedMethod(entry.method))
 
     expect(SURFACE_COUNT).toBe(165)
     expect(toolNames()).toHaveLength(generated.length + HAND_WRITTEN.length)

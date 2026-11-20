@@ -3,11 +3,10 @@ import * as Toolkit from "effect/ai/Toolkit"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
-import { presentFields, toJsonValue } from "../droid/protocol.ts"
-import type { JsonValue } from "../droid/protocol.ts"
+import { toJsonValue } from "../droid/protocol.ts"
 import { SessionHubService } from "../droid/turns.ts"
 import { ToolFailure } from "./failure.ts"
-import { toolFailure } from "./guards.ts"
+import { commandSession as send } from "./session.ts"
 
 /**
  * The daemon's add-MCP oauth field: `false`, or a client config. `true` is
@@ -53,17 +52,6 @@ const mcpTransport = (input: {
       "MCP server type is missing or ambiguous; pass type, or only command for stdio, or only url for http",
   })
 }
-
-const send = (
-  sessionId: string,
-  method: string,
-  payload: Record<string, JsonValue | undefined>,
-): Effect.Effect<JsonValue | undefined, ToolFailure, SessionHubService> =>
-  SessionHubService.use((hub) =>
-    hub
-      .command({ sessionId, method, params: toJsonValue({ sessionId, ...presentFields(payload) }) })
-      .pipe(Effect.mapError(toolFailure)),
-  )
 
 const AddMcpServer = Tool.make("session_add_mcp_server", {
   description:

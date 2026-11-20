@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import { SURFACE } from "../../src/generated/surface.ts"
-import { DAEMON_UNSERVED_METHODS, SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
-import { toolsFor } from "../../src/tools/index.ts"
-import { testConfig } from "../support/config.ts"
+import { isAdvertisedMethod } from "../../src/tools/generated.ts"
+import { registeredToolNames } from "../support/tools.ts"
 
 /**
  * Every SDK method except the explicitly suppressed methods has a tool.
@@ -11,16 +10,13 @@ import { testConfig } from "../support/config.ts"
  * agent needed it.
  */
 
-const generated = SURFACE.filter(
-  (entry) =>
-    !SESSION_OWNED_METHODS.includes(entry.method) && !DAEMON_UNSERVED_METHODS.has(entry.method),
-)
+const generated = SURFACE.filter((entry) => isAdvertisedMethod(entry.method))
 
 const daemonMethods = generated.filter((entry) => entry.kind === "daemon")
 const droidMethods = generated.filter((entry) => entry.kind === "droid")
 
 /** The registered tool names. */
-const surface = (): ReadonlyArray<string> => Object.keys(toolsFor(testConfig()).toolkit.tools)
+const surface = registeredToolNames
 
 describe("daemon long tail", () => {
   it("has a tool for every daemon method", () => {

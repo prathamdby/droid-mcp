@@ -3,22 +3,11 @@ import { describe, expect, it } from "vitest"
 
 import type { SessionHub, TurnEvent, TurnResult } from "../../src/droid/turns.ts"
 import { CORRELATION_LIMIT, SEEN_KEY_LIMIT } from "../../src/droid/turns.ts"
-import { createSession, fakeHub } from "../support/hub.ts"
+import { createSession, fakeHub, scopedHub } from "../support/hub.ts"
+import { pendingEvent } from "../support/prompts.ts"
 
-const scoped = <A, E>(run: (hub: SessionHub) => Effect.Effect<A, E>, promptTimeoutMs?: number) =>
-  Effect.scoped(
-    Effect.acquireRelease(fakeHub({ promptTimeoutMs }), (hub) => hub.closeAll).pipe(
-      Effect.flatMap((hub) => run(hub)),
-    ),
-  )
-
-const permissionEvent = (turn: TurnResult) => {
-  const event = turn.events.find((candidate) => candidate.kind === "pending_permission")
-
-  if (event?.requestId === undefined) throw new Error("missing pending permission")
-
-  return event
-}
+const permissionEvent = (turn: TurnResult) =>
+  pendingEvent(turn, "pending_permission", "missing pending permission")
 
 const untilSettled = (hub: SessionHub, sessionId: string, cursor: number) =>
   Effect.gen(function* () {
@@ -41,7 +30,7 @@ const untilSettled = (hub: SessionHub, sessionId: string, cursor: number) =>
 describe("prompt lifetime", () => {
   it("drops a permission prompt when the turn is interrupted", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -78,7 +67,7 @@ describe("prompt lifetime", () => {
 
   it("rejects a stale public id when the CLI reuses a request id", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -141,7 +130,7 @@ describe("prompt lifetime", () => {
 
   it("keeps only the newest prompt when one CLI id is sent twice", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -192,7 +181,7 @@ describe("prompt lifetime", () => {
 
   it("keeps a huge permission prompt answerable after the ring bounds the event", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -236,7 +225,7 @@ describe("prompt lifetime", () => {
 
   it("survives answering and closing the same prompt together", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -315,7 +304,7 @@ describe("prompt lifetime", () => {
 
   it("rescues a pending permission after the ring evicts its event", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const found = yield* evictedPermission(hub, sessionId)
@@ -366,7 +355,7 @@ describe("prompt lifetime", () => {
 
   it("does not rescue a cancelled permission after the ring evicts it", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const found = yield* evictedPermission(hub, sessionId)
@@ -404,7 +393,7 @@ describe("prompt lifetime", () => {
 
   it("does not rescue a cancelled prompt that the ring already evicted", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -477,7 +466,7 @@ describe("prompt lifetime", () => {
 
   it("keeps a delayed resolution on the answered public id when the CLI id is reused", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -550,7 +539,7 @@ describe("prompt lifetime", () => {
 
   it("maps a resolution that names only the permission tool use id", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -591,7 +580,7 @@ describe("prompt lifetime", () => {
 
   it("drops a cli correlation when the turn ends so the next prompt keeps its own id", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -663,7 +652,7 @@ describe("prompt lifetime", () => {
 
   it("maps a batch resolution that names only tool use ids", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -698,7 +687,7 @@ describe("prompt lifetime", () => {
 
   it("does not treat an unmatched hub- prefix as a public prompt id", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -733,7 +722,7 @@ describe("prompt lifetime", () => {
 
   it("does not record a question answer as a permission correlation", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -773,7 +762,7 @@ describe("prompt lifetime", () => {
 
   it("omits the public id when two answered prompts share a cli id and tool id", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -825,7 +814,7 @@ describe("prompt lifetime", () => {
     const count = CORRELATION_LIMIT + 1
 
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -872,7 +861,7 @@ describe("prompt lifetime", () => {
     const cap = CORRELATION_LIMIT
 
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -930,7 +919,7 @@ describe("prompt lifetime", () => {
 
   it("does not give a third shared key the id removed from the first", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -984,7 +973,7 @@ describe("prompt lifetime", () => {
     const fill = CORRELATION_LIMIT
 
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -1042,7 +1031,8 @@ describe("prompt lifetime", () => {
 
   it("does not attach a late resolution to a prompt that reused a timed-out key", async () => {
     const outcome = await Effect.runPromise(
-      scoped(
+      scopedHub(
+        fakeHub({ promptTimeoutMs: 200 }),
         (hub) =>
           Effect.gen(function* () {
             const sessionId = yield* createSession(hub)
@@ -1077,7 +1067,6 @@ describe("prompt lifetime", () => {
 
             return { timedOut, second, settled, replay }
           }),
-        200,
       ),
     )
 
@@ -1099,7 +1088,7 @@ describe("prompt lifetime", () => {
 
   it("does not attach a late resolution to a prompt that reused a cancelled key", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -1145,7 +1134,7 @@ describe("prompt lifetime", () => {
     const count = Math.floor(SEEN_KEY_LIMIT / 2) + 1
 
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 

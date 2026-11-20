@@ -10,6 +10,8 @@ import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
 
 import type { Logger } from "../log.ts"
+import { broadcast, endBroadcast, publishItem } from "./broadcast.ts"
+import type { Broadcast } from "./broadcast.ts"
 import {
   DaemonAuthRejected,
   DaemonMethodUnsupported,
@@ -22,17 +24,14 @@ import {
   METHOD,
   isAuthenticationErrorCode,
   isMethodNotFoundCode,
+  notificationOf,
   parseServerMessage,
   protocolMismatch,
   requestEnvelope,
+  requestOf,
   SDK_PROTOCOL_VERSION,
 } from "./protocol.ts"
-import type {
-  IncomingRequestEnvelope,
-  JsonValue,
-  NotificationEnvelope,
-  ResponseEnvelope,
-} from "./protocol.ts"
+import type { JsonValue, ResponseEnvelope } from "./protocol.ts"
 import { connect } from "./ws.ts"
 import type { WsConnectOptions } from "./ws.ts"
 
@@ -174,42 +173,6 @@ const connectionOptions = (options: DaemonClientOptions): WsConnectOptions => {
     : { ...target, keepaliveMs: options.keepaliveMs }
 }
 
-const notificationOf = (message: NotificationEnvelope): DaemonNotification =>
-  message.params === undefined
-    ? { method: message.method }
-    : { method: message.method, params: message.params }
-
-const serverRequestOf = (message: IncomingRequestEnvelope): DaemonServerRequest =>
-  message.params === undefined
-    ? { id: message.id, method: message.method }
-    : { id: message.id, method: message.method, params: message.params }
-
-interface BroadcastItem<A> {
-  readonly kind: "item"
-  readonly value: A
-}
-
-interface BroadcastEnd {
-  readonly kind: "end"
-}
-
-type Broadcast<A> = BroadcastItem<A> | BroadcastEnd
-
-/** Subscribers observe events, then complete when the producer ends. */
-const broadcast = <A>(pubsub: PubSub.PubSub<Broadcast<A>>): Stream.Stream<A> =>
-  Stream.fromPubSub(pubsub).pipe(
-    Stream.takeWhile((event): event is BroadcastItem<A> => event.kind === "item"),
-    Stream.map((event) => event.value),
-  )
-
-const publishItem = <A>(pubsub: PubSub.PubSub<Broadcast<A>>, value: A): void => {
-  PubSub.publishUnsafe(pubsub, { kind: "item", value })
-}
-
-const endBroadcast = <A>(pubsub: PubSub.PubSub<Broadcast<A>>): void => {
-  PubSub.endUnsafe(pubsub, { kind: "end" })
-}
-
 export const openDaemon = (
   options: DaemonClientOptions,
 ): Effect.Effect<DaemonClient, DaemonError> =>
@@ -310,7 +273,7 @@ export const openDaemon = (
           return
         }
 
-        publishItem(requestPub, serverRequestOf(message))
+        publishItem(requestPub, requestOf(message))
       }
 
       reader = yield* ws.messages.pipe(

@@ -70,6 +70,22 @@ export const IncomingRequestEnvelopeSchema = Schema.Struct({
 
 export type IncomingRequestEnvelope = typeof IncomingRequestEnvelopeSchema.Type
 
+/** Drops omitted params so a notification is absent, not null. */
+export const notificationOf = (
+  message: NotificationEnvelope,
+): { readonly method: string; readonly params?: JsonValue } =>
+  message.params === undefined
+    ? { method: message.method }
+    : { method: message.method, params: message.params }
+
+/** Drops omitted params so a server request is absent, not null. */
+export const requestOf = (
+  message: IncomingRequestEnvelope,
+): { readonly id: string; readonly method: string; readonly params?: JsonValue } =>
+  message.params === undefined
+    ? { id: message.id, method: message.method }
+    : { id: message.id, method: message.method, params: message.params }
+
 export const ServerMessageSchema = Schema.Union([
   ResponseEnvelopeSchema,
   NotificationEnvelopeSchema,

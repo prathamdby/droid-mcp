@@ -5,6 +5,9 @@ import * as Option from "effect/Option"
 import * as Predicate from "effect/Predicate"
 import * as Schema from "effect/Schema"
 
+import { headerRecord, matchPath, routeOf } from "./fake-route.ts"
+import type { HeaderMap } from "./fake-route.ts"
+
 export type Json = Schema.Json
 
 export interface JsonObject {
@@ -842,42 +845,6 @@ interface Route {
   readonly handler: ContextHandler
 }
 
-const routeOf = (key: string, handler: ContextHandler): Route => {
-  const space = key.indexOf(" ")
-  const segments = key.slice(space + 1).split("/")
-
-  return {
-    key,
-    method: key.slice(0, space),
-    segments,
-    literals: segments.filter((segment) => !segment.startsWith("{")).length,
-    handler,
-  }
-}
-
-const matchPath = (
-  route: Route,
-  segments: ReadonlyArray<string>,
-): Record<string, string> | undefined => {
-  if (route.segments.length !== segments.length) return undefined
-
-  const params: Record<string, string> = {}
-
-  for (const [index, pattern] of route.segments.entries()) {
-    const segment = segments[index] ?? ""
-
-    if (pattern.startsWith("{")) {
-      if (segment.length === 0) return undefined
-
-      params[pattern.slice(1, -1)] = decodeURIComponent(segment)
-    } else if (pattern !== segment) {
-      return undefined
-    }
-  }
-
-  return params
-}
-
 const readBody = (request: IncomingMessage): Promise<Uint8Array> =>
   new Promise((resolve) => {
     const chunks: Array<Uint8Array> = []
@@ -900,20 +867,6 @@ const decodeObject = (bytes: Uint8Array): JsonObject => {
   } catch {
     return {}
   }
-}
-
-interface HeaderMap {
-  [name: string]: string
-}
-
-const headerRecord = (request: IncomingMessage): HeaderMap => {
-  const headers: HeaderMap = {}
-
-  for (const [name, value] of Object.entries(request.headers)) {
-    if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value
-  }
-
-  return headers
 }
 
 const write = (response: ServerResponse, reply: ContextReply): void => {

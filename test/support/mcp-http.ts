@@ -170,6 +170,24 @@ export const readBody = async (response: Response): Promise<Json | undefined> =>
   return decodeJson(text)
 }
 
+/** Streamable HTTP from a 2026-07-28 client: sessionless, `_meta`-negotiated. */
+export const STATELESS_META = {
+  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+  "io.modelcontextprotocol/clientCapabilities": {},
+  "io.modelcontextprotocol/clientInfo": { name: "vitest", version: "1.0.0" },
+}
+
+export const stateless = (
+  id: number,
+  method: string,
+  params: Record<string, Schema.Json> = {},
+) => ({
+  jsonrpc: "2.0",
+  id,
+  method,
+  params: { ...params, _meta: STATELESS_META },
+})
+
 /** Decodes a response body into a test's expected shape, failing on mismatch. */
 export const expectBody = <A>(schema: Schema.Codec<A>, body: Json | undefined): A =>
   Schema.decodeUnknownSync(schema)(body)
