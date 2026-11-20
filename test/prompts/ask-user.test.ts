@@ -3,9 +3,9 @@ import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { describe, expect, it } from "vitest"
 
-import type { TurnEvent, TurnResult } from "../../src/droid/turns.ts"
+import type { TurnEvent } from "../../src/droid/turns.ts"
 import { FIELD_BYTE_LIMIT } from "../../src/droid/turns.ts"
-import { settle, withPrompts } from "../support/prompts.ts"
+import { pendingEvent as pending, settle, withPrompts } from "../support/prompts.ts"
 
 const MARK = "…[truncated]"
 
@@ -49,14 +49,6 @@ const boundedText = (value: string): string => {
   expect(value.includes("\uFFFD")).toBe(false)
 
   return value.slice(0, value.length - MARK.length)
-}
-
-const pending = (turn: TurnResult, kind: string) => {
-  const event = turn.events.find((candidate) => candidate.kind === kind)
-
-  if (event?.requestId === undefined) throw new Error("no " + kind + " event")
-
-  return event
 }
 
 describe("ask-user prompts", () => {

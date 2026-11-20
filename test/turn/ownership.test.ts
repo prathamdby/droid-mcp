@@ -6,8 +6,7 @@ import { Effect, Option } from "effect"
 import * as Fiber from "effect/Fiber"
 import { describe, expect, it } from "vitest"
 
-import type { SessionHub } from "../../src/droid/turns.ts"
-import { createSession, fakeHub, tempCwd } from "../support/hub.ts"
+import { createSession, fakeHub, scopedHub, tempCwd } from "../support/hub.ts"
 
 const track = () => {
   const dir = mkdtempSync(join(tmpdir(), "droid-mcp-pid-"))
@@ -129,23 +128,13 @@ const waitUntil = (predicate: () => boolean) =>
     return predicate()
   })
 
-const scoped = <A, E>(
-  hub: Effect.Effect<SessionHub>,
-  run: (value: SessionHub) => Effect.Effect<A, E>,
-) =>
-  Effect.scoped(
-    Effect.acquireRelease(hub, (value) => value.closeAll).pipe(
-      Effect.flatMap((value) => run(value)),
-    ),
-  )
-
 describe("session process ownership", () => {
   it("kills a child whose initialize request times out", async () => {
     const tracker = track()
 
     try {
       const outcome = await Effect.runPromise(
-        scoped(
+        scopedHub(
           fakeHub({
             requestTimeoutMs: 300,
             env: { FAKE_DROID_PIDFILE: tracker.pidfile, FAKE_DROID_INIT: "hang" },
@@ -177,7 +166,7 @@ describe("session process ownership", () => {
 
     try {
       const outcome = await Effect.runPromise(
-        scoped(
+        scopedHub(
           fakeHub({
             env: { FAKE_DROID_PIDFILE: tracker.pidfile, FAKE_DROID_SETTINGS: "reject" },
           }),
@@ -206,7 +195,7 @@ describe("session process ownership", () => {
 
     try {
       const outcome = await Effect.runPromise(
-        scoped(
+        scopedHub(
           fakeHub({
             requestTimeoutMs: 30_000,
             env: { FAKE_DROID_PIDFILE: tracker.pidfile, FAKE_DROID_INIT: "hang" },
@@ -241,7 +230,7 @@ describe("session process ownership", () => {
 
     try {
       const outcome = await Effect.runPromise(
-        scoped(
+        scopedHub(
           fakeHub({
             requestTimeoutMs: 30_000,
             env: { FAKE_DROID_PIDFILE: tracker.pidfile, FAKE_DROID_INIT: "hang" },
@@ -284,7 +273,7 @@ describe("session process ownership", () => {
 
     try {
       const outcome = await Effect.runPromise(
-        scoped(fakeHub({ env: { FAKE_DROID_PIDFILE: tracker.pidfile } }), (hub) =>
+        scopedHub(fakeHub({ env: { FAKE_DROID_PIDFILE: tracker.pidfile } }), (hub) =>
           Effect.gen(function* () {
             const sessionId = yield* createSession(hub)
 
@@ -321,7 +310,7 @@ describe("session process ownership", () => {
 
   it("closes sessions one after another without leaving them registered", async () => {
     const outcome = await Effect.runPromise(
-      scoped(fakeHub(), (hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           for (let index = 0; index < 8; index += 1) {
             const sessionId = yield* createSession(hub)
@@ -343,7 +332,7 @@ describe("session process ownership", () => {
 
     try {
       const outcome = await Effect.runPromise(
-        scoped(
+        scopedHub(
           fakeHub({
             requestTimeoutMs: 60_000,
             env: {
@@ -392,7 +381,7 @@ describe("session process ownership", () => {
 
     try {
       const outcome = await Effect.runPromise(
-        scoped(
+        scopedHub(
           fakeHub({
             requestTimeoutMs: 60_000,
             env: {
@@ -439,7 +428,7 @@ describe("session process ownership", () => {
 
     try {
       const outcome = await Effect.runPromise(
-        scoped(
+        scopedHub(
           fakeHub({
             requestTimeoutMs: 60_000,
             env: { FAKE_DROID_PIDDIR: tracker.dir, FAKE_DROID_INIT: "hang" },

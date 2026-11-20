@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process"
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { Option, Schema } from "effect"
+import { Schema } from "effect"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { expectBody, readBody, waitForPort } from "../support/mcp-http.ts"
+import { freePort } from "../support/port.ts"
 
 /**
  * One end-to-end pass through the shipped server: a real process on a real
@@ -18,8 +18,6 @@ import { expectBody, readBody, waitForPort } from "../support/mcp-http.ts"
 const KEY = "acceptance-key"
 const root = process.cwd()
 const fake = join(root, "test", "support", "fake-droid-exec.mjs")
-
-const AddressSchema = Schema.Struct({ port: Schema.Number })
 
 const InitializeSchema = Schema.Struct({
   result: Schema.Struct({ instructions: Schema.optional(Schema.String) }),
@@ -78,19 +76,6 @@ const shim = (directory: string): string => {
 
   return path
 }
-
-const freePort = (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const probe = createServer()
-
-    probe.on("error", reject)
-    probe.listen(0, "127.0.0.1", () => {
-      Option.match(Schema.decodeUnknownOption(AddressSchema)(probe.address()), {
-        onNone: () => reject(new Error("no port")),
-        onSome: ({ port }) => probe.close(() => resolve(port)),
-      })
-    })
-  })
 
 const start = async (droidPath: string): Promise<RunningServer> => {
   const port = await freePort()

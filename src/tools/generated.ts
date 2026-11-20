@@ -35,6 +35,10 @@ export const DAEMON_UNSERVED_METHODS: ReadonlyMap<string, ReadonlyArray<string>>
   ["droid.list_mcp_registry", ["daemon_list_mcp_registry"]],
 ])
 
+/** SDK methods the generated surface advertises. Hand-written tools and unserved reads are left out. */
+export const isAdvertisedMethod = (method: string): boolean =>
+  !SESSION_OWNED_METHODS.includes(method) && !DAEMON_UNSERVED_METHODS.has(method)
+
 /** The SDK's JSON Schema, as `effect/SchemaRepresentation` accepts it. */
 const asDocument = (value: JsonSchemaObject): JsonSchema.JsonSchema =>
   // SAFETY: the document was emitted by scripts/codegen.ts from the SDK's own Zod
@@ -365,10 +369,7 @@ export type GeneratedHandlers = Record<
 export const generatedSurface = (config?: Pick<Config, "maxAutonomy">) => {
   const maxAutonomy = config?.maxAutonomy ?? DEFAULT_MAX_AUTONOMY
 
-  const entries = SURFACE.filter(
-    (entry) =>
-      !SESSION_OWNED_METHODS.includes(entry.method) && !DAEMON_UNSERVED_METHODS.has(entry.method),
-  )
+  const entries = SURFACE.filter((entry) => isAdvertisedMethod(entry.method))
 
   const tools: Array<Tool.Any> = entries.map((entry) =>
     Tool.dynamic(entry.tool, {

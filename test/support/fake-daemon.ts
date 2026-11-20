@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto"
 import * as net from "node:net"
 
 import * as Schema from "effect/Schema"
 
 import type { JsonRpcError, JsonValue } from "../../src/droid/protocol.ts"
-import { decodeFrames, OPCODE } from "../../src/droid/ws.ts"
+import { OPCODE, computeAccept, concat, decodeFrames } from "../../src/droid/ws.ts"
 
 export interface SeenRequest {
   readonly id: string
@@ -41,13 +40,6 @@ export interface FakeDaemon {
 /** The version a current daemon reports; the client adopts it on mismatch. */
 export const DAEMON_PROTOCOL_VERSION = "1.299.0"
 
-const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-const serverAccept = (key: string): string =>
-  createHash("sha1")
-    .update(key + WS_GUID)
-    .digest("base64")
-
 const ClientFrameSchema = Schema.Struct({
   id: Schema.String,
   method: Schema.String,
@@ -78,15 +70,6 @@ const encodeServerFrame = (opcode: number, payload: Uint8Array): Uint8Array => {
   }
 
   out.set(payload, headerLength)
-
-  return out
-}
-
-const concat = (a: Uint8Array, b: Uint8Array): Uint8Array => {
-  if (a.length === 0) return b
-  const out = new Uint8Array(a.length + b.length)
-  out.set(a, 0)
-  out.set(b, a.length)
 
   return out
 }
@@ -163,7 +146,7 @@ export const startFakeDaemon = async (
         const head = text.slice(0, end)
         buffer = buffer.subarray(end + 4)
         const match = /sec-websocket-key:\s*(\S+)/i.exec(head)
-        const accept = serverAccept(match?.[1] ?? "")
+        const accept = computeAccept(match?.[1] ?? "")
         socket.write(
           "HTTP/1.1 101 Switching Protocols\r\n" +
             "Upgrade: websocket\r\n" +

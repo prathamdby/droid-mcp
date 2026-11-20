@@ -2,16 +2,10 @@ import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
 
 import type { TurnResult } from "../../src/droid/turns.ts"
-import { withPrompts } from "../support/prompts.ts"
+import { pendingEvent, withPrompts } from "../support/prompts.ts"
 
-const pending = (turn: TurnResult, kind: string) => {
-  const event = turn.events.find((candidate) => candidate.kind === kind)
-
-  if (event?.requestId === undefined)
-    throw new Error("no " + kind + " event in " + String(turn.cursor))
-
-  return event
-}
+const pending = (turn: TurnResult, kind: string) =>
+  pendingEvent(turn, kind, "no " + kind + " event in " + String(turn.cursor))
 
 describe("permission prompts", () => {
   it("sends the selected option and completes the turn", async () => {

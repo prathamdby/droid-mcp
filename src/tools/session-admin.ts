@@ -5,12 +5,11 @@ import * as Schema from "effect/Schema"
 
 import type { Config } from "../config.ts"
 import { EXEC_METHOD } from "../droid/exec-protocol.ts"
-import { presentFields, toJsonValue } from "../droid/protocol.ts"
 import type { JsonValue } from "../droid/protocol.ts"
 import { SessionHubService } from "../droid/turns.ts"
 import { ToolFailure } from "./failure.ts"
-import { requireAutonomy, requireCwd, toolFailure } from "./guards.ts"
-import { AutonomySchema } from "./session.ts"
+import { requireAutonomy, requireCwd } from "./guards.ts"
+import { AutonomySchema, commandSession } from "./session.ts"
 
 const ReasoningSchema = Schema.Literals([
   "none",
@@ -34,16 +33,7 @@ const send = (
   params: { readonly sessionId: string },
   method: string,
   payload: Record<string, JsonValue | undefined>,
-): Effect.Effect<JsonValue | undefined, ToolFailure, SessionHubService> =>
-  SessionHubService.use((hub) =>
-    hub
-      .command({
-        sessionId: params.sessionId,
-        method,
-        params: toJsonValue({ sessionId: params.sessionId, ...presentFields(payload) }),
-      })
-      .pipe(Effect.mapError(toolFailure)),
-  )
+) => commandSession(params.sessionId, method, payload)
 
 const UpdateSettings = Tool.make("session_update_settings", {
   description:

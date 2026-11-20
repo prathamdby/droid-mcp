@@ -6,7 +6,11 @@ import { errorCode } from "../../src/droid/errors.ts"
 import { SKILL_FILES } from "../../src/generated/skill.ts"
 import { SURFACE } from "../../src/generated/surface.ts"
 import { MAX_BATCH_STEPS, META_TOOLS } from "../../src/tools/compact.ts"
-import { DAEMON_UNSERVED_METHODS, SESSION_OWNED_METHODS } from "../../src/tools/generated.ts"
+import {
+  DAEMON_UNSERVED_METHODS,
+  SESSION_OWNED_METHODS,
+  isAdvertisedMethod,
+} from "../../src/tools/generated.ts"
 import { toolsFor } from "../../src/tools/index.ts"
 import {
   DEFAULT_RESULT_BYTES,
@@ -129,10 +133,7 @@ const documentedFamilies = (markdown: string): Record<string, number> =>
     Array.from(markdown.matchAll(FAMILY_ROW), (match) => [match[1] ?? "", Number(match[2])]),
   )
 
-const generated = SURFACE.filter(
-  (entry) =>
-    !SESSION_OWNED_METHODS.includes(entry.method) && !DAEMON_UNSERVED_METHODS.has(entry.method),
-).length
+const generated = SURFACE.filter((entry) => isAdvertisedMethod(entry.method)).length
 
 describe("documented tool counts", () => {
   it("match the families the server exposes in README.md", () => {

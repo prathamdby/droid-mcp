@@ -3,15 +3,10 @@ import { describe, expect, it } from "vitest"
 
 import { outcomeWithinCap } from "../../src/droid/prompts.ts"
 import type { TurnResult } from "../../src/droid/turns.ts"
-import { settle, withPrompts } from "../support/prompts.ts"
+import { pendingEvent, settle, withPrompts } from "../support/prompts.ts"
 
-const pending = (turn: TurnResult) => {
-  const event = turn.events.find((candidate) => candidate.kind === "pending_permission")
-
-  if (event?.requestId === undefined) throw new Error("missing pending permission")
-
-  return event
-}
+const pending = (turn: TurnResult) =>
+  pendingEvent(turn, "pending_permission", "missing pending permission")
 
 describe("permission autonomy cap", () => {
   it("allows ordinary outcomes at every cap and levels only up to the cap", () => {

@@ -6,7 +6,7 @@ import {
 	createTypeEnvironment,
 	type TypeEnvironment,
 } from "../shared/dictionary-types.ts";
-import { visibleTypeAlias } from "../shared/type-alias-resolution.ts";
+import { typeReferenceName, visibleTypeAlias } from "../shared/type-alias-resolution.ts";
 
 import type { ESTree } from "@oxlint/plugins";
 
@@ -52,10 +52,6 @@ const typeNodeKinds: ReadonlySet<string> = new Set([
 
 function isTypeNode(node: ESTree.Node): node is ESTree.TSType {
 	return typeNodeKinds.has(node.type);
-}
-
-function typeReferenceName(type: ESTree.TSTypeReference): string | null {
-	return type.typeName.type === "Identifier" ? type.typeName.name : null;
 }
 
 function isInsideTypeAliasDeclaration(node: ESTree.Node): boolean {

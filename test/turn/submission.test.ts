@@ -1,18 +1,12 @@
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
 
-import type { SessionHub } from "../../src/droid/turns.ts"
-import { createSession, fakeHub } from "../support/hub.ts"
-
-const scoped = <A, E>(run: (hub: SessionHub) => Effect.Effect<A, E>) =>
-  Effect.scoped(
-    Effect.acquireRelease(fakeHub(), (hub) => hub.closeAll).pipe(Effect.flatMap((hub) => run(hub))),
-  )
+import { createSession, fakeHub, scopedHub } from "../support/hub.ts"
 
 describe("turn submission", () => {
   it("records a rejected message without replaying the previous turn", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const first = yield* hub.api.stream({ sessionId, prompt: "structured" })

@@ -1,6 +1,6 @@
 import { defineRule } from "@oxlint/plugins";
 
-import { isGlobalReflectMethodCall } from "../shared/reflect-method.ts";
+import { reportGlobalReflectCall } from "../shared/reflect-method.ts";
 
 /** Ban Reflect.get, which bypasses ordinary property access and useful type evidence. */
 export const noReflectGetRule = defineRule({
@@ -18,10 +18,7 @@ export const noReflectGetRule = defineRule({
   createOnce(context) {
     return {
       CallExpression(node) {
-        if (node.callee.type === "Super" || node.callee.type === "V8IntrinsicExpression") return;
-        if (isGlobalReflectMethodCall(context.sourceCode, node.callee, "get")) {
-          context.report({ node, messageId: "reflectGet" });
-        }
+        reportGlobalReflectCall(context, node, "get", "reflectGet");
       },
     };
   },

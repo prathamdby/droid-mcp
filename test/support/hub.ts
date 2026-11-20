@@ -33,6 +33,16 @@ export const fakeHub = (overrides: FakeHubOptions = {}): Effect.Effect<SessionHu
     env: overrides.env,
   } satisfies SessionHubOptions)
 
+export const scopedHub = <A, E>(
+  hub: Effect.Effect<SessionHub>,
+  run: (value: SessionHub) => Effect.Effect<A, E>,
+) =>
+  Effect.scoped(
+    Effect.acquireRelease(hub, (value) => value.closeAll).pipe(
+      Effect.flatMap((value) => run(value)),
+    ),
+  )
+
 export const tempCwd = (): string => here
 
 export const createSession = (

@@ -1,10 +1,9 @@
-import { createServer } from "node:net"
-
-import { Option, Schema } from "effect"
+import { Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
 import { testConfig } from "../support/config.ts"
 import { type Json, initialize, readBody, startServer } from "../support/mcp-http.ts"
+import { freePort as closedPort } from "../support/port.ts"
 
 const KEY = "generated-failure-key"
 
@@ -14,22 +13,6 @@ const FailureSchema = Schema.Struct({
     content: Schema.Array(Schema.Struct({ text: Schema.String })),
   }),
 })
-
-const AddressSchema = Schema.Struct({ port: Schema.Number })
-
-/** A port nothing listens on: the daemon layer fails fast instead of spawning. */
-const closedPort = (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const probe = createServer()
-
-    probe.on("error", reject)
-    probe.listen(0, "127.0.0.1", () => {
-      Option.match(Schema.decodeUnknownOption(AddressSchema)(probe.address()), {
-        onNone: () => reject(new Error("no port")),
-        onSome: ({ port }) => probe.close(() => resolve(port)),
-      })
-    })
-  })
 
 /**
  * A generated tool has no hand-written handler, so its failure contract comes

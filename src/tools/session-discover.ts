@@ -4,8 +4,6 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
 import type { Config } from "../config.ts"
-import { presentFields, toJsonValue } from "../droid/protocol.ts"
-import type { JsonValue } from "../droid/protocol.ts"
 import { SessionHubService, TurnResultSchema } from "../droid/turns.ts"
 import { removeWorktree } from "../droid/worktree.ts"
 import { ToolFailure } from "./failure.ts"
@@ -16,20 +14,10 @@ import {
   AutonomySchema,
   DeliverySchema,
   WaitMsSchema,
+  commandSession as send,
   spawnCwd,
   worktreeFields,
 } from "./session.ts"
-
-const send = (
-  sessionId: string,
-  method: string,
-  payload: Record<string, JsonValue | undefined>,
-): Effect.Effect<JsonValue | undefined, ToolFailure, SessionHubService> =>
-  SessionHubService.use((hub) =>
-    hub
-      .command({ sessionId, method, params: toJsonValue({ sessionId, ...presentFields(payload) }) })
-      .pipe(Effect.mapError(toolFailure)),
-  )
 
 const ListTools = Tool.make("session_list_tools", {
   description: "List the tools available to a live session.",

@@ -7,12 +7,7 @@ import type { SessionHub } from "../../src/droid/turns.ts"
 import { EVENT_TEXT_LIMIT, RING_BYTE_LIMIT, RING_EVENT_LIMIT } from "../../src/droid/turns.ts"
 import { sessionDiscoverTools } from "../../src/tools/session-discover.ts"
 import { testConfig } from "../support/config.ts"
-import { createSession, fakeHub, tempCwd } from "../support/hub.ts"
-
-const scoped = <A, E>(run: (hub: SessionHub) => Effect.Effect<A, E>) =>
-  Effect.scoped(
-    Effect.acquireRelease(fakeHub(), (hub) => hub.closeAll).pipe(Effect.flatMap((hub) => run(hub))),
-  )
+import { createSession, fakeHub, scopedHub, tempCwd } from "../support/hub.ts"
 
 const runTool = (hub: SessionHub) => {
   const tools = sessionDiscoverTools(testConfig())
@@ -28,7 +23,7 @@ const runTool = (hub: SessionHub) => {
 describe("running sessions and bounded history", () => {
   it("keeps a session_run that is still running", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const turn = yield* runTool(hub)({
             cwd: tempCwd(),
@@ -54,7 +49,7 @@ describe("running sessions and bounded history", () => {
 
   it("closes a session_run that finishes or fails", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const run = runTool(hub)
 
@@ -94,7 +89,7 @@ describe("running sessions and bounded history", () => {
 
   it("closes a session_run interrupted before it returns running", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const fiber = yield* Effect.forkDetach(
             runTool(hub)({
@@ -131,7 +126,7 @@ describe("running sessions and bounded history", () => {
 
   it("caps assistant text by UTF-8 bytes without splitting a code point", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const burst = yield* hub.api.stream({ sessionId, prompt: "deltas:2000" })
@@ -155,7 +150,7 @@ describe("running sessions and bounded history", () => {
 
   it("evicts the ring by UTF-8 bytes while a pending prompt stays readable", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
           const turn = yield* hub.api.stream({ sessionId, prompt: "bulk:70" })
@@ -175,7 +170,7 @@ describe("running sessions and bounded history", () => {
 
   it("marks an idle exit failed and refuses another turn", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 
@@ -206,7 +201,7 @@ describe("running sessions and bounded history", () => {
 
   it("patches the hub snapshot after settings and directory commands", async () => {
     const outcome = await Effect.runPromise(
-      scoped((hub) =>
+      scopedHub(fakeHub(), (hub) =>
         Effect.gen(function* () {
           const sessionId = yield* createSession(hub)
 

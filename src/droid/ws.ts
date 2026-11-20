@@ -62,7 +62,7 @@ export interface AssembledResult {
   readonly error?: string
 }
 
-const concat = (a: Uint8Array, b: Uint8Array): Uint8Array => {
+export const concat = (a: Uint8Array, b: Uint8Array): Uint8Array => {
   if (a.length === 0) return b
   const out = new Uint8Array(a.length + b.length)
   out.set(a, 0)

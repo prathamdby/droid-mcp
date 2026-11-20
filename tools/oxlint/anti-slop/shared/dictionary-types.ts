@@ -3,6 +3,7 @@ import type { ESTree } from "@oxlint/plugins";
 import {
 	createTypeAliasEnvironment,
 	hasVisibleTypeBinding,
+	typeReferenceName,
 	visibleTypeAlias,
 	type TypeAliasEnvironment as LexicalTypeAliasEnvironment,
 } from "./type-alias-resolution.ts";
@@ -72,10 +73,6 @@ export function createTypeEnvironment(
 		interfaces,
 		typeAliases: createTypeAliasEnvironment(program, visitorKeys),
 	};
-}
-
-function typeReferenceName(type: ESTree.TSTypeReference): string | null {
-	return type.typeName.type === "Identifier" ? type.typeName.name : null;
 }
 
 function isBuiltIn(

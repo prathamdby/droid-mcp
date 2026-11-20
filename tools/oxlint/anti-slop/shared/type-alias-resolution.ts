@@ -1,6 +1,6 @@
 import type { ESTree } from "@oxlint/plugins";
 
-import { lexicalTypeParameterNames } from "./lexical-type-parameters.ts";
+import { isNode, lexicalTypeParameterNames } from "./lexical-type-parameters.ts";
 
 type VisitorKeys = Readonly<Record<string, readonly string[]>>;
 type TypeScope = ESTree.Node;
@@ -30,15 +30,6 @@ export type ResolvedTypeMatcher = (
 ) => boolean;
 
 const environmentsByProgram = new WeakMap<ESTree.Program, TypeAliasEnvironment>();
-
-function isNode(value: unknown): value is ESTree.Node {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"type" in value &&
-		typeof value.type === "string"
-	);
-}
 
 function enclosingTypeScope(node: ESTree.Node): TypeScope {
 	let current: ESTree.Node | null = node.parent;
@@ -183,7 +174,7 @@ export function hasVisibleTypeBinding(
 	);
 }
 
-function typeReferenceName(type: ESTree.TSTypeReference): string | null {
+export function typeReferenceName(type: ESTree.TSTypeReference): string | null {
 	return type.typeName.type === "Identifier" ? type.typeName.name : null;
 }
 

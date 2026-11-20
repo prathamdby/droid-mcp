@@ -4,6 +4,8 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
 import type { Config } from "../config.ts"
+import { presentFields, toJsonValue } from "../droid/protocol.ts"
+import type { JsonValue } from "../droid/protocol.ts"
 import {
   MAX_WAIT_MS,
   SessionHubService,
@@ -48,6 +50,18 @@ export const worktreeFields = {
     description: "Absolute directory that will contain the worktree.",
   }),
 }
+
+/** One `droid.*` request on a live session, with omitted fields left out of the params. */
+export const commandSession = (
+  sessionId: string,
+  method: string,
+  payload: Record<string, JsonValue | undefined>,
+): Effect.Effect<JsonValue | undefined, ToolFailure, SessionHubService> =>
+  SessionHubService.use((hub) =>
+    hub
+      .command({ sessionId, method, params: toJsonValue({ sessionId, ...presentFields(payload) }) })
+      .pipe(Effect.mapError(toolFailure)),
+  )
 
 export const spawnCwd = (cwd: string, fields: WorktreeFields) =>
   Effect.gen(function* () {

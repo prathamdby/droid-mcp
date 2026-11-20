@@ -9,6 +9,21 @@ function isGlobalReflect(sourceCode: SourceCode, expression: ESTree.Expression):
   return variable === null || variable.defs.length === 0;
 }
 
+export function reportGlobalReflectCall(
+  context: {
+    sourceCode: SourceCode;
+    report: (problem: { node: ESTree.Node; messageId: string }) => void;
+  },
+  node: ESTree.CallExpression,
+  methodName: string,
+  messageId: string,
+): void {
+  if (node.callee.type === "Super" || node.callee.type === "V8IntrinsicExpression") return;
+  if (isGlobalReflectMethodCall(context.sourceCode, node.callee, methodName)) {
+    context.report({ node, messageId });
+  }
+}
+
 /** Reports whether a call target names one method on the global Reflect object. */
 export function isGlobalReflectMethodCall(
   sourceCode: SourceCode,

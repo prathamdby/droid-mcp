@@ -1,12 +1,12 @@
 import * as Effect from "effect/Effect"
 import { describe, expect, it } from "vitest"
 
-import { DaemonService } from "../../src/droid/daemon-service.ts"
 import type { DaemonApi, DaemonRequest, DaemonStatus } from "../../src/droid/daemon-service.ts"
 import { DaemonUnavailable } from "../../src/droid/errors.ts"
 import type { JsonValue } from "../../src/droid/protocol.ts"
 import type { JsonSchemaObject } from "../../src/generated/surface.ts"
 import { generatedSurface } from "../../src/tools/generated.ts"
+import { runDaemon as run } from "../support/daemon.ts"
 
 const status: DaemonStatus = {
   endpoint: "/tmp/daemon.sock",
@@ -30,9 +30,6 @@ const stub = (calls: Array<DaemonRequest>): DaemonApi => ({
   status: Effect.succeed(status),
   reset: Effect.void,
 })
-
-const run = <A, E>(effect: Effect.Effect<A, E, DaemonService>, api: DaemonApi) =>
-  Effect.runPromise(Effect.provideService(effect, DaemonService, api))
 
 describe("generated autonomy cap", () => {
   it("does not call the daemon when a settings change exceeds the cap", async () => {
