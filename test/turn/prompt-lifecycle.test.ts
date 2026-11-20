@@ -1031,42 +1031,40 @@ describe("prompt lifetime", () => {
 
   it("does not attach a late resolution to a prompt that reused a timed-out key", async () => {
     const outcome = await Effect.runPromise(
-      scopedHub(
-        fakeHub({ promptTimeoutMs: 200 }),
-        (hub) =>
-          Effect.gen(function* () {
-            const sessionId = yield* createSession(hub)
+      scopedHub(fakeHub({ promptTimeoutMs: 200 }), (hub) =>
+        Effect.gen(function* () {
+          const sessionId = yield* createSession(hub)
 
-            const running = yield* hub.api.stream({
-              sessionId,
-              prompt: "permission:after-timeout",
-              waitMs: 100,
-            })
+          const running = yield* hub.api.stream({
+            sessionId,
+            prompt: "permission:after-timeout",
+            waitMs: 100,
+          })
 
-            let timedOut: TurnEvent | undefined
-            let cursor = running.cursor
+          let timedOut: TurnEvent | undefined
+          let cursor = running.cursor
 
-            for (let attempt = 0; timedOut === undefined && attempt < 20; attempt += 1) {
-              const polled = yield* hub.api.events({ sessionId, cursor, waitMs: 500 })
-              timedOut = polled.events.find(
-                (event) => event.kind === "prompt_resolved" && event.reason === "timeout",
-              )
+          for (let attempt = 0; timedOut === undefined && attempt < 20; attempt += 1) {
+            const polled = yield* hub.api.events({ sessionId, cursor, waitMs: 500 })
+            timedOut = polled.events.find(
+              (event) => event.kind === "prompt_resolved" && event.reason === "timeout",
+            )
 
-              if (polled.cursor !== cursor) cursor = polled.cursor
-            }
+            if (polled.cursor !== cursor) cursor = polled.cursor
+          }
 
-            const second = yield* waitPending(hub, sessionId, "hub-2")
+          const second = yield* waitPending(hub, sessionId, "hub-2")
 
-            yield* hub.api.answer({
-              sessionId,
-              requestId: "hub-2",
-              result: { selectedOption: "proceed_once" },
-            })
-            const settled = yield* untilSettled(hub, sessionId, cursor)
-            const replay = yield* hub.api.events({ sessionId, cursor: 1, waitMs: 50 })
+          yield* hub.api.answer({
+            sessionId,
+            requestId: "hub-2",
+            result: { selectedOption: "proceed_once" },
+          })
+          const settled = yield* untilSettled(hub, sessionId, cursor)
+          const replay = yield* hub.api.events({ sessionId, cursor: 1, waitMs: 50 })
 
-            return { timedOut, second, settled, replay }
-          }),
+          return { timedOut, second, settled, replay }
+        }),
       ),
     )
 

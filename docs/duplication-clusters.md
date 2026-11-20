@@ -20,7 +20,7 @@ The five skipped tests are the live suite. They skip unless `DROID_MCP_LIVE_DAEM
 
 ## After
 
-- Source lines, counted the same way: 65004 (231 fewer)
+- Source lines, counted the same way: 64997 (238 fewer)
 - Files scanned: 189
 - Functions parsed: 973
 - Indexed: 832
