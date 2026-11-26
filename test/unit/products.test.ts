@@ -465,6 +465,77 @@ describe("stdioServer", () => {
       await daemon.close()
     }
   })
+
+  it("forwards session change notifications as bare JSON-RPC frames", async () => {
+    const input = new PassThrough()
+    const output = new PassThrough()
+    const lines = createInterface({ input: output, terminal: false })
+    const frames = lines[Symbol.asyncIterator]()
+
+    const server = await stdioServer({
+      ...localOptions(),
+      input,
+      output,
+      includeDaemon: false,
+    })
+
+    let id = 0
+    const notices: Array<Record<string, Schema.Json>> = []
+
+    const next = async (): Promise<Schema.Json> => {
+      const line = await frames.next()
+
+      if (line.done) throw new Error("stdio ended before the next frame")
+
+      return json(line.value)
+    }
+
+    const request: RequestRpc = async (method, params = {}) => {
+      const requestId = ++id
+
+      input.write(requestLine(requestId, method, params) + "\n")
+
+      for (;;) {
+        const value = await next()
+        const frame = record(value)
+
+        if (frame.id === requestId) {
+          const reply = rpcReply(value)
+
+          expect(reply.id).toBe(requestId)
+
+          return reply
+        }
+
+        notices.push(frame)
+      }
+    }
+
+    try {
+      result(await request("initialize"))
+      toolValue(await call(request, "skill_read"))
+
+      const created = toolValue(
+        await call(request, "session_create", { cwd: sandbox, autonomyLevel: "low" }),
+      )
+
+      const sessionId = text(record(created).sessionId)
+
+      if (notices.length === 0) notices.push(record(await next()))
+
+      const notice = notices[0]
+
+      if (notice === undefined) throw new Error("no notification frame arrived")
+
+      expect(String(notice.method)).toBe("notifications/resources/updated")
+      expect(String(record(notice.params ?? {}).uri)).toContain(sessionId)
+    } finally {
+      await server.close()
+      lines.close()
+      input.destroy()
+      output.destroy()
+    }
+  })
 })
 
 describe("httpServer", () => {

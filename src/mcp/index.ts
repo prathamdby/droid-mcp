@@ -19,6 +19,10 @@
  *   caller-scoped services: a foreign session id is indistinguishable from
  *   a missing one, and no notification ever crosses into another caller's
  *   stream.
+ * - `resources.subscribe` is advertised only when the bound peer's
+ *   transport can deliver subscription notifications, and a subscribe
+ *   request on a transport that cannot is refused rather than accepted
+ *   into silence.
  * - Guidance receipts mint only on successful delivery of the qualifying
  *   root document. Reference reads never acknowledge; a failed delivery
  *   never acknowledges.
@@ -275,6 +279,14 @@ export const mcpLayer = (
 
           let closed = false
           let revision = peer.protocolRevision ?? DEFAULT_PROTOCOL_REVISION
+
+          /**
+           * Whether this peer's transport can actually deliver resource
+           * subscription notifications. Advertising `resources.subscribe`
+           * without a carrier that forwards the notification stream would
+           * promise updates that never arrive.
+           */
+          const subscriptionsSupported = peer.supportsSubscriptions ?? false
 
           const closeSignal = yield* Deferred.make<void>()
 
@@ -861,7 +873,7 @@ export const mcpLayer = (
 
             const capabilities: CapabilitiesWire = {
               tools: { listChanged: false },
-              resources: { subscribe: true, listChanged: false },
+              resources: { subscribe: subscriptionsSupported, listChanged: false },
               prompts: { listChanged: false },
             }
 
@@ -1005,6 +1017,15 @@ export const mcpLayer = (
             }
 
             if (method === "resources/subscribe" || method === "resources/unsubscribe") {
+              if (method === "resources/subscribe" && !subscriptionsSupported) {
+                return Effect.succeed({
+                  kind: "error" as const,
+                  id,
+                  code: JSON_RPC_METHOD_NOT_FOUND,
+                  message: "resource subscriptions are not available on this transport",
+                })
+              }
+
               const uri = stringField(params, "uri")
 
               if (uri === undefined || parseResourceUri(uri).kind === "unknown") {

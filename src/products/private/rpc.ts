@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema"
 
 import { Guidance } from "../../guidance/index.ts"
 import { Mcp, mcpLayer } from "../../mcp/index.ts"
-import type { McpEndpoint, McpFrame, McpReply } from "../../mcp/index.ts"
+import type { McpEndpoint, McpFrame, McpNotification, McpReply } from "../../mcp/index.ts"
 import { Presentation } from "../../presentation/index.ts"
 import { Sessions } from "../../sessions/index.ts"
 import type { Assembly } from "./assembly.ts"
@@ -55,6 +55,17 @@ const encodeReply = (reply: McpReply): Schema.Json | undefined => {
 
   return { jsonrpc: "2.0", id: reply.id, result: reply.result }
 }
+
+/**
+ * One server-initiated notification as a bare JSON-RPC 2.0 notification
+ * frame: no id, method and params only. A notification frame never carries
+ * a reply slot, so a client that never subscribed can simply ignore it.
+ */
+export const encodeNotification = (notification: McpNotification): Schema.Json => ({
+  jsonrpc: "2.0",
+  method: notification.method,
+  params: notification.params,
+})
 
 type FrameCheck =
   | { readonly ok: true; readonly frame: McpFrame }

@@ -391,6 +391,33 @@ describe("mcp: protocol negotiation", () => {
     }
   })
 
+  it("advertises resource subscriptions only when the transport can deliver them", async () => {
+    const services = buildHarness()
+
+    try {
+      const plain = await Effect.runPromise(bindEndpoint(services, "alice"))
+      const init = await initialize(plain.endpoint)
+
+      const resources = asObject(asObject(fieldOf(resultPayload(init), "capabilities")).resources)
+
+      expect(resources.subscribe).toBe(false)
+
+      const capable = await Effect.runPromise(
+        bindEndpoint(services, "bob", { supportsForms: false, supportsSubscriptions: true }),
+      )
+
+      const capableInit = await initialize(capable.endpoint)
+
+      const capableResources = asObject(
+        asObject(fieldOf(resultPayload(capableInit), "capabilities")).resources,
+      )
+
+      expect(capableResources.subscribe).toBe(true)
+    } finally {
+      await services.close()
+    }
+  })
+
   it("bind fails RevisionUnsupported for an unsupported peer revision", async () => {
     const services = buildHarness()
 
@@ -1380,6 +1407,68 @@ describe("mcp: per-caller isolation", () => {
 
       await Effect.runPromise(Fiber.interrupt(aliceWatcher))
       await Effect.runPromise(Fiber.interrupt(bobWatcher))
+    } finally {
+      await services.close()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Resource subscriptions
+// ---------------------------------------------------------------------------
+
+describe("mcp: resource subscriptions", () => {
+  it("refuses subscribe on a transport that cannot deliver notifications", async () => {
+    const services = buildHarness()
+
+    try {
+      const { endpoint } = await Effect.runPromise(bindEndpoint(services, "alice"))
+
+      const refusal = await receive(
+        endpoint,
+        request(5, "resources/subscribe", { uri: "droid://sessions" }),
+      )
+
+      expect(refusal.kind).toBe("error")
+
+      if (refusal.kind === "error") {
+        // JSON-RPC method not found: the capability is absent, not broken.
+        expect(refusal.code).toBe(-32_601)
+        expect(refusal.message).toContain("subscriptions")
+      }
+
+      const unsubscribe = await receive(
+        endpoint,
+        request(6, "resources/unsubscribe", { uri: "droid://sessions" }),
+      )
+
+      expect(unsubscribe.kind).toBe("result")
+    } finally {
+      await services.close()
+    }
+  })
+
+  it("accepts subscribe on a subscription-capable transport", async () => {
+    const services = buildHarness()
+
+    try {
+      const { endpoint } = await Effect.runPromise(
+        bindEndpoint(services, "alice", { supportsForms: false, supportsSubscriptions: true }),
+      )
+
+      const accepted = await receive(
+        endpoint,
+        request(5, "resources/subscribe", { uri: "droid://sessions" }),
+      )
+
+      expect(accepted.kind).toBe("result")
+
+      const unsubscribe = await receive(
+        endpoint,
+        request(6, "resources/unsubscribe", { uri: "droid://sessions" }),
+      )
+
+      expect(unsubscribe.kind).toBe("result")
     } finally {
       await services.close()
     }
