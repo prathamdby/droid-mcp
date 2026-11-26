@@ -60,6 +60,13 @@ if (piddir !== undefined && piddir.length > 0) {
   writeFileSync(join(piddir, String(process.pid)), "")
 }
 
+// FAKE_DROID_ENV_DUMP  write the child's visible environment entries as JSON
+const envDump = process.env.FAKE_DROID_ENV_DUMP
+
+if (envDump !== undefined && envDump.length > 0) {
+  writeFileSync(envDump, JSON.stringify(process.env, null, 2))
+}
+
 const PROTOCOL = "1.299.0"
 const SESSION_ID = "fake-session"
 

@@ -14,10 +14,23 @@
     "dist/**",
     "node_modules/**",
     "tools/oxlint/anti-slop/**",
+    "tools/oxlint/modularity/**",
   ],
   "jsPlugins": [
     { "name": "anti-slop", "specifier": "./tools/oxlint/anti-slop/index.ts" },
     { "name": "anti-slop-effect", "specifier": "./tools/oxlint/anti-slop/effect/index.ts" },
+    { "name": "modularity", "specifier": "./tools/oxlint/modularity/index.ts" },
+  ],
+  "overrides": [
+    {
+      "files": ["src/**/*.ts"],
+      "rules": {
+        "modularity/no-private-import": "error",
+        "modularity/no-export-star": "error",
+        "modularity/no-mutable-public-surface": "error",
+        "modularity/no-ambient-process-io": "error",
+      },
+    },
   ],
   "rules": {
     "oxc/no-accumulating-spread": "error",

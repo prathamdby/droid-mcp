@@ -5,88 +5,75 @@
  *
  *   node --experimental-strip-types scripts/measure.ts [compact|full ...]
  */
-import * as HttpRouter from "effect/http/HttpRouter"
-import * as Layer from "effect/Layer"
 import type * as Schema from "effect/Schema"
 
-import { parseConfig } from "../src/config.ts"
-import * as auth from "../src/http/auth.ts"
-import { mcpLayer } from "../src/http/server.ts"
+import { httpServer } from "../src/products/index.ts"
 
 const KEY = "measure-key"
 const PROTOCOL = "2025-11-25"
 
-const profiles = process.argv.slice(2).length > 0 ? process.argv.slice(2) : ["compact", "full"]
+const isProfile = (value: string): value is "compact" | "full" =>
+  value === "compact" || value === "full"
 
-const bodyOf = async (response: Response): Promise<string> => {
-  const text = await response.text()
+const requested = process.argv.slice(2).filter(isProfile)
 
-  if (!(response.headers.get("content-type") ?? "").includes("text/event-stream")) return text
+const profiles: ReadonlyArray<"compact" | "full"> =
+  requested.length > 0 ? requested : ["compact", "full"]
 
-  const data = text.split("\n").find((line) => line.startsWith("data:"))
-
-  return data === undefined ? "" : data.slice(5).trim()
+interface AdvertisedTool {
+  readonly name: string
+  readonly description?: string | undefined
+  readonly inputSchema: Schema.Json
+  readonly annotations?:
+    | {
+        readonly readOnlyHint?: boolean | undefined
+        readonly destructiveHint?: boolean | undefined
+      }
+    | undefined
 }
 
-const measure = async (profile: string) => {
-  const config = parseConfig(["serve"], {
-    DROID_MCP_KEYS: KEY,
-    DROID_MCP_TOOL_PROFILE: profile,
-    DROID_MCP_LOG_LEVEL: "error",
+const measure = async (profile: "compact" | "full") => {
+  const server = await httpServer({
+    authTokens: [KEY],
+    includeDaemon: true,
+    factoryBaseUrl: "https://api.factory.ai",
+    contextBaseUrl: "https://context.factory.ai",
+    profile,
   })
 
-  const app = mcpLayer({ config, keys: [KEY] }).pipe(
-    Layer.provide(auth.layer(auth.keyringFrom([KEY]))),
-  )
+  const endpoint = server.url + server.path
 
-  const { handler, dispose } = HttpRouter.toWebHandler(app, { disableLogger: true })
+  const post = async (body: Schema.Json): Promise<string> => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        authorization: "Bearer " + KEY,
+      },
+      body: JSON.stringify(body),
+    })
 
-  const post = (body: Schema.Json, headers: Record<string, string>) =>
-    handler(
-      new Request("http://localhost/mcp", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-          authorization: "Bearer " + KEY,
-          ...headers,
-        },
-        body: JSON.stringify(body),
-      }),
-    )
+    return response.text()
+  }
 
   try {
-    const init = await post(
-      {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: PROTOCOL,
-          capabilities: {},
-          clientInfo: { name: "measure", version: "1" },
-        },
+    const initBody = await post({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: PROTOCOL,
+        capabilities: {},
+        clientInfo: { name: "measure", version: "1" },
       },
-      {},
-    )
+    })
 
-    const initBody = await bodyOf(init)
+    await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })
 
-    const session = {
-      "mcp-session-id": init.headers.get("mcp-session-id") ?? "",
-      "mcp-protocol-version": PROTOCOL,
-    }
+    const list = await post({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })
 
-    const list = await bodyOf(
-      await post({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, session),
-    )
-
-    const tools: Array<{
-      name: string
-      description?: string
-      inputSchema: unknown
-      annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean }
-    }> = JSON.parse(list).result.tools
+    const tools: Array<AdvertisedTool> = JSON.parse(list).result.tools
 
     const minimal = tools.reduce(
       (sum, tool) =>
@@ -105,7 +92,7 @@ const measure = async (profile: string) => {
     const initBytes = Buffer.byteLength(initBody)
 
     return {
-      profile: config.toolProfile,
+      profile,
       tools: tools.length,
       toolsListBytes: listBytes,
       toolsListApproxTokens: Math.round(listBytes / 4),
@@ -118,12 +105,14 @@ const measure = async (profile: string) => {
       nonFiniteLiterals: (list.match(/"NaN"/g) ?? []).length,
     }
   } finally {
-    await dispose()
+    await server.close()
   }
 }
 
 const results = []
 
-for (const profile of profiles) results.push(await measure(profile))
+for (const profile of profiles) {
+  results.push(await measure(profile))
+}
 
 console.log(JSON.stringify(results, null, 2))

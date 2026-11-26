@@ -1,0 +1,647 @@
+/**
+ * Embedded guide documents for the single supported edition.
+ *
+ * The text below is the checked-in copy of the operator-facing usage guide.
+ * It is embedded at build time so no filesystem read happens at runtime and
+ * every assembled product serves byte-identical content.
+ */
+
+export interface GuideDocumentEntry {
+  readonly part: string
+  readonly isRoot: boolean
+  readonly content: string
+}
+
+const SKILL_MD = `---
+name: droid
+description: Drive Factory Droid through MCP for local coding turns and prompts,
+  daemon sessions and automation, hosted computers and sessions, or stored
+  Context documents, files, and transcripts.
+---
+
+# Droid
+
+## Route once
+
+Call \`server_info\` once for \`profile\`, counts, and \`maxAutonomy\`; reuse known
+schemas and settings. Read the root skill before session and work-starting
+tools: call \`skill_read\`, read exactly \`skill://droid/SKILL.md\`, get that URI
+through \`skills/get\`, or get prompt \`droid\`. Reference-only reads leave the
+gate closed. See [the gate policy](references/tool-families.md#skill-read-gate)
+for the gated operations and identity boundary.
+
+Choose the backend before choosing an operation:
+
+| Backend | Family                | Use                                                                                               |
+| ------- | --------------------- | ------------------------------------------------------------------------------------------------- |
+| Local   | \`session_*\`           | Coding turns in a \`droid exec\` child on this host; client answers prompts.                        |
+| Daemon  | \`daemon_*\`, \`droid_*\` | Daemon-managed sessions, automation, git/worktrees, terminals, configuration.                     |
+| Hosted  | \`rest_*\`              | Factory computers, Environments, remote sessions, wiki, CI, billing, organization administration. |
+| Stored  | \`context_*\`           | Spaces, documents, files, append-only transcripts. Nothing runs.                                  |
+
+Keep ids within their backend. For daemon authority, hosted provisioning, or
+Context writes, read [delegation](references/delegation.md) before acting.
+
+## Spend fewer tokens
+
+- Reuse tool names and schemas already in context. Search only an unknown
+  capability; describe only the operations whose inputs you still need.
+- In compact, prefer \`batch\` for related calls, with \`$from\` for dependencies.
+  Return only the needed subtree with \`select\` and start with \`maxBytes: 1024\`.
+  Page a stored result only when its preview or selected value is insufficient.
+- Default to fire-and-forget (deferred consumption): retain status/cursor and
+  handle prompts; consume only the terminal result or last assistant text when
+  enough. Use long \`waitMs\` instead of repeated short timeouts.
+  Optionally stream intermediate events to observe critical tasks, or when
+  progress, debugging, or interaction matters.
+- Omit unused optional inputs. Send \`null\` only where the schema permits it.
+- Confirm destructive operations unless the user already authorized them.
+  Dispatch does not bypass policy or obtain consent for you.
+
+## Local turn
+
+1. \`session_create\` with absolute existing \`cwd\`, explicit \`autonomyLevel\`
+   (\`off|low|medium|high\`, within \`maxAutonomy\`), and optional \`modelId\`,
+   \`reasoningEffort\`, \`restrictToolIds\`, or \`disabledToolIds\`. Set \`worktree\`
+   to run in a separate git checkout; \`worktreeLifecycle: "persistent"\` keeps
+   it after close. Retain \`sessionId\`.
+2. \`session_stream\` sends \`prompt\`. \`delivery: "detach"\` returns a
+   \`droid://sessions/{id}\` URI and no event dump; read that resource or poll
+   \`session_events\`. \`delivery: "block"\` waits until the turn ends or a prompt
+   the client cannot answer as a form. Omit \`delivery\` to wait up to \`waitMs\`
+   and receive events. Retain \`cursor\`. While \`status\` is \`running\`, call
+   \`session_events\` with that cursor unchanged, then replace it with the new
+   returned cursor. It is the next sequence number, not the last event's \`seq\`.
+3. Answer \`pending_permission\`, \`pending_question\`, and \`pending_options\`
+   before their \`deadline\`. Read [prompts](references/prompts.md) when one
+   appears, even if you otherwise ignore intermediate events.
+4. Stop polling on \`completed\`, \`failed\`, or \`interrupted\`. Check \`result.reason\`
+   and any \`error\` event; verify the requested work. Reuse the session for
+   another turn or \`session_close\` when done. Close every session you open.
+
+\`session_interrupt\` stops a turn; \`session_list\` recovers live ids/status/cursors.
+One session runs one turn at a time. Read [session loop](references/session-loop.md)
+for wait behavior, event limits, streaming alternatives, and one-shot
+\`session_run\` (in compact, call it through \`tool_call\`, not as a listed tool).
+
+## Compact dispatch
+
+Compact advertises 16 tools: \`server_info\`, \`skill_read\`, nine local turn/prompt
+tools, and \`tools_search\`, \`tools_describe\`, \`tool_call\`, \`batch\`, \`result_read\`.
+All 287 operations remain reachable. Full advertises each operation directly;
+the five dispatch tools are compact-only.
+
+For an unknown operation: \`tools_search { query, family?, readOnly?, limit }\`
+(start with a small limit), then \`tools_describe { names }\` only if its schema
+is unknown. Run \`tool_call { name, arguments, select?, maxBytes? }\` or
+\`batch { steps, maxBytes? }\`. Selection is one JSON Pointer, not a field list
+or event filter. A truncated response carries a \`ref\` for \`result_read\`.
+
+Read [tool families](references/tool-families.md) when discovering a capability,
+chaining calls, recovering a result, or handling a failure. It explains
+what the 287 tool names mean, indexes every capability family, and groups the server's
+failure codes with recovery actions.
+`
+
+const SESSION_LOOP_MD = `# Session loop
+
+## Start and wait
+
+\`\`\`json
+{ "cwd": "/absolute/project", "autonomyLevel": "low", "modelId": "auto" }
+\`\`\`
+
+\`session_create\` returns \`{ sessionId, cwd, settings, worktree? }\`.
+\`worktree: true\` creates a git worktree and runs there. \`ephemeral\` (the
+default) removes it on close. \`persistent\` leaves the checkout and branch.
+\`worktreeBranchMode\` is \`copy\` (new branch from \`worktreeBaseBranch\` or HEAD)
+or \`existing\` (\`worktreeNewBranch\` must already exist). Send one prompt:
+
+\`\`\`json
+{ "sessionId": "ID", "prompt": "Add and run a test for the retry helper", "waitMs": 0 }
+\`\`\`
+
+\`session_stream\` returns \`{ sessionId, status, cursor, events, truncated, result? }\`.
+\`delivery: "detach"\` returns at once with \`uri\` and \`eventsOmitted\` when the
+dump was left out. The cursor is still the resume point. \`truncated\` means the
+ring dropped history, not that delivery filtered the payload. \`delivery: "block"\`
+waits up to \`waitMs\`, or 300000 ms when \`waitMs\` is omitted. A short wait without
+\`delivery\` hands control back with \`running\`; it does not detach ownership
+or close the session. Continue with \`session_events\`:
+
+\`\`\`json
+{ "sessionId": "ID", "cursor": 42, "waitMs": 300000 }
+\`\`\`
+
+Always replace \`42\` with the previous response's cursor. Waits default to
+20000 ms, accept 0..300000 ms, and are not a turn timeout.
+\`session_stream\` waits for completion or its timeout. \`session_events\` returns
+immediately for buffered events or a terminal turn; otherwise it wakes on the
+next event or timeout, **not only at completion**. Long waits avoid empty
+timeout polls but do not suppress event responses.
+
+Default to fire-and-forget (deferred consumption). Consume status/cursor and
+pending prompts while running, then the terminal \`result\` or last \`assistant_text\`.
+This is deferred
+consumption, not an event-free server mode. Intermediate events still arrive
+and cost response bytes. To retain less in the agent context, filter them in
+the client's execution layer, while preserving prompt handling and the last
+assistant text. Optionally stream events incrementally to observe critical
+tasks, or when progress, debugging, or human interaction is needed.
+
+In four isolated edits with \`modelId: "auto"\` (two per approach), this long-wait
+approach returned 1992/1783 bytes versus 2713/2713 for 1-second incremental
+polling; all edits passed. The saving came from avoiding empty timeouts, not
+from ignoring text. Two runs do not establish a general latency advantage;
+incremental clients can also long-poll.
+
+For a task that can wait synchronously, a long initial \`session_stream.waitMs\`
+can avoid intermediate polls. If prompts are possible, use a shorter initial
+wait so you can answer within their deadline.
+
+## Finish
+
+\`completed\` means the turn finished, not that its edits are correct.
+\`result\` may include \`reason\`, \`turnId\`, \`durationMs\`, \`tokenUsage\`, and
+\`structuredOutput\`. \`failed\` and \`interrupted\` also end the turn. Inspect errors
+before deciding to reuse the session; \`process_exit\` means its child died.
+
+\`session_interrupt { sessionId }\` stops a running turn and reports
+\`{ interrupted }\`; there is no \`prompt\` argument. After interruption, poll to
+terminal before starting another turn. \`session_busy\` means one is still active.
+
+\`session_close { sessionId }\` interrupts work, cancels prompts, and stops the
+child. A missing id means it is already closed. Idle sessions are reaped after
+30 minutes; cleanup remains the caller's responsibility.
+
+## Retention
+
+Events include \`assistant_text\`, \`thinking\`, \`tool_call\`, \`tool_result\`, \`error\`,
+\`turn_completed\`, \`prompt_resolved\`, and prompt events. Text fields are capped
+at 4096 UTF-8 bytes, marked \`…[truncated]\`; the ring holds 500 events or 256 KiB.
+Top-level \`truncated: true\` means the requested cursor predates retained
+events. Advancing the cursor prevents duplicates, but cannot restore lost
+text. \`result_read\` only pages dispatch results; it cannot restore event text
+already clipped by the session hub. Use an output file for large deliverables.
+
+## One-shot alternative
+
+\`session_run\` accepts \`cwd\`, \`prompt\`, \`autonomyLevel\`, optional \`modelId\`
+and \`waitMs\`. In compact use:
+
+\`\`\`json
+{
+  "name": "session_run",
+  "arguments": {
+    "cwd": "/absolute/project",
+    "autonomyLevel": "low",
+    "prompt": "Explain the retry helper briefly",
+    "waitMs": 20000
+  },
+  "maxBytes": 1024
+}
+\`\`\`
+
+It closes automatically on a terminal response. On \`running\`, retain its
+\`sessionId\` and cursor, answer prompts, poll, and close yourself. Keep these
+control fields when selecting/bounding a running result; recover them from
+its \`ref\` before proceeding. Use \`session_create\` for multiple turns.
+`
+
+const PROMPTS_MD = `# Prompts
+
+Prompts park the turn until answered or cancelled at their \`deadline\` (epoch
+milliseconds, 300 seconds by default). Even an outcome-only client must check
+for them. Use the event's \`requestId\` with its \`sessionId\`; answer within the
+deadline, then resume polling from your retained cursor.
+
+## Permission
+
+\`pending_permission\` contains \`options\` and \`toolUses\`. Choose only an offered
+outcome, after obtaining any required user approval:
+
+\`\`\`json
+{ "sessionId": "ID", "requestId": "hub-2", "outcome": "proceed_once" }
+\`\`\`
+
+Optional \`comment\` explains the decision. \`proceed_edit\` requires nonempty
+\`editedSpecContent\`. Outcomes accepted by the server:
+
+- \`proceed_once\`, \`cancel\`.
+- \`proceed_always\`, \`proceed_always_file\`, \`proceed_always_tools\`,
+  \`proceed_always_server\`, \`proceed_report_false_positive\`.
+- \`proceed_auto_run_low\`, \`proceed_auto_run_medium\`, \`proceed_auto_run_high\`,
+  \`proceed_new_session_low\`, \`proceed_new_session_medium\`, \`proceed_new_session_high\`.
+- \`proceed_auto_run\`, \`proceed_new_session\`, \`proceed_edit\`.
+
+Leveled outcomes must fit \`server_info.maxAutonomy\`; unlevelled
+\`proceed_auto_run\` and \`proceed_new_session\` require a \`high\` cap.
+The server filters above-cap choices out of \`options\` and rejects them if sent.
+Persistent grants are broader than one-call consent; prefer the smallest
+offered grant that covers the user's authorization.
+
+## Question
+
+\`pending_question\` contains \`questions\` with \`index\`, \`question\`, optional
+\`topic\`, \`options\`, and \`multiSelect\`. Supply one answer per question index:
+
+\`\`\`json
+{
+  "sessionId": "ID",
+  "requestId": "hub-4",
+  "answers": [{ "index": 0, "answer": "sqlite" }]
+}
+\`\`\`
+
+The server fills in question text. Use indices from this prompt, not positions
+guessed from an earlier one.
+
+## Options
+
+\`pending_options\` contains \`rows\` (\`id\`, optional \`label\`/\`detail\`) and \`multi\`.
+Select offered row ids; a single-select prompt accepts at most one:
+
+\`\`\`json
+{ "sessionId": "ID", "requestId": "hub-5", "selectedIds": ["app"] }
+\`\`\`
+
+\`refresh: true\` requests new rows instead of selecting; watch for a fresh event.
+Permission/question answers return \`{ resolved: true }\`; option answers also
+return \`refresh\`. An answer resolves the prompt, not the turn.
+
+## Stale or invalid answers
+
+\`prompt_not_found\`: already answered, expired, or retired. Poll current state.
+\`prompt_mismatch\`: wrong answer tool. \`invalid_outcome\`,
+\`invalid_question_index\`, \`invalid_selection\`, or \`edited_spec_required\`:
+correct the answer from this event. Above-cap choices fail
+\`autonomy_exceeds_cap\`. A timeout emits \`prompt_resolved\` with
+\`reason: "timeout"\` and sends a cancellation response to Droid.
+`
+
+const DELEGATION_MD = `# Backend workflows
+
+## Local versus daemon
+
+Use \`session_*\` for client-driven coding turns. \`daemon_*\` and \`droid_*\` use
+the long-running daemon and its ids, not the local hub's handles. The server
+connects to or starts the daemon; \`server_info\` reports its connection.
+Daemon message/turn-outcome operations exist, but do not provide the local
+hub's prompt-and-cursor loop. Discover their schemas before using them.
+
+\`daemon_generate_semantic_diff\` generates a semantic diff;
+\`daemon_get_semantic_diff_cache\` and \`daemon_save_semantic_diff_cache\` manage
+its cache. Git, worktrees, automation, crons, terminals, plugins, preferences,
+and workstreams are indexed in [tool families](tool-families.md).
+
+### Authority is not a universal sandbox
+
+The server rejects explicit above-cap authority on supported generated
+authority-changing methods and local create/run/settings/permission calls.
+\`daemon_initialize_session\` fills omitted \`autonomyLevel\` and \`autonomyMode\`
+from one \`daemon_get_default_settings\` snapshot: preserve within-cap values,
+clamp higher ones, use \`off\`/\`normal\` when absent. Below a \`high\` cap, omitted
+\`skipPermissionsUnsafe\` becomes \`false\` (it is not a snapshot field).
+Persistent defaults stay unchanged. Initialize has no
+\`subagentAutonomyLevel\` parameter.
+
+\`daemon_load_session\` and \`droid_load_session\` cannot cap saved authority;
+queued work may already run. List/message reads do not prove its authority.
+Prefer \`session_create\` or \`session_run\` for cap-controlled work.
+Workers are spawned by Droid, not a client worker-create tool;
+\`daemon_kill_worker_session\` and \`droid_kill_worker_session\` stop them.
+
+## Hosted computer to session
+
+\`rest_*\` uses \`FACTORY_BASE_URL\` and \`FACTORY_API_KEY\`. Remote sessions require
+organization support and run on a Factory computer, not this host.
+
+1. Reuse a suitable computer, or choose an Environment with
+   \`rest_list_environments\` / \`rest_get_environment\`.
+2. Describe \`rest_create_computer\`; its input is
+   \`name\` plus \`source: { kind: "environment", environmentId, isListed: false }\`.
+3. Poll \`rest_get_computer\` until \`active\`; stop on \`error\` and inspect
+   \`rest_get_environment_build_diagnostics\` if needed.
+4. \`rest_create_remote_session\` with
+   \`body: { computerId, sessionSettings: { model: "auto" } }\`.
+5. \`rest_post_remote_session_message\` with the session id and \`body: { text }\`.
+6. Read only the needed reply using \`rest_get_remote_session_message\` or
+   \`rest_list_remote_session_messages\` (\`role\`, \`cursor\`).
+   \`rest_interrupt_remote_session\` stops hosted work.
+
+Use \`batch\`/\`$from\` for steps whose prerequisites are already satisfied.
+Provisioning and build readiness still need checking between dependent phases.
+Each REST operation sends one request; a batch does not wait for provisioning.
+Before retrying an uncertain create/write, list or read back to avoid duplicates.
+
+## Stored Context
+
+\`context_*\` needs \`FACTORY_CONTEXT_BASE_URL\` (Prem origin), \`FACTORY_API_KEY\`,
+and any configured \`FACTORY_CONTEXT_HEADERS\`. Without the origin, it fails
+\`context_base_url_missing\` without sending a request.
+
+- Spaces organize documents, binary files, and stored sessions. Registering
+  a stored session starts no process.
+- \`context_register_session\`, then \`context_append_session\` with
+  \`startSequence\` equal to \`lastSequence + 1\`. Gaps/overlaps conflict;
+  identical retries are accepted.
+- \`context_read_session_records\`: while \`hasMore\`, pass \`nextCursor\` as
+  \`afterSequence\`. Read only the records needed.
+- \`context_update_document\` uses \`expectedVersion\`. On HTTP 409, reread and
+  reconcile, rather than blindly repeating. Errors retain upstream conflict
+  fields such as \`currentVersion\` and \`currentSequence\` when supplied.
+- File flow: \`context_create_file\`, \`context_upload_file_part\`, then commit
+  the uploaded \`fileId\` with document create/update; \`context_read_file_part\`
+  reads base64 parts. Describe inputs for type, size, hash, and part limits.
+
+Versions and sequences are decimal strings. Preserve them as strings, including
+when computing the next sequence with integer-safe arithmetic.
+`
+
+const TOOL_FAMILIES_MD = `# Tool families and dispatch
+
+The full profile publishes 287 tools: 154 generated from the SDK's method surface and
+133 hand-written for server/skill, local sessions, hosted REST, and Context.
+Compact advertises \`server_info\`, \`skill_read\`, nine turn/prompt tools, and five dispatch tools
+(16 total); all 287 operations remain callable by name.
+
+| Prefix     | Count | Backend/capability                                              |
+| ---------- | ----- | --------------------------------------------------------------- |
+| \`daemon_\`  | 130   | Daemon SDK methods.                                             |
+| \`droid_\`   | 24    | Remaining session SDK methods, transported through the daemon.  |
+| \`session_\` | 32    | Local hub turns, prompts, administration.                       |
+| \`rest_\`    | 81    | Hosted Factory REST API.                                        |
+| \`context_\` | 18    | Prem Context API.                                               |
+| \`server_\`  | 1     | \`server_info\`: version, protocols, profile/counts, cap, daemon. |
+| \`skill_\`   | 1     | \`skill_read\`: read the embedded droid skill markdown.           |
+
+Generated names replace dots with underscores: \`daemon.sf.list_workstreams\`
+becomes \`daemon_sf_list_workstreams\`. Inputs and replies use SDK schemas.
+The SDK has 35 \`droid.*\` methods. Seven of them belong to the session loop:
+\`initialize_session\`, \`add_user_message\`, \`interrupt_session\`, \`close_session\`,
+\`request_permission\`, \`ask_user\`, \`pick_options\`. Use the local wrappers for
+that loop; these seven have no generated \`droid_*\` tool.
+
+## Skill-read gate
+
+With \`--require-skill=true\` (default), read the root skill before session and
+work-starting tools. All 32 \`session_*\` operations retain their gate, including
+local reads and controls. These 12 operations also require the read:
+
+- \`daemon_initialize_session\`, \`daemon_load_session\`, \`daemon_add_user_message\`
+- \`daemon_fork_session\`, \`daemon_resolve_queued_user_message\`
+- \`droid_load_session\`, \`droid_fork_session\`, \`droid_resolve_queued_user_message\`
+- \`daemon_run_automation\`, \`daemon_dispatch_automation_run\`
+- \`rest_create_remote_session\`, \`rest_post_remote_session_message\`
+
+The policy applies to full tools, compact listed tools, and inner operations
+in \`tool_call\` and \`batch\`. Other daemon/hosted reads and controls, automation
+CRUD, \`droid_append_messages\` (history only), and Context operations stay open.
+Arguments are decoded before the gate is checked.
+
+\`skill_read\`, a resource read of exactly \`skill://droid/SKILL.md\`, \`skills/get\`
+of that URI, or prompt \`droid\` unlocks the gate. Reading reference files alone
+does not. State is per MCP session; sessionless (2026-07-28) requests share
+read state per bearer key, not per client. The read set is LRU-bounded to 4096
+entries; an evicted session/key must read again. Set \`--require-skill=false\`
+or \`DROID_MCP_REQUIRE_SKILL=false\` to disable the gate.
+
+## Discover only what is missing
+
+\`tools_search\` matches all query words against names/descriptions; narrow with
+\`family\` (\`server|skill|session|daemon|droid|rest|context\`), \`readOnly\`, and a small
+\`limit\` (default 15, maximum 50). Page with returned \`nextOffset\` as \`offset\`
+only if needed. \`tools_describe { names }\` accepts 1..20 names and returns
+descriptions, \`inputSchema\`, and policy; unknown names, including the four removed
+reads below, appear in \`unknown\` without discarding valid descriptions.
+Reuse these schemas. The catalogs inside a session (\`session_list_tools\`) or
+configured MCP servers (\`daemon_list_mcp_tools\`) are different catalogs.
+
+\`readOnly\` and \`destructive\` hints describe the operation, not user consent.
+Confirm destructive work unless already authorized; the server does not ask
+on the client's behalf. \`tool_call\` and \`batch\` have broad dispatch hints:
+inspect the underlying operation's policy.
+
+## Bounded results and batch
+
+\`tool_call { name, arguments?, select?, maxBytes? }\` runs the full handler,
+including validation and autonomy checks. Start at \`maxBytes: 1024\`; increase
+only when needed. Range: 1024..262144 bytes; default: 16384.
+\`select\` is one RFC 6901 JSON Pointer (empty means whole result), applied before
+bounding. It is not JSONPath, an event filter, or a multi-field projection.
+
+\`batch\` runs 1..20 steps sequentially in one call, not in parallel or as a
+transaction. Example after learning the schemas:
+
+\`\`\`json
+{
+  "steps": [
+    {
+      "id": "new",
+      "name": "session_create",
+      "arguments": { "cwd": "/absolute/project", "autonomyLevel": "low" },
+      "select": "/sessionId"
+    },
+    {
+      "name": "session_rename",
+      "arguments": { "sessionId": { "$from": "new", "path": "/sessionId" }, "title": "Retry fix" }
+    }
+  ],
+  "maxBytes": 2048
+}
+\`\`\`
+
+\`$from\` reads an earlier step's **full** result before \`select\` or truncation;
+omit \`path\` for that entire result. Ids default to string indices and must
+be unique. Stops on first failure unless \`stopOnError: false\`; completed
+steps stay done. Inspect step statuses (\`ok|failed|skipped\`) and counts.
+Batch defaults to 32768 bytes, divides its budget among steps, then clamps each
+step to 1024..262144. \`maxBytes\` is not a hard total-response cap for a batch:
+step envelopes and that minimum add overhead.
+
+An oversized result returns \`truncated\`, \`totalBytes\`, \`preview\`, and \`ref\`
+instead of \`result\`. The ref stores the selected subtree, not automatically
+the unselected result. Recover only needed data:
+
+- \`result_read { ref, select: "/needed", length: 1024 }\` selects inside the
+  stored JSON and returns \`selected\` (itself bounded).
+- For a byte page, use \`{ ref, offset: 0, length: 1024 }\`; follow \`nextOffset\`
+  unchanged only while more text is needed. \`chunk\` is JSON text, not an object.
+
+Refs are key-scoped, expire 15 minutes after last use, and may be evicted under
+the 64 MiB store limit. On \`invalid_select\` after dispatch, the operation
+already ran: use the error's \`ref\` for the full result, rather than rerunning.
+If a ref is lost, repeat a safe read or reconcile a write's state first.
+
+## Capability index
+
+Search the indicated family and subject, then describe only unfamiliar inputs.
+This index covers groups, not an eager dump of all schemas.
+
+### Local session administration
+
+Beyond the direct loop and prompt tools:
+
+- One-shot: \`session_run\` via dispatch in compact; see [session loop](session-loop.md).
+- Settings/directory/spec/title: \`session_update_settings\`, \`session_change_cwd\`,
+  \`session_enter_spec_mode\`, \`session_exit_spec_mode\`, \`session_rename\`.
+- Context/history: \`session_get_context_stats\`, \`session_compact\`, \`session_fork\`,
+  \`session_get_rewind_info\`, \`session_rewind\`. Inspect rewind effects before confirming.
+- MCP configuration/auth: \`session_list_mcp_servers\`, \`session_list_mcp_tools\`,
+  \`session_add_mcp_server\`, \`session_remove_mcp_server\`, \`session_toggle_mcp_server\`,
+  \`session_authenticate_mcp_server\`, \`session_submit_mcp_auth_code\`,
+  \`session_refresh_connector_tool_catalog\`.
+- Tools/skills/models: \`session_list_tools\`, \`session_list_skills\`,
+  \`session_set_skill_disabled\`, \`session_models\`. Request skill content only if needed.
+
+### Daemon (\`daemon_\`)
+
+Search subjects:
+
+- Session/message/turn/queue: initialize/load/close/interrupt, list opened/available,
+  search, messages/outcome, queued-message resolution, archive/unarchive, rename,
+  fork, compact, context breakdown, rewind, worker termination.
+- Settings/model/preferences/trust: defaults/session settings, cwd validation/change,
+  folder trust, models/custom models, user preferences, cache warmup, authentication.
+- Git/worktree/semantic diff/pull request: branches/checkout, diff/file contents,
+  commit/push/create PR, PR status/layer-manifest generation, managed worktrees
+  and setup profiles, deletion inspection/cleanup, semantic diff generation/cache.
+- Automation/cron: config, create/list/update/delete/fork/run/dispatch, schedule/prompt/
+  model/privacy, pause/resume/history/visuals; cron create/list/update/delete,
+  per-session hold/resume.
+- Terminal/workspace/files: terminal create/list/write/resize/close, workspace
+  file read/write, file list/search, checkout metadata.
+- MCP: registry/config, servers/tools, add/remove/toggle, authentication,
+  submit code/error/cancel/clear.
+- Skill/command/plugin/marketplace: list skills/commands, disable skills;
+  plugin discover/install/update/enable/uninstall; marketplace list/add/update/remove.
+- Mission readiness: inspect and acknowledge warnings.
+- \`sf\`: workstream create/get/list/update/delete, content hydrate/publish,
+  activities/reviews, changes, signals, events/read/unread.
+- Bug report: submit diagnostics.
+
+### Session SDK (\`droid_\`)
+
+Daemon transport, daemon-shaped session ids. Capabilities: load, append
+messages, resolve queued messages, update settings/cwd/title, compact/fork/
+context stats/rewind, kill workers, disable skills,
+MCP servers/configuration/authentication/tool toggles,
+connector-catalog refresh, and bug reports. Prefer \`session_*\` wrappers when
+working with a local hub handle.
+
+Four additional SDK reads use the exec-session protocol, not the daemon socket,
+and are not advertised in either profile:
+
+| Removed name              | Supported replacement(s)                            |
+| ------------------------- | --------------------------------------------------- |
+| \`droid_list_skills\`       | \`session_list_skills\` or \`daemon_list_skills\`       |
+| \`droid_list_tools\`        | \`session_list_tools\`                                |
+| \`droid_list_mcp_tools\`    | \`session_list_mcp_tools\` or \`daemon_list_mcp_tools\` |
+| \`droid_list_mcp_registry\` | \`daemon_list_mcp_registry\`                          |
+
+\`tool_call\` and \`batch\` return \`unknown_tool\` with these replacements.
+\`tools_describe\` lists removed names in \`unknown\` and preserves valid descriptions.
+Create a local session for the \`session_*\` reads; the \`daemon_*\`
+replacements require a daemon session id. There is no local registry wrapper.
+The other 24 generated \`droid_*\` operations remain exposed; this does not
+establish that every daemon implements them.
+
+### Hosted REST (\`rest_\`)
+
+- Computer/machine template: providers/templates, computer CRUD/bulk creation,
+  lookup by name, restart/refresh/activity/metrics, file transfers.
+- Environment: CRUD, defaults/ensure-default, sources, build statuses/diagnostics/
+  attempt diagnostics, cancel/retry builds or dependency installation.
+- Remote session: create/get/list/update/delete, messages/list/get/post, children, interrupt.
+- Wiki: create/get/list/delete runs, pages/search/history/export, privacy,
+  upload access and video-upload URLs.
+- CI: repository owners/repositories/scan, jobs/runs, workflow editing.
+- Billing: subscription token rate-limit windows (\`/limits\`: Standard and Droid Core
+  5-hour, weekly, and monthly usage), Extra Usage balance, and overage preference.
+- Organization: users/invitations/removal, global/group/user limits,
+  computer secrets, enterprise-control history.
+- Service account: CRUD, API-key list/create/revoke/rotate.
+
+Each operation sends one request to \`FACTORY_BASE_URL\` using \`FACTORY_API_KEY\`.
+Path/query fields are named inputs; payload goes in \`body\` where the schema
+defines it. Some operations, such as computer creation, use named body fields
+instead. Optional \`query\` adds query parameters. Describe unfamiliar inputs.
+Hosted list tools that accept cursors return \`pagination.nextCursor\`; pass it
+back as \`cursor\` unchanged, only when another page is needed.
+
+Transfer tools return temporary URLs; the server does not fetch them.
+Upload computer bytes to the URL, then call \`rest_complete_computer_file_upload\`.
+\`rest_export_wiki_run\` returns a ZIP as base64 metadata/data (JSON replies pass
+through). Minted service-account key values are removed and replaced with
+\`notice\`; they cannot be recovered here. Configured API/header secrets and
+submitted organization-secret values are redacted from results/errors.
+
+### Stored Context (\`context_\`)
+
+Space create/get/list; document create/get/get-by-path/list/update/delete;
+file create/upload-part/read-part/delete; session register/get/list/append/
+read-records. Context lists page with \`nextCursor\` as \`cursor\`; record reads
+instead use \`afterSequence\`. See [backend workflows](delegation.md) before
+writing versions, sequences, or files.
+
+## Failures
+
+Tools report \`{ code, message }\`; turn failures can also appear in \`error\`
+events or \`result.reason\`. Branch on code, inspect the message, and reconcile
+state before retrying a mutation after a transport error or timeout.
+
+- \`unknown_tool\`: search the correct operation name.
+- \`skill_not_read\`: call \`skill_read\`, read \`skill://droid/SKILL.md\`, or get
+  that URI via \`skills/get\` or prompt \`droid\` before session and work-starting
+  tools; see [the gate policy](#skill-read-gate).
+- \`invalid_arguments\`, \`invalid_params\`: correct inputs against the known schema;
+  describe it only if missing/stale.
+- \`invalid_select\`: correct the pointer; after dispatch use the attached \`ref\`,
+  because work completed.
+- \`invalid_reference\`: use an earlier successful step id and a path in its full result.
+- \`invalid_offset\`: use the previous page's \`nextOffset\` (UTF-8 boundary).
+- \`result_not_found\`: ref expired, evicted, or belongs to another key.
+  Repeat only safe reads; reconcile writes.
+- \`internal_error\`: unexpected dispatch failure; inspect state before retrying.
+- \`invalid_cwd\`, \`invalid_prompt\`: use an existing absolute directory or a nonblank prompt.
+- \`autonomy_exceeds_cap\`: lower requested authority to the reported cap.
+- \`session_not_found\`, \`session_closed\`: wrong/closed/dead handle; inspect events
+  if retained, close a dead child, create a new session if needed.
+- \`session_busy\`: poll the existing turn or interrupt it before sending another.
+- \`prompt_not_found\`, \`prompt_mismatch\`: refresh state or use the answer tool
+  matching the pending kind.
+- \`invalid_outcome\`, \`invalid_question_index\`, \`invalid_selection\`,
+  \`edited_spec_required\`: use offered choices/indices/ids, or supply nonempty
+  \`editedSpecContent\`; see [prompts](prompts.md).
+- \`process_exit\`: CLI died (event code); the session is unusable. Inspect failure and close.
+- \`exec_failed\`, \`exec_timeout\`: child launch/request failed or timed out.
+  Inspect current turn/file state before rerunning.
+- \`daemon_unavailable\`, \`daemon_timeout\`, \`websocket_error\`: daemon/socket
+  unavailable or request timeout. Restore connectivity, inspect state, then retry only if safe.
+- \`daemon_auth_rejected\`, \`factory_api_key_missing\`: repair server-side credentials/authentication.
+- \`daemon_method_unsupported\`: the live daemon does not implement the named method
+  at the reported protocol version. Use a supported replacement if available;
+  this is not a transport failure.
+- \`daemon_protocol_error\`: invalid wire reply/schema; check CLI/SDK compatibility.
+- \`rest_rejected\`: HTTP 4xx, fix input/access. For 409 reread and reconcile state.
+- \`rest_unavailable\`: network/5xx/timeout/malformed JSON/refused redirect;
+  retry safe reads later, reconcile uncertain writes.
+- \`context_base_url_missing\`: configure the Prem origin; no Context request was sent.
+
+\`config_invalid\` is a startup/CLI configuration code; \`unknown_error\` is the
+fallback mapping for an unrecognized application error. Upstream CLI error
+events can carry additional codes; this list covers server-defined codes,
+not every future upstream error.
+`
+
+/** The root document name. Only this part can mint a delivery proof. */
+export const ROOT_PART = "SKILL.md"
+
+/** All embedded documents keyed by part name, in stable listing order. */
+export const GUIDE_DOCUMENTS: ReadonlyArray<GuideDocumentEntry> = [
+  { part: ROOT_PART, isRoot: true, content: SKILL_MD },
+  { part: "references/session-loop.md", isRoot: false, content: SESSION_LOOP_MD },
+  { part: "references/prompts.md", isRoot: false, content: PROMPTS_MD },
+  { part: "references/delegation.md", isRoot: false, content: DELEGATION_MD },
+  { part: "references/tool-families.md", isRoot: false, content: TOOL_FAMILIES_MD },
+]
