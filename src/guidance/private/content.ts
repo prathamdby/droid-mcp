@@ -88,7 +88,7 @@ for wait behavior, event limits, streaming alternatives, and one-shot
 
 Compact advertises 16 tools: \`server_info\`, \`skill_read\`, nine local turn/prompt
 tools, and \`tools_search\`, \`tools_describe\`, \`tool_call\`, \`batch\`, \`result_read\`.
-All 287 operations remain reachable. Full advertises each operation directly;
+All installed operations remain reachable. Full advertises each operation directly;
 the five dispatch tools are compact-only.
 
 For an unknown operation: \`tools_search { query, family?, readOnly?, limit }\`
@@ -99,7 +99,7 @@ or event filter. A truncated response carries a \`ref\` for \`result_read\`.
 
 Read [tool families](references/tool-families.md) when discovering a capability,
 chaining calls, recovering a result, or handling a failure. It explains
-what the 287 tool names mean, indexes every capability family, and groups the server's
+what the tool names mean, indexes every capability family, and groups the server's
 failure codes with recovery actions.
 `
 
@@ -360,20 +360,19 @@ when computing the next sequence with integer-safe arithmetic.
 
 const TOOL_FAMILIES_MD = `# Tool families and dispatch
 
-The full profile publishes 287 tools: 154 generated from the SDK's method surface and
-133 hand-written for server/skill, local sessions, hosted REST, and Context.
-Compact advertises \`server_info\`, \`skill_read\`, nine turn/prompt tools, and five dispatch tools
-(16 total); all 287 operations remain callable by name.
+Full advertises one tool per installed operation. Compact lists the common
+turn-loop and dispatch tools. Use \`server_info\` for installed providers and
+operation counts by family, and \`tools_search\` in compact to discover operations.
 
-| Prefix     | Count | Backend/capability                                              |
-| ---------- | ----- | --------------------------------------------------------------- |
-| \`daemon_\`  | 130   | Daemon SDK methods.                                             |
-| \`droid_\`   | 24    | Remaining session SDK methods, transported through the daemon.  |
-| \`session_\` | 32    | Local hub turns, prompts, administration.                       |
-| \`rest_\`    | 81    | Hosted Factory REST API.                                        |
-| \`context_\` | 18    | Prem Context API.                                               |
-| \`server_\`  | 1     | \`server_info\`: version, protocols, profile/counts, cap, daemon. |
-| \`skill_\`   | 1     | \`skill_read\`: read the embedded droid skill markdown.           |
+| Prefix     | Backend/capability                                             |
+| ---------- | -------------------------------------------------------------- |
+| \`daemon_\`  | Daemon SDK methods.                                            |
+| \`droid_\`   | Remaining session SDK methods, transported through the daemon. |
+| \`session_\` | Local hub turns, prompts, administration.                      |
+| \`rest_\`    | Hosted Factory REST API.                                       |
+| \`context_\` | Prem Context API.                                              |
+| \`server_\`  | \`server_info\`: profile, counts, providers, and autonomy cap.    |
+| \`skill_\`   | \`skill_read\`: read the embedded Droid skill.                    |
 
 Generated names replace dots with underscores: \`daemon.sf.list_workstreams\`
 becomes \`daemon_sf_list_workstreams\`. Inputs and replies use SDK schemas.
@@ -385,7 +384,7 @@ that loop; these seven have no generated \`droid_*\` tool.
 ## Skill-read gate
 
 With \`--require-skill=true\` (default), read the root skill before session and
-work-starting tools. All 32 \`session_*\` operations retain their gate, including
+work-starting tools. All \`session_*\` operations retain their gate, including
 local reads and controls. These 12 operations also require the read:
 
 - \`daemon_initialize_session\`, \`daemon_load_session\`, \`daemon_add_user_message\`

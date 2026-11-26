@@ -14,17 +14,17 @@ Read https://raw.githubusercontent.com/prathamdby/droid-mcp/main/SETUP.md and fo
 
 The server exposes operations in seven families. The available operations depend on the installed providers.
 
-| Prefix     | Count | What the tools cover                                                                                                     |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------ |
-| `daemon_`  | 129   | Generated. The long-running `droid daemon`: its sessions, automations, worktrees, and MCP servers.                       |
-| `droid_`   | 24    | Generated. Session-scoped SDK methods, excluding session-owned and confirmed daemon-unserved methods.                    |
-| `session_` | 13    | The local turn loop, prompts, and per-session administration.                                                            |
-| `rest_`    | 81    | The hosted Factory API: computers, Environments, hosted sessions, wiki, CI, billing, organization, and service accounts. |
-| `context_` | 18    | The Context API on a Prem origin: spaces, documents, files, and stored session records.                                  |
-| `server_`  | 1     | `server_info`.                                                                                                           |
-| `skill_`   | 1     | `skill_read`.                                                                                                            |
+| Prefix     | What the tools cover                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `daemon_`  | The long-running `droid daemon`: sessions, automations, worktrees, and MCP servers.                                      |
+| `droid_`   | Session-scoped SDK methods served by the daemon.                                                                         |
+| `session_` | The local turn loop, prompts, and per-session administration.                                                            |
+| `rest_`    | The hosted Factory API: computers, Environments, hosted sessions, wiki, CI, billing, organization, and service accounts. |
+| `context_` | The Context API on a Prem origin: spaces, documents, files, and stored session records.                                  |
+| `server_`  | `server_info`.                                                                                                           |
+| `skill_`   | `skill_read`.                                                                                                            |
 
-The 81 `rest_*` tools cover the 77 operations of the published Factory OpenAPI document (version 0.1.0), the two machine-template operations the SDK still calls, and the two `/limits` billing operations Droid CLI and the Factory App call.
+Call `server_info` for the active installation's operation counts, including counts by family.
 
 ### Tool profiles
 
@@ -119,36 +119,25 @@ Run `pnpm start --help` for the flags and environment variables supported by you
 
 ## Development
 
-| Command              | What it does                                                       |
-| -------------------- | ------------------------------------------------------------------ |
-| `pnpm start`         | Serve MCP over stdio; add `--http` for `/mcp`                      |
-| `pnpm run doctor`    | Probe an existing daemon; add `--http` to probe an HTTP listener   |
-| `pnpm typecheck`     | Run `tsc --noEmit`                                                 |
-| `pnpm lint`          | oxlint, with the anti-slop plugin in `tools/oxlint`                |
-| `pnpm fmt:check`     | Check formatting with oxfmt                                        |
-| `pnpm test`          | Run every test project that needs no model                         |
-| `pnpm codegen`       | Regenerate `src/generated/surface.ts` and `src/generated/skill.ts` |
-| `pnpm codegen:check` | Fail if a generated file is stale                                  |
+| Command              | What it does                                                     |
+| -------------------- | ---------------------------------------------------------------- |
+| `pnpm start`         | Serve MCP over stdio; add `--http` for `/mcp`                    |
+| `pnpm run doctor`    | Probe an existing daemon; add `--http` to probe an HTTP listener |
+| `pnpm typecheck`     | Run `tsc --noEmit`                                               |
+| `pnpm lint`          | oxlint, with the anti-slop plugin in `tools/oxlint`              |
+| `pnpm fmt:check`     | Check formatting with oxfmt                                      |
+| `pnpm test`          | Run every test project that needs no model                       |
+| `pnpm codegen`       | Regenerate the pinned Factory SDK codecs                         |
+| `pnpm codegen:check` | Fail if a generated file is stale                                |
 
-Tests split by what they need. The `unit`, `http`, `process`, and `integration` projects run against fakes and a real server process. The `live` project needs a real model and a real daemon and stays off by default.
+The `unit` and `proofs` test projects do not need a live model.
 
 Codegen uses TypeScript 6's compiler API. TypeScript 7 replaces that API and is
 not a drop-in upgrade. Node type definitions stay on the Node 24 runtime baseline.
 Optional tool inputs must be omitted when unused; `null` is accepted only where
 the schema explicitly allows it, such as clearing an Environment's setup script.
 
-The source layout:
-
-```text
-src/
-├── main.ts              # doctor | serve
-├── config.ts            # flags and env, no Effect
-├── http/                # Streamable HTTP and bearer auth
-├── droid/               # exec client, turn hub, prompts, daemon, REST and Context
-├── tools/               # hand-written tools plus one generated tool per SDK method
-├── generated/           # codegen output, do not edit
-└── skill/droid/         # the skill markdown, embedded at build time
-```
+The [CLI entry point](src/products/private/cli.ts) lives in [`src/products/`](src/products/), alongside configuration, product assembly, and the HTTP and stdio transports. [`src/mcp/`](src/mcp/) owns the MCP protocol, [`src/presentation/`](src/presentation/) owns tool profiles and dispatch, and [`src/guidance/`](src/guidance/) owns the embedded skill. The generated SDK codecs live in [`src/factory-dialect/`](src/factory-dialect/). See [the module roster](AGENTS.md#module-roster-and-hidden-secrets) for the rest of the source tree.
 
 ## License
 
