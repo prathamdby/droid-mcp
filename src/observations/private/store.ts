@@ -1,5 +1,6 @@
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
 
 import { type Released, releasedPayload } from "../../disclosure/index.ts"
 
@@ -40,9 +41,11 @@ export interface ObservationStore {
   /**
    * Appends an event, assigning it the current head sequence, evicting the
    * oldest entries while either budget is exceeded, and waking every waiter.
-   * Returns the assigned sequence.
+   * An event whose own cost exceeds `retentionByteLimit` is refused before
+   * any mutation: no sequence is consumed and no retained history is
+   * evicted. Returns the assigned sequence, or none when refused.
    */
-  append(event: Released<"event">): number
+  append(event: Released<"event">): Option.Option<number>
   /**
    * Entries with `seq >= fromSeq` in causal order. Does not re-add evicted
    * history; readers resolve gaps through the snapshot watermark.
@@ -57,6 +60,8 @@ export interface ObservationStore {
   owns(seq: number): boolean
   /** Number of entries dropped by eviction since the store opened. */
   evictedCount(): number
+  /** Byte budget a single appended event may never exceed. */
+  readonly retentionByteLimit: number
   /** Await the next append or close. Resolves with no payload. */
   awaitSignal(): Effect.Effect<void>
   /**
@@ -89,6 +94,9 @@ export const createStore = (options: StoreOptions): ObservationStore => arrayRin
 /**
  * Array-ring backing store. Retention is bounded by both `maxEvents` and
  * `maxBytes`; either budget alone can force eviction of the oldest entries.
+ * One event above the whole `maxBytes` budget is refused rather than
+ * admitted, because admitting it would evict every older entry and then
+ * itself, emptying the store for no retained value.
  */
 export const arrayRingStore = (options: StoreOptions): ObservationStore => {
   const entries: Array<StoreEntry> = []
@@ -106,9 +114,14 @@ export const arrayRingStore = (options: StoreOptions): ObservationStore => {
 
   return {
     append: (event) => {
+      const cost = entryBytes(event)
+
+      // Refuse before mutating: an oversize event must not consume a
+      // sequence or evict retained history.
+      if (cost > options.maxBytes) return Option.none()
+
       const seq = head
       head += 1
-      const cost = entryBytes(event)
       entries.push({ seq, event, bytes: cost })
       bytes += cost
 
@@ -126,7 +139,7 @@ export const arrayRingStore = (options: StoreOptions): ObservationStore => {
 
       wake()
 
-      return seq
+      return Option.some(seq)
     },
 
     entriesFrom: (fromSeq) => entries.filter((entry) => entry.seq >= fromSeq),
@@ -139,6 +152,8 @@ export const arrayRingStore = (options: StoreOptions): ObservationStore => {
     owns: (seq) => Number.isInteger(seq) && seq >= 0 && seq < head,
 
     evictedCount: () => dropped,
+
+    retentionByteLimit: options.maxBytes,
 
     awaitSignal: () => Deferred.await(signal),
 

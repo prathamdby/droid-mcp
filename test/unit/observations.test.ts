@@ -17,6 +17,7 @@ import {
   releasedJson,
 } from "../../src/disclosure/index.ts"
 import {
+  EventTooLarge,
   HistoryClosed,
   type HistoryOptions,
   InvalidPosition,
@@ -238,6 +239,51 @@ describe("retention eviction", () => {
     // Whatever survived is the causal tail, in order.
     expect(values).toEqual([...values].sort((a, b) => a - b))
     expect(values[values.length - 1]).toBe(4)
+  })
+
+  it("refuses one event over the byte budget without evicting retained history", async () => {
+    const services = makeServices()
+    // A 600-byte budget retains the two ~250-byte events below; the refused
+    // event alone is larger than the whole budget.
+    const feed = await openFeed(services, { maxBytes: 600 })
+
+    for (const n of [1, 2]) {
+      const event = await releaseEvent(services.disclosure, { n, data: "x".repeat(200) })
+
+      await Effect.runPromise(services.observations.append(feed, event))
+    }
+
+    const before = await Effect.runPromise(services.observations.observe(feed, null, 0))
+
+    expect(before.gap).toBe(false)
+    expect(before.omittedCount).toBe(0)
+
+    const oversize = await releaseEvent(services.disclosure, {
+      n: 3,
+      data: "y".repeat(2_000),
+    })
+
+    const refusal = Effect.runSyncExit(services.observations.append(feed, oversize))
+    const error = expectFailure(refusal)
+
+    expect(error).toBeInstanceOf(EventTooLarge)
+
+    if (error instanceof EventTooLarge) {
+      expect(error.limit).toBe(600)
+    }
+
+    // Retained history is untouched: no eviction, no gap, no head advance,
+    // and a subsequent normal append resumes from the unchanged sequence.
+    const after = await Effect.runPromise(services.observations.observe(feed, null, 0))
+
+    expect(after.gap).toBe(false)
+    expect(after.omittedCount).toBe(0)
+    expect(after.items.map(jsonOf)).toEqual(before.items.map(jsonOf))
+
+    const resumed = await releaseEvent(services.disclosure, { n: 4, data: "z".repeat(100) })
+    const position = await Effect.runPromise(services.observations.append(feed, resumed))
+
+    expect(positionOffset(position)).toBe(3)
   })
 
   it("reports no gap when reading from a position at or past the retained watermark", async () => {

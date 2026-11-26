@@ -45,6 +45,7 @@ const STORE_RELATIVE = join("observations", "private", "store.ts")
 
 const REPLACEMENT_STORE = `import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
 
 import { type Released, releasedPayload } from "../../disclosure/index.ts"
 
@@ -60,11 +61,12 @@ export interface StoreSnapshot {
 }
 
 export interface ObservationStore {
-  append(event: Released<"event">): number
+  append(event: Released<"event">): Option.Option<number>
   entriesFrom(fromSeq: number): ReadonlyArray<StoreEntry>
   snapshot(): StoreSnapshot
   owns(seq: number): boolean
   evictedCount(): number
+  retentionByteLimit: number
   awaitSignal(): Effect.Effect<void>
   seal(): void
   readonly sealed: boolean
@@ -206,16 +208,21 @@ export const segmentedLinkedStore = (options: StoreOptions): ObservationStore =>
 
   return {
     append: (event) => {
+      const cost = entryBytes(event)
+
+      // Refuse an event above the whole byte budget before any mutation,
+      // exactly like the array ring this file replaces.
+      if (cost > options.maxBytes) return Option.none()
+
       const seq = headSeq
       headSeq += 1
-      const cost = entryBytes(event)
       linkTail({ seq, event, bytes: cost })
       bytes += cost
 
       evictWhileOverBudget()
       wake()
 
-      return seq
+      return Option.some(seq)
     },
 
     entriesFrom: (fromSeq) => {
@@ -244,6 +251,8 @@ export const segmentedLinkedStore = (options: StoreOptions): ObservationStore =>
     owns: (seq) => Number.isInteger(seq) && seq >= 0 && seq < headSeq,
 
     evictedCount: () => dropped,
+
+    retentionByteLimit: options.maxBytes,
 
     awaitSignal: () => Deferred.await(signal),
 

@@ -14,10 +14,15 @@
  * retained history. Nothing here names a ring buffer, a global counter, a
  * resource URI or a turn boundary: the module deals in feeds, positions and
  * pages only.
+ *
+ * An event whose own encoded cost exceeds the feed's byte budget is
+ * refused before any mutation: no sequence is consumed and no retained
+ * history is evicted, so one oversized event can never empty the feed.
  */
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
@@ -153,6 +158,12 @@ export class InvalidPosition extends Schema.TaggedError<InvalidPosition>()("Inva
   message: Schema.String,
 }) {}
 
+/** One event whose own encoded cost exceeds the feed's byte budget. */
+export class EventTooLarge extends Schema.TaggedError<EventTooLarge>()("EventTooLarge", {
+  message: Schema.String,
+  limit: Schema.Number,
+}) {}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -163,7 +174,7 @@ export interface ObservationsApi {
   readonly append: (
     feed: History,
     event: Released<"event">,
-  ) => Effect.Effect<Position, HistoryClosed>
+  ) => Effect.Effect<Position, HistoryClosed | EventTooLarge>
   readonly observe: (
     feed: History,
     after: Position | null,
@@ -273,7 +284,7 @@ export const observationsLayer: Layer.Layer<Observations, never, Disclosure> = L
       })
 
     const append: ObservationsApi["append"] = (feed, event) =>
-      Effect.suspend(() => {
+      Effect.suspend((): Effect.Effect<Position, HistoryClosed | EventTooLarge> => {
         const store = readFeed(feed).store
 
         if (store.sealed) {
@@ -284,7 +295,19 @@ export const observationsLayer: Layer.Layer<Observations, never, Disclosure> = L
 
         const seq = store.append(event)
 
-        return Effect.succeed(mintPosition(feed, seq + 1))
+        if (Option.isNone(seq)) {
+          return Effect.fail(
+            new EventTooLarge({
+              message:
+                "event exceeds the feed's byte budget of " +
+                store.retentionByteLimit +
+                " bytes and was not retained",
+              limit: store.retentionByteLimit,
+            }),
+          )
+        }
+
+        return Effect.succeed(mintPosition(feed, seq.value + 1))
       })
 
     const observe: ObservationsApi["observe"] = (feed, after, waitMs) =>
