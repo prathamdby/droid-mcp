@@ -5,19 +5,19 @@
   "description": "MCP server for Factory Droid, written in Effect and served over Streamable HTTP",
   "type": "module",
   "scripts": {
-    "start": "node --experimental-strip-types src/main.ts serve",
-    "doctor": "node --experimental-strip-types src/main.ts doctor",
+    "start": "node --experimental-strip-types src/products/private/cli.ts serve",
+    "doctor": "node --experimental-strip-types src/products/private/cli.ts doctor",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
-    "test:http": "vitest run --project http",
-    "test:live": "DROID_MCP_LIVE_DAEMON=1 vitest run --project live",
+    "test:proofs": "vitest run --project proofs",
     "test:lint-rules": "node --experimental-strip-types scripts/test-lint-rules.ts",
+    "check:boundaries": "node --experimental-strip-types scripts/check-boundaries.ts",
     "lint": "oxlint --deny-warnings --report-unused-disable-directives-severity=error",
     "fmt:check": "oxfmt --check .",
     "fmt": "oxfmt --write .",
-    "codegen": "node --experimental-strip-types scripts/codegen.ts && node --experimental-strip-types scripts/embed-skill.ts",
-    "codegen:check": "node --experimental-strip-types scripts/codegen.ts --check && node --experimental-strip-types scripts/embed-skill.ts --check"
+    "codegen": "node --experimental-strip-types scripts/extract-dialect.ts",
+    "codegen:check": "node --experimental-strip-types scripts/extract-dialect.ts --check"
   },
   "dependencies": {
     "@effect/platform-node": "4.1.4",

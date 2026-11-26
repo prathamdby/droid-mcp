@@ -1,15 +1,19 @@
 /**
- * Generates `src/generated/surface.ts` from the Droid SDK's type declarations.
+ * Build-time extractor for the reviewed wire dialect.
  *
- * The SDK declares one Zod request schema per wire method. Each declaration is
- * a `ZodObject<Shape, …>` whose `Shape` carries the method literal and the
- * params schema reference. This script reads those declarations with the
- * TypeScript compiler API and converts the Zod types back into JSON Schema
- * 2020-12 documents, which `effect/SchemaRepresentation` turns into Effect
- * schemas at runtime.
+ * Reads the pinned SDK's bundled type declarations with the TypeScript
+ * compiler API, verifies the pinned version and declaration digest, and emits
+ * JSON Schema 2020-12 params/result codecs for exactly the methods the
+ * reviewed manifest allows. A method absent from the manifest is never
+ * extracted; an allowlisted method whose declaration is missing or uses
+ * unsupported syntax fails the build. Runtime code under `src/` never
+ * imports this script, the compiler or the declarations.
  *
- * Run `pnpm codegen` to write the file, `pnpm codegen:check` to fail on drift.
+ * Run `node --experimental-strip-types scripts/extract-dialect.ts` to write
+ * the codecs, or pass `--check` to fail on pin drift, missing entries or a
+ * stale output file.
  */
+import { createHash } from "node:crypto"
 import { readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
@@ -18,9 +22,16 @@ import { Schema } from "effect"
 import { format } from "oxfmt"
 import ts from "typescript"
 
+import {
+  PINNED_DECLARATION_SHA256,
+  PINNED_SDK_VERSION,
+  REVIEWED_ENTRIES,
+} from "../src/factory-dialect/private/reviewed-manifest.ts"
+
 const require = createRequire(import.meta.url)
 
-/** A JSON Schema document, as far as this generator produces one. */
+const OUTPUT = "src/factory-dialect/private/generated-codecs.ts"
+
 type JsonSchema =
   | string
   | number
@@ -29,30 +40,47 @@ type JsonSchema =
   | ReadonlyArray<JsonSchema>
   | { readonly [key: string]: JsonSchema }
 
-interface WireEntry {
-  readonly tool: string
-  readonly method: string
-  readonly kind: "daemon" | "droid"
-  readonly family: string
-  readonly description: string
-  readonly params: JsonSchema
-  readonly result: JsonSchema
+const fail = (message: string): never => {
+  throw new Error("extract-dialect: " + message)
 }
-
-const OUTPUT = "src/generated/surface.ts"
 
 /** Resolves the SDK's internal declaration file; the package exports only the entry. */
 const declarationFile = (): string => {
   const entry = require.resolve("@factory/droid-sdk")
   const dist = dirname(entry)
+
+  // SAFETY: the SDK ships a package.json with a string version field; the
+  // version comparison immediately below rejects anything that is not the
+  // pinned release, so a malformed manifest fails closed here.
+  const manifest = JSON.parse(readFileSync(join(dist, "..", "package.json"), "utf8")) as {
+    readonly version?: string
+  }
+
+  if (manifest.version !== PINNED_SDK_VERSION) {
+    fail(
+      "SDK version drift: pinned " +
+        PINNED_SDK_VERSION +
+        " but installed " +
+        String(manifest.version),
+    )
+  }
+
   const name = readdirSync(dist).find((file) => /^index-.*\.d\.ts$/.test(file))
 
-  if (name === undefined) throw new Error("no bundled declaration file next to " + entry)
+  if (name === undefined) return fail("no bundled declaration file next to " + entry)
 
   return join(dist, name)
 }
 
-const program = ts.createProgram([declarationFile()], {
+const locatedFile = declarationFile()
+
+const digest = createHash("sha256").update(readFileSync(locatedFile)).digest("hex")
+
+if (digest !== PINNED_DECLARATION_SHA256) {
+  fail("declaration digest drift: pinned " + PINNED_DECLARATION_SHA256 + " but computed " + digest)
+}
+
+const program = ts.createProgram([locatedFile], {
   strict: true,
   skipLibCheck: true,
   target: ts.ScriptTarget.ESNext,
@@ -60,15 +88,17 @@ const program = ts.createProgram([declarationFile()], {
 })
 
 const checker = program.getTypeChecker()
-const source = program.getSourceFile(declarationFile())
+const sourceFile = program.getSourceFile(locatedFile)
 
-if (source === undefined) throw new Error("declaration file did not load")
+if (sourceFile === undefined) throw new Error("extract-dialect: declaration file did not load")
+
+const source: ts.SourceFile = sourceFile
 
 interface DeclarationEntry {
-  kind: "variable" | "type" | "interface"
-  node: ts.Node
-  type?: ts.TypeNode
-  members?: ReadonlyArray<ts.TypeElement>
+  readonly kind: "variable" | "type" | "interface"
+  readonly node: ts.Node
+  readonly type?: ts.TypeNode
+  readonly members?: ReadonlyArray<ts.TypeElement>
 }
 
 const declarations = new Map<string, DeclarationEntry>()
@@ -77,10 +107,16 @@ for (const statement of source.statements) {
   if (ts.isVariableStatement(statement)) {
     for (const declaration of statement.declarationList.declarations) {
       if (!ts.isIdentifier(declaration.name)) continue
-      const entry: DeclarationEntry = { kind: "variable", node: declaration }
 
-      if (declaration.type !== undefined) entry.type = declaration.type
-      declarations.set(declaration.name.text, entry)
+      if (declaration.type === undefined) {
+        declarations.set(declaration.name.text, { kind: "variable", node: declaration })
+      } else {
+        declarations.set(declaration.name.text, {
+          kind: "variable",
+          node: declaration,
+          type: declaration.type,
+        })
+      }
     }
 
     continue
@@ -238,7 +274,10 @@ interface ConvertContext {
 
 const MAX_DEPTH = 48
 
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json))
+const JsonValueSchema = Schema.Record(Schema.String, Schema.Json)
+
+const isRecord = (value: JsonSchema): value is { readonly [key: string]: JsonSchema } =>
+  Schema.is(JsonValueSchema)(value) && !Array.isArray(value)
 
 const withSeen = (context: ConvertContext, name: string): ConvertContext => ({
   seen: new Set([...context.seen, name]),
@@ -545,31 +584,14 @@ const objectNodeOf = (node: ts.TypeNode | undefined): ts.TypeNode | undefined =>
   return node.typeArguments?.[0]
 }
 
-interface ParamsAndResult {
+interface ExtractedCodec {
   readonly params: JsonSchema
   readonly result: JsonSchema
 }
 
-const paramsAndResult = (
-  schemaName: string,
-  method: string,
-  members: ReadonlyArray<ts.TypeElement>,
-): ParamsAndResult => {
-  const context: ConvertContext = { seen: new Set([schemaName]), depth: 0 }
-  let params: JsonSchema = { type: "object", properties: {}, additionalProperties: false }
+const EMPTY_OBJECT: JsonSchema = { type: "object", properties: {}, additionalProperties: false }
 
-  for (const member of members) {
-    if (!ts.isPropertySignature(member) || member.type === undefined) continue
-
-    const key = member.name !== undefined ? member.name.getText(source) : ""
-
-    if (key === "params") params = convertNode(member.type, context)
-  }
-
-  return { params: paramsRoot(params), result: resultOf(schemaName, method) }
-}
-
-const EMPTY_PARAMS: JsonSchema = { type: "object", properties: {}, additionalProperties: false }
+const EMPTY_RESULT: JsonSchema = { type: "object", additionalProperties: true }
 
 /**
  * The object branches under a union or intersection, however deeply the SDK
@@ -589,12 +611,12 @@ const objectBranches = (value: JsonSchema): ReadonlyArray<JsonSchema> => {
 }
 
 /**
- * MCP requires an object root. A union or intersection of objects merges into
- * one object: every property any branch declares, all optional, because the
- * daemon validates the combination it actually receives.
+ * A union or intersection of objects merges into one object: every property
+ * any branch declares, all optional, because the peer validates the
+ * combination it actually receives.
  */
 const paramsRoot = (value: JsonSchema): JsonSchema => {
-  if (!isRecord(value)) return EMPTY_PARAMS
+  if (!isRecord(value)) return EMPTY_OBJECT
 
   if (value.type === "object") return value
 
@@ -610,7 +632,7 @@ const paramsRoot = (value: JsonSchema): JsonSchema => {
     }
   }
 
-  if (properties.size === 0) return EMPTY_PARAMS
+  if (properties.size === 0) return EMPTY_OBJECT
 
   return {
     type: "object",
@@ -619,7 +641,82 @@ const paramsRoot = (value: JsonSchema): JsonSchema => {
   }
 }
 
-const resultOf = (schemaName: string, method: string): JsonSchema => {
+interface RequestDecl {
+  readonly schemaName: string
+  readonly paramsNode: ts.TypeNode | undefined
+}
+
+/**
+ * Resolves the params node for an allowlisted method. Most methods declare a
+ * request schema whose shape carries the method literal; server-directed
+ * methods resolve their literal through the checker. Methods whose request
+ * schema is missing fall back to a bare `<Name>RequestParamsSchema` constant.
+ */
+const requestDeclOf = (method: string): RequestDecl | undefined => {
+  for (const [schemaName, entry] of declarations) {
+    if (!schemaName.endsWith("RequestSchema") || entry.kind !== "variable") continue
+
+    const members = objectMembers(objectNodeOf(entry.type))
+
+    if (members.length === 0) continue
+
+    let declared: string | undefined
+    let paramsNode: ts.TypeNode | undefined
+
+    for (const member of members) {
+      if (!ts.isPropertySignature(member) || member.type === undefined) continue
+
+      const key = member.name !== undefined ? member.name.getText(source) : ""
+
+      if (key === "method") declared = zodLiteral(member.type)
+
+      if (key === "params") paramsNode = member.type
+    }
+
+    if (declared === method) return { schemaName, paramsNode }
+  }
+
+  return undefined
+}
+
+/** Locates a bare params schema constant such as `DaemonAuthenticateRequestParamsSchema`. */
+const bareParamsOf = (method: string): ts.TypeNode | undefined => {
+  const candidates = Array.from(declarations.keys()).filter(
+    (name) => name.endsWith("RequestParamsSchema") && declarations.get(name)?.kind === "variable",
+  )
+
+  for (const candidate of candidates) {
+    const entry = declarations.get(candidate)
+
+    if (entry?.type === undefined) continue
+
+    // The constant is a params shape when converting it yields an object whose
+    // sibling request schema names the method. We match by naming convention:
+    // strip "ParamsSchema" and check the request schema resolves the method.
+    const requestName = candidate.replace(/ParamsSchema$/, "Schema")
+    const requestEntry = declarations.get(requestName)
+
+    if (requestEntry === undefined) continue
+
+    const members = objectMembers(objectNodeOf(requestEntry.type))
+
+    let declared: string | undefined
+
+    for (const member of members) {
+      if (!ts.isPropertySignature(member) || member.type === undefined) continue
+
+      if ((member.name !== undefined ? member.name.getText(source) : "") === "method") {
+        declared = zodLiteral(member.type)
+      }
+    }
+
+    if (declared === method) return entry.type
+  }
+
+  return undefined
+}
+
+const resultOf = (schemaName: string): JsonSchema => {
   const resultName = schemaName.replace(/RequestSchema$/, "ResultSchema")
   const resultEntry = declarations.get(resultName)
   const resultMembers = objectNodeOf(resultEntry?.type)
@@ -630,128 +727,130 @@ const resultOf = (schemaName: string, method: string): JsonSchema => {
 
   const result = convertReference(resultName, { seen: new Set(), depth: 0 })
 
-  return result === anySchema ? anySchemaOf(method) : result
+  return result === anySchema ? EMPTY_RESULT : result
 }
 
-/** Result schema fallback: any object, with a note pointing at the wire method. */
-const anySchemaOf = (method: string): JsonSchema => ({
-  type: "object",
-  additionalProperties: true,
-  description: "Result of " + method + "; its shape is declared by the daemon.",
-})
+/** The methods this extraction must produce; everything else is ignored. */
+const wanted = new Map(REVIEWED_ENTRIES.map((entry) => [entry.method, entry]))
 
-const familyOf = (method: string): string => {
-  const segments = method.split(".")
-  const rest = segments.slice(1)
+const extracted = new Map<string, ExtractedCodec>()
+const missing: Array<string> = []
 
-  if (rest.length === 0) return "misc"
-
-  return rest[0]
-}
-
-/**
- * Verbs that remove or discard state. Matched on the method's last segment
- * so `unarchive_session` is not `archive` and `list_skills` is not `kill`.
- */
-const DESTRUCTIVE_VERBS = new Set(["delete", "remove", "kill", "uninstall", "archive", "discard"])
-
-/**
- * Actions that delete or overwrite state without using those verbs.
- * `cleanup_worktree` can delete local and remote branches, including with
- * force. `execute_rewind` restores and deletes files. `git_push` publishes
- * commits to a shared remote. `write_workspace_file_content` replaces a
- * file. `write_terminal_data` types into a live shell. `apply_automation_config`,
- * `apply_user_preferences`, and `update_mcp_config` replace stored configuration.
- */
-const DESTRUCTIVE_ACTIONS = new Set([
-  "cleanup_worktree",
-  "execute_rewind",
-  "git_push",
-  "write_workspace_file_content",
-  "write_terminal_data",
-  "apply_automation_config",
-  "apply_user_preferences",
-  "update_mcp_config",
-])
-
-const isDestructive = (method: string): boolean => {
-  const action = method.slice(method.lastIndexOf(".") + 1)
-  const separator = action.indexOf("_")
-  const verb = separator === -1 ? action : action.slice(0, separator)
-
-  if (DESTRUCTIVE_VERBS.has(verb)) return true
-
-  return DESTRUCTIVE_ACTIONS.has(action)
-}
-
-/** `daemon.sf.delete_workstream` reads as "Sf delete workstream". */
-const summaryOf = (method: string): string => {
-  const words = method.split(".").slice(1).join(" ").replaceAll("_", " ")
-
-  return words.charAt(0).toUpperCase() + words.slice(1)
-}
-
-/**
- * The input schema already names every field, so the description carries the
- * action, the wire method, and the destructive warning only.
- */
-const descriptionOf = (method: string): string => {
-  const lines = [summaryOf(method) + " (SDK method " + method + ")."]
-
-  if (isDestructive(method)) lines.push("Destructive; confirm before calling.")
-
-  return lines.join(" ")
-}
-
-const entries: Array<WireEntry> = []
-
-for (const [schemaName, entry] of declarations) {
-  if (!schemaName.endsWith("RequestSchema") || entry.kind !== "variable") continue
-
-  const members = objectMembers(objectNodeOf(entry.type))
-
-  if (members.length === 0) continue
-
-  let method: string | undefined
-
-  for (const member of members) {
-    if (!ts.isPropertySignature(member) || member.type === undefined) continue
-
-    const key = member.name !== undefined ? member.name.getText(source) : ""
-
-    if (key === "method") method = zodLiteral(member.type)
+for (const [method, entry] of wanted) {
+  if (method === "droid.get_settings") {
+    // Reviewed evidence: the pinned SDK declares no schema for this method.
+    // No codec exists; the binding stays unusable.
+    continue
   }
 
-  if (method === undefined) continue
+  if (entry.direction === "notification" || entry.direction === "server_request") {
+    // Inbound bindings carry no result codec; validation is hand-written in
+    // the dialect runtime because the notification shapes are open unions.
+    extracted.set(method, { params: EMPTY_OBJECT, result: EMPTY_RESULT })
 
-  if (!method.startsWith("daemon.") && !method.startsWith("droid.")) continue
+    continue
+  }
 
-  const converted = paramsAndResult(schemaName, method, members)
+  const decl = requestDeclOf(method)
 
-  entries.push({
-    tool: method.replace(/\./g, "_"),
-    method,
-    kind: method.startsWith("daemon.") ? "daemon" : "droid",
-    family: familyOf(method),
-    description: descriptionOf(method),
-    params: converted.params,
-    result: converted.result,
-  })
+  if (decl === undefined) {
+    const bare = bareParamsOf(method)
+
+    if (bare === undefined) {
+      missing.push(method)
+
+      continue
+    }
+
+    const params = convertNode(bare, { seen: new Set([method]), depth: 0 })
+
+    extracted.set(method, { params: paramsRoot(params), result: EMPTY_RESULT })
+
+    continue
+  }
+
+  const context: ConvertContext = { seen: new Set([decl.schemaName]), depth: 0 }
+
+  const params =
+    decl.paramsNode === undefined ? EMPTY_OBJECT : paramsRoot(convertNode(decl.paramsNode, context))
+
+  extracted.set(method, { params, result: resultOf(decl.schemaName) })
 }
 
-entries.sort((left, right) => (left.tool < right.tool ? -1 : 1))
+if (missing.length > 0) {
+  fail(
+    "allowlisted methods missing from the pinned declarations: " +
+      missing.sort().join(", ") +
+      "; review the manifest against the SDK before allowing them",
+  )
+}
 
-const unique = new Map(entries.map((entry) => [entry.tool, entry]))
+const codecs = Array.from(extracted.entries())
+  .sort(([left], [right]) => (left < right ? -1 : 1))
+  .map(([method, codec]) => {
+    const entry = wanted.get(method) ?? fail("internal: extracted an unreviewed method " + method)
 
-if (unique.size !== entries.length) throw new Error("duplicate tool names generated")
+    return {
+      method,
+      direction: entry.direction,
+      served: entry.served,
+      params: codec.params,
+      result: codec.result,
+    }
+  })
 
-const sourceText = `// Generated by scripts/codegen.ts. Do not edit.
+/** Serializes a JSON Schema value with stable indentation, no runtime types. */
+const render = (value: JsonSchema, indent: string): string => {
+  if (value === null) return "null"
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]"
+
+    const items = value.map((item) => indent + "  " + render(item, indent + "  "))
+
+    return "[\n" + items.join(",\n") + "\n" + indent + "]"
+  }
+
+  if (isRecord(value)) {
+    const keys = Object.keys(value)
+
+    if (keys.length === 0) return "{}"
+
+    const rows = keys.map(
+      (key) => indent + "  " + JSON.stringify(key) + ": " + render(value[key], indent + "  "),
+    )
+
+    return "{\n" + rows.join(",\n") + "\n" + indent + "}"
+  }
+
+  return JSON.stringify(value)
+}
+
+const codecRows = codecs
+  .map((codec) => {
+    const lines = [
+      "  {",
+      "    method: " + JSON.stringify(codec.method) + ",",
+      "    direction: " + JSON.stringify(codec.direction) + ",",
+      "    served: " + String(codec.served) + ",",
+      "    params: " + render(codec.params, "    ") + ",",
+      "    result: " + render(codec.result, "    ") + ",",
+      "  }",
+    ]
+
+    return lines.join("\n")
+  })
+  .join(",\n")
+
+const sourceText = `// Generated by scripts/extract-dialect.ts. Do not edit.
 //
-// Every measured wire method the SDK declares, with JSON Schema 2020-12
-// documents for its params and result. \`src/tools/generated.ts\` turns each
-// entry into one MCP tool.
+// Reviewed wire codecs for exactly the methods the manifest in
+// \`reviewed-manifest.ts\` allows, extracted from the pinned SDK declarations
+// at build time. Server-directed methods are present for completeness; the
+// runtime validates inbound notifications against hand-written schemas. An
+// absent method has no binding and cannot be dispatched.
 
-/** A JSON Schema document as this generator emits it. */
+/** A JSON Schema document, as this generator emits it. */
 export type JsonSchemaDocument =
   | string
   | number
@@ -763,29 +862,25 @@ export type JsonSchemaDocument =
 /** Every schema this generator emits has an object root. */
 export type JsonSchemaObject = { readonly [key: string]: JsonSchemaDocument }
 
-export interface WireEntry {
-  readonly tool: string
+export interface GeneratedCodec {
   readonly method: string
-  readonly kind: "daemon" | "droid"
-  readonly family: string
-  readonly description: string
+  readonly direction: "request" | "notification" | "server_request"
+  readonly served: boolean
   readonly params: JsonSchemaObject
   readonly result: JsonSchemaObject
 }
 
-/** The SDK surface: ${entries.length} wire methods. */
-export const SURFACE: ReadonlyArray<WireEntry> = ${JSON.stringify(entries, null, 2)}
-
-export const SURFACE_COUNT = ${entries.length}
+/** Reviewed codecs: ${String(codecs.length)} methods. */
+export const GENERATED_CODECS: ReadonlyArray<GeneratedCodec> = [
+${codecRows}
+]
 `
 
 const formatted = await format(OUTPUT, sourceText, { printWidth: 100, semi: false })
 
 if (formatted.errors.length > 0) {
-  throw new Error("codegen: oxfmt failed: " + JSON.stringify(formatted.errors))
+  fail("oxfmt failed: " + JSON.stringify(formatted.errors))
 }
-
-const file = formatted.code
 
 const check = process.argv.includes("--check")
 
@@ -798,15 +893,23 @@ if (check) {
     }
   })()
 
-  if (existing !== file) {
-    process.stderr.write("codegen: " + OUTPUT + " is out of date; run pnpm codegen\n")
+  if (existing !== formatted.code) {
+    process.stderr.write(
+      "extract-dialect: " + OUTPUT + " is out of date; run the extractor without --check\n",
+    )
     process.exit(1)
   }
 
   process.stdout.write(
-    "codegen: " + OUTPUT + " is current (" + String(entries.length) + " methods)\n",
+    "extract-dialect: pins verified, " +
+      OUTPUT +
+      " is current (" +
+      String(codecs.length) +
+      " codecs)\n",
   )
 } else {
-  writeFileSync(OUTPUT, file)
-  process.stdout.write("codegen: wrote " + OUTPUT + " (" + String(entries.length) + " methods)\n")
+  writeFileSync(OUTPUT, formatted.code)
+  process.stdout.write(
+    "extract-dialect: wrote " + OUTPUT + " (" + String(codecs.length) + " codecs)\n",
+  )
 }
