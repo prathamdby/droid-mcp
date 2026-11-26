@@ -1,204 +1,45 @@
-# Hosting droid-mcp
+# Host droid-mcp over HTTP
 
-This is the short version of running the server on a machine you keep: a
-dedicated user, a keys file, a systemd unit, TLS in front, and one client entry.
+Complete [setup](../SETUP.md) through a successful foreground HTTP check before installing a service or proxy. This guide covers Linux with systemd and gives launch configuration notes for macOS. It does not provide a native Windows service recipe.
 
-## 1. Install
+## Launch configuration
 
-Node 24 is required; the sources run through Node's type stripping, so there is
-no build step.
+Keep the listener on `127.0.0.1`. Run as a non-root account that can read the checkout and has the intended access to each allowed workspace. Use the same options that passed foreground verification. Supply `DROID_MCP_KEYS` and `FACTORY_API_KEY` through the service environment or a private environment file readable by the service account (mode `0600`, in a private directory). Add provider origins only as needed. Keep secrets out of the service definition and diagnostics. Use absolute executable and checkout paths; service managers do not inherit your interactive shell's `PATH`.
 
-```sh
-sudo useradd --create-home --shell /usr/sbin/nologin droid
-sudo -u droid git clone <this repository> /home/droid/droid-mcp
-sudo -u droid sh -c 'cd /home/droid/droid-mcp && pnpm install --frozen-lockfile'
-```
+### Linux systemd
 
-The `droid` CLI must be on the service user's `PATH`; install it as that user and
-check it:
-
-```sh
-sudo -u droid droid --version
-```
-
-Release surface checked on 2026-11-13: Droid CLI `1.9.0`, SDK `0.10.0`, and SDK
-protocol `1.269.0`. The inventory remains 288 operations, advertised as 15 tools
-in the default compact profile or 288 in the full profile.
-
-Create the runtime directory the daemon socket lives in:
-
-```sh
-sudo install -d -o droid -g droid /var/lib/droid-mcp /run/droid-mcp
-sudo -u droid sh -c 'echo "export XDG_RUNTIME_DIR=/run/droid-mcp" >> ~/.profile'
-```
-
-## 2. Keys
-
-One key per line, no comments left unmarked:
-
-```sh
-sudo install -d -m 700 -o droid -g droid /etc/droid-mcp
-sudo -u droid sh -c 'umask 077; openssl rand -hex 32 > /etc/droid-mcp/keys'
-```
-
-Use `--keys-file /etc/droid-mcp/keys`. The server refuses to start with no keys:
-there is no unauthenticated mode.
-
-`FACTORY_API_KEY` and the Factory origins go in the environment file, not the keys
-file. The file holds secrets, so keep it readable by the service user only:
-
-```sh
-sudo -u droid sh -c 'umask 077; cat > /etc/droid-mcp/env' <<'EOF'
-FACTORY_API_KEY=fk-...
-FACTORY_BASE_URL=https://api.factory.ai
-FACTORY_CONTEXT_BASE_URL=https://prem.example.com
-FACTORY_CONTEXT_HEADERS={"x-factory-organization":"org-..."}
-EOF
-```
-
-- `FACTORY_BASE_URL` is the hosted Factory API the `rest_*` tools call. It
-  defaults to `https://api.factory.ai`, so leave it out unless you use another
-  deployment.
-- `FACTORY_CONTEXT_BASE_URL` is the Prem origin that serves the Context API.
-  Without it the `context_*` tools fail with `context_base_url_missing` and
-  everything else still works.
-- `FACTORY_CONTEXT_HEADERS` is a JSON object of string values sent with every
-  Context request. Use it for the organization header your Prem deployment
-  expects; the header name is deployment-specific. It may not set
-  `authorization`, `cookie`, `host`, or framing headers. Write the JSON on one
-  line and do not wrap it in quotes.
-
-Both base URLs must be bare origins: a scheme, a host, and an optional port,
-with no path, query, fragment, or credentials. Use `https://` for anything that
-leaves the machine, because every request carries `FACTORY_API_KEY` as a bearer
-token and Context requests also carry the configured header values. Plain
-`http://` is only for a local test server. An invalid value stops the service
-at startup with exit code 2 and a `config_invalid` line in the journal that
-names the variable but not its value.
-
-## 3. Service
-
-`/etc/systemd/system/droid-mcp.service`:
+For a user service, save `~/.config/systemd/user/droid-mcp.service`. Substitute absolute paths (below, `/home/alex` is illustrative). For a system service, use `/etc/systemd/system/droid-mcp.service`, add `User=` and `Group=` for the chosen unprivileged account, and change `WantedBy=` to `multi-user.target`. Get approval before installing a system unit.
 
 ```ini
 [Unit]
 Description=droid-mcp
-After=network-online.target
-Wants=network-online.target
 
 [Service]
-Type=simple
-User=droid
-Group=droid
-WorkingDirectory=/home/droid/droid-mcp
-Environment=XDG_RUNTIME_DIR=/run/droid-mcp
-EnvironmentFile=/etc/droid-mcp/env
-ExecStart=/usr/bin/env node --experimental-strip-types src/main.ts serve \
-  --host 127.0.0.1 \
-  --port 7337 \
-  --keys-file /etc/droid-mcp/keys \
-  --max-autonomy medium \
-  --log-level info
+WorkingDirectory=/home/alex/droid-mcp
+EnvironmentFile=/home/alex/.config/droid-mcp/env
+ExecStart=/usr/bin/node --experimental-strip-types /home/alex/droid-mcp/src/products/private/cli.ts serve --http --host 127.0.0.1 --port 7337 --no-daemon --droid-path /home/alex/.local/bin/droid --workspace-root /home/alex/project
 Restart=on-failure
-RestartSec=2
-RuntimeDirectory=droid-mcp
-RuntimeDirectoryMode=0700
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 ```
 
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now droid-mcp
-journalctl -u droid-mcp -f
-```
+For paths containing spaces, quote the corresponding unit values or arguments. To install the user service, run `systemctl --user daemon-reload` and `systemctl --user enable --now droid-mcp`. Check `systemctl --user status droid-mcp` and `journalctl --user -u droid-mcp`. Use `systemctl --user disable --now droid-mcp` to stop and disable it. A user service normally starts with the user manager; enable lingering only if the user explicitly requests start before login. For a system service, use the system manager (drop `--user` and obtain permission for privileged commands).
 
-The server logs one JSON object per event to stderr. It never logs prompts, tool
-arguments, the API key, or Context header values.
+### macOS launchd
 
-## 4. TLS
+Use a LaunchAgent if the server should start at login. In `~/Library/LaunchAgents`, set `ProgramArguments` to the absolute Node executable followed by each argument from the Linux `ExecStart` as a separate array element, substituting macOS paths. Set `WorkingDirectory` to the checkout, `RunAtLoad` to true, and use absolute, user-owned `StandardOutPath` and `StandardErrorPath`. To supply secrets without putting them in the plist, put Node's `--env-file=/absolute/private/env` argument before the script path. Use a Node-compatible env file, not shell code. Validate with `plutil -lint` before loading with `launchctl bootstrap "gui/$(id -u)" <plist>`. Check the job with `launchctl print` in that same domain and stop it with `launchctl bootout`. A system LaunchDaemon starts before login; use an explicitly approved non-root service account and administrator-managed paths. If you cannot validate that configuration, keep the foreground or login setup.
 
-The server speaks plain HTTP and expects a proxy to terminate TLS. Caddy is the
-shortest path:
+If using an owned daemon, remove `--no-daemon` and set `DROID_MCP_RUNTIME_DIR` to a short private directory that exists when the service starts. Repeat the full verification after starting through the service manager, including the test turn in the chosen workspace.
+
+## Remote client
+
+Keep the MCP listener private. Ask the user to approve the proxy hostname, TLS configuration, and network exposure before provisioning them. For example, use an existing Caddy host with working DNS and certificate provisioning:
 
 ```caddyfile
 droid.example.com {
-    reverse_proxy 127.0.0.1:7337
+    reverse_proxy /mcp 127.0.0.1:7337
 }
 ```
 
-nginx needs the streaming parts spelled out, because MCP responses can be
-`text/event-stream`:
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name droid.example.com;
-
-    ssl_certificate     /etc/letsencrypt/live/droid.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/droid.example.com/privkey.pem;
-
-    location /mcp {
-        proxy_pass http://127.0.0.1:7337;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_buffering off;
-        proxy_read_timeout 1h;
-    }
-}
-```
-
-If a browser-based client sends an `Origin`, list it with `--allow-origin` or the
-request is rejected with `403`. Command-line and desktop clients send no
-`Origin`, which is why the default (none) works.
-
-## 5. Client
-
-```json
-{
-  "mcpServers": {
-    "droid": {
-      "type": "http",
-      "url": "https://droid.example.com/mcp",
-      "headers": { "Authorization": "Bearer <key from /etc/droid-mcp/keys>" }
-    }
-  }
-}
-```
-
-On the first request the client reads `initialize.instructions`, which names the
-turn-loop tools and points at `skill://droid/SKILL.md`.
-
-## 6. Verify
-
-```sh
-# The daemon, auth, and the session count, as one JSON object.
-sudo -u droid env FACTORY_API_KEY=... node --experimental-strip-types src/main.ts doctor
-
-# A key that is not on the list gets 401.
-curl -s -o /dev/null -w '%{http_code}\n' -X POST https://droid.example.com/mcp \
-  -H 'content-type: application/json' -d '{}'
-```
-
-Then ask the client for `server_info`: it reports the version, the tool count,
-the autonomy cap, and whether the daemon is connected.
-
-## Autonomy
-
-`--max-autonomy` is the cap `session_create` enforces. `medium` is the default and
-is what most unattended setups want: the agent can edit files and run tests, and
-asks before the rest. Raise it to `high` only where the machine is disposable.
-
-## Upgrades
-
-```sh
-sudo -u droid sh -c 'cd /home/droid/droid-mcp && git pull && pnpm install --frozen-lockfile'
-sudo systemctl restart droid-mcp
-```
-
-`pnpm codegen:check` fails when the installed SDK changed shape and the generated
-surface is stale, so run it after any `@factory/droid-sdk` bump.
-Check `droid --version` against the [Factory changelog](https://docs.factory.com/changelog/release-notes)
-too. A CLI release number is not a wire protocol version; the daemon client
-adopts the version reported by its peer.
+Use `https://droid.example.com/mcp` in the remote client with the same bearer header. Preserve the header through the proxy, and avoid logging it. Do not expose port `7337` directly. The proxy does not add support for browser CORS or GET-based streaming. Verify from the remote client: unauthenticated POST returns `401`, authenticated MCP calls succeed, and a turn in the selected workspace completes.

@@ -12,33 +12,33 @@ Read https://raw.githubusercontent.com/prathamdby/droid-mcp/main/SETUP.md and fo
 
 ## What it does
 
-The server provides 287 tools in seven families. 154 are generated from the Factory Droid SDK, one per wire method, and 133 are hand-written.
+The server exposes operations in seven families. The available operations depend on the installed providers.
 
-| Prefix     | Count | What the tools cover                                                                                                     |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------ |
-| `daemon_`  | 130   | Generated. The long-running `droid daemon`: its sessions, automations, worktrees, and MCP servers.                       |
-| `droid_`   | 24    | Generated. Session-scoped SDK methods, excluding session-owned and confirmed daemon-unserved methods.                    |
-| `session_` | 32    | The local turn loop, prompts, and per-session administration.                                                            |
-| `rest_`    | 81    | The hosted Factory API: computers, Environments, hosted sessions, wiki, CI, billing, organization, and service accounts. |
-| `context_` | 18    | The Context API on a Prem origin: spaces, documents, files, and stored session records.                                  |
-| `server_`  | 1     | `server_info`.                                                                                                           |
-| `skill_`   | 1     | `skill_read`.                                                                                                            |
+| Prefix     | What the tools cover                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `daemon_`  | The long-running `droid daemon`: sessions, automations, worktrees, and MCP servers.                                      |
+| `droid_`   | Session-scoped SDK methods served by the daemon.                                                                         |
+| `session_` | The local turn loop, prompts, and per-session administration.                                                            |
+| `rest_`    | The hosted Factory API: computers, Environments, hosted sessions, wiki, CI, billing, organization, and service accounts. |
+| `context_` | The Context API on a Prem origin: spaces, documents, files, and stored session records.                                  |
+| `server_`  | `server_info`.                                                                                                           |
+| `skill_`   | `skill_read`.                                                                                                            |
 
-The 81 `rest_*` tools cover the 77 operations of the published Factory OpenAPI document (version 0.1.0), the two machine-template operations the SDK still calls, and the two `/limits` billing operations Droid CLI and the Factory App call.
+Call `server_info` for the active installation's operation counts, including counts by family.
 
 ### Tool profiles
 
-By default the server runs the `compact` profile. `tools/list` advertises 16 tools instead of 287, so a client spends about 23 KB of context on the list instead of about 340 KB:
+By default the server runs the `compact` profile. `tools/list` advertises 16 tools:
 
 - The turn loop as first-class tools: `server_info`, `skill_read`, `session_create`, `session_stream`, `session_events`, `session_interrupt`, `session_close`, `session_list`, and the three prompt answers.
-- `tools_search` finds any of the 287 operations by keyword, family, or read-only hint, and `tools_describe` returns the full description and input schema of up to 20 of them.
+- `tools_search` finds installed operations by keyword, family, or read-only hint, and `tools_describe` returns the full description and input schema of up to 20 of them.
 - `tool_call` runs one operation by name with its arguments. It uses the same handler, validation, autonomy cap, and `{ code, message }` failures as the operation's own tool in the full profile.
 - `batch` runs up to 20 operations in order in one call. An argument `{ "$from": "<step id>", "path": "/json/pointer" }` takes part of an earlier step's result, so intermediate results never return to the client.
 - A result larger than `maxBytes` (16 KB by default) returns a preview and a `ref`. `result_read` reads the stored result by byte range or by JSON Pointer, so no data is lost. Refs expire 15 minutes after their last use and only the key that created a ref can read it.
 
 If `select` fails after an operation completes, `tool_call` or the batch step returns `invalid_select` with a `ref` to its full result. Read that ref instead of repeating the operation. Byte offsets for `result_read` must fall on UTF-8 character boundaries; use `nextOffset` to page, or expect `invalid_offset` for an offset inside a character.
 
-`--tool-profile full` advertises all 287 tools, one per operation. Every tool in both profiles carries MCP hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a client can skip confirmation for reads and ask before destructive calls.
+`--profile full` advertises one tool per installed operation. Tools carry MCP hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) to help the client decide when to confirm an action.
 
 `node --experimental-strip-types scripts/measure.ts` prints the `initialize` and `tools/list` sizes for both profiles.
 
@@ -63,8 +63,7 @@ A turn works like this.
 
 Release surface checked on 2026-11-13: [Droid CLI 1.9.0](https://www.npmjs.com/package/@factory/cli)
 and [Droid SDK 0.10.0](https://www.npmjs.com/package/@factory/droid-sdk) are current.
-The SDK still declares 165 wire methods and protocol `1.269.0`; the 287-operation
-inventory excludes four confirmed daemon-unserved `droid.*` reads.
+The SDK declares 165 wire methods and protocol `1.269.0`.
 CLI versions and wire protocol versions are separate.
 The daemon client adopts the peer's protocol version and retries once on a mismatch.
 `droid_list_skills`, `droid_list_tools`, `droid_list_mcp_tools`, and
@@ -80,18 +79,11 @@ See the [Factory changelog](https://docs.factory.com/changelog/release-notes).
 
 ## Set it up
 
-```sh
-pnpm install
-export DROID_MCP_KEYS="$(openssl rand -hex 32)"
-export FACTORY_API_KEY="fk-..."
-pnpm start
-```
-
-The server listens on `http://127.0.0.1:7337/mcp`. Startup fails unless you set at least one MCP key. Generate a key with `openssl rand -hex 32` and keep it secret. Only requests that carry the key reach a tool.
+Follow [the setup guide](SETUP.md) for prerequisites, credentials, workspace selection, and verification. `pnpm start` defaults to stdio. Use `pnpm start --http --port 7337` for a loopback HTTP endpoint, with a bearer key supplied through `DROID_MCP_KEYS`. See [Hosting](docs/hosting.md) for services and TLS.
 
 ## Connect a client
 
-Add this to your MCP client's configuration:
+For an HTTP client that accepts this configuration format:
 
 ```json
 {
@@ -105,51 +97,19 @@ Add this to your MCP client's configuration:
 }
 ```
 
-Then ask the client to read the `droid` prompt or the skill at `skill://droid/SKILL.md`, and call `server_info` first. It reports the version, the tool profile, the advertised tool count, the operation count, the autonomy cap, and the daemon connection.
+Call `server_info` to confirm the tool profile, installed providers, and autonomy ceiling. Call `skill_read` before starting a session. The setup guide describes how to verify the client can complete a turn.
 
-If you run the server on another machine, put a TLS proxy in front of it and keep the key required. `docs/hosting.md` has a systemd unit, a keys file layout, and TLS setup for that case.
+If you run the server on another machine, put a TLS proxy in front of it and keep the key required. See [Hosting](docs/hosting.md).
 
 ## Configuration
 
-Each flag also has an environment variable. The defaults work for a local install.
-
-| Flag                 | Environment                 | Default                                              |
-| -------------------- | --------------------------- | ---------------------------------------------------- |
-| `--host`             | `DROID_MCP_HOST`            | `127.0.0.1`                                          |
-| `--port`             | `DROID_MCP_PORT`            | `7337`                                               |
-| `--keys-file`        | `DROID_MCP_KEYS`            | none, startup fails without a key                    |
-| `--max-autonomy`     | `DROID_MCP_MAX_AUTONOMY`    | `medium`                                             |
-| `--tool-profile`     | `DROID_MCP_TOOL_PROFILE`    | `compact`; `full` lists every operation as a tool    |
-| `--droid-path`       | `DROID_MCP_DROID_PATH`      | `droid`                                              |
-| `--socket`           | `DROID_MCP_SOCKET`          | `$XDG_RUNTIME_DIR/droid-mcp/daemon.sock`             |
-| `--daemon-url`       | `DROID_MCP_DAEMON_URL`      | none, the server spawns a daemon                     |
-| `--runtime-dir`      | `DROID_MCP_RUNTIME_DIR`     |                                                      |
-| `--allow-origin`     | `DROID_MCP_ALLOWED_ORIGINS` | none, requests with an `Origin` header are rejected  |
-| `--factory-base-url` | `FACTORY_BASE_URL`          | `https://api.factory.ai`                             |
-|                      | `FACTORY_CONTEXT_BASE_URL`  | none, the `context_*` tools fail until it is set     |
-|                      | `FACTORY_CONTEXT_HEADERS`   | none                                                 |
-| `--log-level`        | `DROID_MCP_LOG_LEVEL`       | `info`                                               |
-| `--prompt-timeout`   |                             | `300000` ms                                          |
-| `--request-timeout`  |                             | `30000` ms                                           |
-| `--require-skill`    | `DROID_MCP_REQUIRE_SKILL`   | `true`; skill-read gate for session/work-start tools |
-
-`--max-autonomy` accepts `off`, `low`, `medium`, or `high`. `FACTORY_API_KEY` is read from the environment and is never logged and never returned by a tool.
-
-The skill gate covers all `session_*` tools and the daemon/hosted work-starting
-operations listed in [tool families](src/skill/droid/references/tool-families.md#skill-read-gate).
-Call `skill_read`, read exactly `skill://droid/SKILL.md`, get that URI through
-`skills/get`, or get prompt `droid` to unlock them. Reference-only reads do not
-count. The state is per MCP session; sessionless (2026-07-28) clients share it
-per bearer key, not per client. Disable with `--require-skill=false` or
-`DROID_MCP_REQUIRE_SKILL=false`.
-
-`FACTORY_BASE_URL` and `FACTORY_CONTEXT_BASE_URL` must be bare `http` or `https` origins, with no path, query, fragment, or credentials. The `rest_*` tools call `FACTORY_BASE_URL`. The `context_*` tools call `FACTORY_CONTEXT_BASE_URL`, the Prem origin that serves the Context API, and fail with `context_base_url_missing` while it is unset. `FACTORY_CONTEXT_HEADERS` is a JSON object of string values sent with every Context request, for example `{"x-factory-organization":"org-..."}`. It may not set `authorization`, `cookie`, `host`, or framing headers such as `content-type`. An invalid value for any of the three stops startup with exit code 2. Context header values are treated as secrets, like the API key.
+Run `pnpm start --help` for the flags and environment variables supported by your checkout. HTTP defaults to an ephemeral port if you omit `--port`. Repeat `--workspace-root` for each approved workspace; when omitted, only the launch directory is admitted. See [the setup guide](SETUP.md#3-configure-credentials-and-providers) for provider configuration.
 
 ## Security
 
 - Keep the MCP keys secret. Anyone who has a key can drive Droid on the host.
 - The server binds to localhost by default. Do not expose the port without TLS and a required key.
-- Requests that carry an `Origin` header are rejected unless you allow that origin explicitly.
+- HTTP rejects requests from an `Origin` other than the listener's own origin. There is no CLI origin allowlist.
 - The REST and Context tools redact secrets from results and errors. A minted service-account key value is never returned, and secret values sent to the organization secrets tool are never echoed back.
 - `--max-autonomy` bounds local `session_create` and `session_run`, the permission outcomes those sessions offer, and any authority field a generated tool sends explicitly (`autonomyLevel`, `autonomyMode`, `subagentAutonomyLevel`, and `skipPermissionsUnsafe: true`).
 - `daemon_initialize_session` and `droid_initialize_session` copy an omitted `autonomyLevel` or `autonomyMode` from one `daemon_get_default_settings` snapshot onto that request. A snapshot value inside the cap is kept. A snapshot value above the cap is sent as the cap. A missing level is sent as `off`, and a missing mode as `normal`. When the cap is below `high`, an omitted `skipPermissionsUnsafe` is sent as `false`. The snapshot is read for that request only; persistent defaults are left unchanged. Initialize has no `subagentAutonomyLevel` field.
@@ -159,36 +119,25 @@ per bearer key, not per client. Disable with `--require-skill=false` or
 
 ## Development
 
-| Command              | What it does                                                       |
-| -------------------- | ------------------------------------------------------------------ |
-| `pnpm start`         | Serve the MCP endpoint on `/mcp`                                   |
-| `pnpm run doctor`    | Connect to the daemon, authenticate, and print one JSON object     |
-| `pnpm typecheck`     | Run `tsc --noEmit`                                                 |
-| `pnpm lint`          | oxlint, with the anti-slop plugin in `tools/oxlint`                |
-| `pnpm fmt:check`     | Check formatting with oxfmt                                        |
-| `pnpm test`          | Run every test project that needs no model                         |
-| `pnpm codegen`       | Regenerate `src/generated/surface.ts` and `src/generated/skill.ts` |
-| `pnpm codegen:check` | Fail if a generated file is stale                                  |
+| Command              | What it does                                                     |
+| -------------------- | ---------------------------------------------------------------- |
+| `pnpm start`         | Serve MCP over stdio; add `--http` for `/mcp`                    |
+| `pnpm run doctor`    | Probe an existing daemon; add `--http` to probe an HTTP listener |
+| `pnpm typecheck`     | Run `tsc --noEmit`                                               |
+| `pnpm lint`          | oxlint, with the anti-slop plugin in `tools/oxlint`              |
+| `pnpm fmt:check`     | Check formatting with oxfmt                                      |
+| `pnpm test`          | Run every test project that needs no model                       |
+| `pnpm codegen`       | Regenerate the pinned Factory SDK codecs                         |
+| `pnpm codegen:check` | Fail if a generated file is stale                                |
 
-Tests split by what they need. The `unit`, `http`, `process`, and `integration` projects run against fakes and a real server process. The `live` project needs a real model and a real daemon and stays off by default.
+The `unit` and `proofs` test projects do not need a live model.
 
 Codegen uses TypeScript 6's compiler API. TypeScript 7 replaces that API and is
 not a drop-in upgrade. Node type definitions stay on the Node 24 runtime baseline.
 Optional tool inputs must be omitted when unused; `null` is accepted only where
 the schema explicitly allows it, such as clearing an Environment's setup script.
 
-The source layout:
-
-```text
-src/
-├── main.ts              # doctor | serve
-├── config.ts            # flags and env, no Effect
-├── http/                # Streamable HTTP and bearer auth
-├── droid/               # exec client, turn hub, prompts, daemon, REST and Context
-├── tools/               # hand-written tools plus one generated tool per SDK method
-├── generated/           # codegen output, do not edit
-└── skill/droid/         # the skill markdown, embedded at build time
-```
+The [CLI entry point](src/products/private/cli.ts) lives in [`src/products/`](src/products/), alongside configuration, product assembly, and the HTTP and stdio transports. [`src/mcp/`](src/mcp/) owns the MCP protocol, [`src/presentation/`](src/presentation/) owns tool profiles and dispatch, and [`src/guidance/`](src/guidance/) owns the embedded skill. The generated SDK codecs live in [`src/factory-dialect/`](src/factory-dialect/). See [the module roster](AGENTS.md#module-roster-and-hidden-secrets) for the rest of the source tree.
 
 ## License
 
