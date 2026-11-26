@@ -119,6 +119,7 @@ const BatchStepSchema = Schema.Struct({
 const BatchArgumentsSchema = Schema.Struct({
   steps: Schema.Array(BatchStepSchema),
   stopOnError: Schema.optionalKey(Schema.Boolean),
+  maxBytes: Schema.optionalKey(Schema.Number),
 })
 
 export interface BatchStepInput {
@@ -131,6 +132,7 @@ export interface BatchStepInput {
 export interface BatchArguments {
   readonly steps: ReadonlyArray<BatchStepInput>
   readonly stopOnError: boolean
+  readonly maxBytes: number | undefined
 }
 
 /** Decodes the entire batch before any step can execute. */
@@ -148,7 +150,11 @@ export const readBatchArguments = (value: Schema.Json): BatchArguments | undefin
     select: step.select,
   }))
 
-  return { steps, stopOnError: decoded.value.stopOnError !== false }
+  return {
+    steps,
+    stopOnError: decoded.value.stopOnError !== false,
+    maxBytes: decoded.value.maxBytes,
+  }
 }
 
 /** The optional paging fields of `result_read` and `tool_call` arguments. */

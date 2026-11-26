@@ -252,32 +252,37 @@ const resultPayload = (reply: McpReply): Schema.Json => {
   return reply.result
 }
 
-const ErrorDataSchema = Schema.Struct({
+const FailureBodySchema = Schema.Struct({
   code: Schema.String,
   message: Schema.String,
+  ref: Schema.optionalKey(Schema.String),
 })
 
-const errorData = (reply: McpReply): { readonly code: string; readonly message: string } => {
-  if (reply.kind !== "error") throw new Error("expected error reply, got: " + JSON.stringify(reply))
+const decodeFailureBody = (value: Schema.Json) => {
+  const decoded = Schema.decodeUnknownOption(FailureBodySchema)(value)
 
-  const decoded = Schema.decodeUnknownOption(ErrorDataSchema)(reply.data ?? null)
-
-  if (Option.isNone(decoded)) throw new Error("error reply carries no { code, message } data")
+  if (Option.isNone(decoded)) throw new Error("failure body is not { code, message, ref? }")
 
   return decoded.value
 }
 
+const errorData = (reply: McpReply) => {
+  if (reply.kind !== "error") throw new Error("expected error reply, got: " + JSON.stringify(reply))
+
+  return decodeFailureBody(reply.data ?? null)
+}
+
 type JsonObject = { readonly [key: string]: Schema.Json }
 
+const isObject = (value: Schema.Json): value is JsonObject =>
+  value !== null && !Array.isArray(value) && value instanceof Object
+
 const asObject = (value: Schema.Json): JsonObject => {
-  if (value === null || Array.isArray(value) || !(value instanceof Object)) {
+  if (!isObject(value)) {
     throw new Error("expected object, got: " + JSON.stringify(value))
   }
 
-  // SAFETY: the guard above established a non-null, non-array object — the
-  // exact object variant of the Schema.Json union, whose shape is a record
-  // of Json values.
-  return value as JsonObject
+  return value
 }
 
 const asArray = (value: Schema.Json): ReadonlyArray<Schema.Json> => {
@@ -313,13 +318,64 @@ const numberOf = (value: Schema.Json): number => {
   return value
 }
 
-const toolResult = (reply: McpReply): Schema.Json => fieldOf(resultPayload(reply), "result")
-
-/** Parses resource JSON text; the resource itself produced valid JSON. */
+/** Parses wire JSON text; the server serialized it from a Schema.Json value. */
 const parseJson = (text: string): Schema.Json =>
-  // SAFETY: the resource body was serialized with JSON.stringify from a
+  // SAFETY: the server serialized this text with JSON.stringify from a
   // Schema.Json value, so parsing it reproduces exactly that Json value.
   JSON.parse(text) as Schema.Json
+
+const toolEnvelope = (reply: McpReply): JsonObject => asObject(resultPayload(reply))
+
+const toolText = (envelope: JsonObject): string => {
+  const content = asArray(fieldOf(envelope, "content"))
+
+  if (content.length !== 1) {
+    throw new Error("tool result carries " + String(content.length) + " content blocks")
+  }
+
+  const block = asObject(content[0] ?? null)
+
+  if (block.type !== "text") throw new Error("tool result content is not a text block")
+
+  const text = stringOf(fieldOf(block, "text"))
+
+  if (text.length === 0) throw new Error("tool result text is empty")
+
+  return text
+}
+
+/** Decodes a successful standard CallToolResult and proves its structured mirror. */
+const toolResult = (reply: McpReply): Schema.Json => {
+  const envelope = toolEnvelope(reply)
+
+  if (envelope.isError === true) throw new Error("expected a successful tool result")
+
+  const payload = parseJson(toolText(envelope))
+  const structured = envelope.structuredContent
+
+  if (isObject(payload)) {
+    if (structured === undefined) throw new Error("object tool payload has no structuredContent")
+
+    expect(structured).toEqual(payload)
+  } else if (structured !== undefined) {
+    throw new Error("scalar tool payload unexpectedly carries structuredContent")
+  }
+
+  return payload
+}
+
+/** Decodes a tool execution failure carried inside a successful JSON-RPC reply. */
+const toolFailure = (reply: McpReply) => {
+  const envelope = toolEnvelope(reply)
+
+  if (envelope.isError !== true) throw new Error("expected an isError tool result")
+
+  if (envelope.structuredContent !== undefined) {
+    throw new Error("tool failure unexpectedly carries structuredContent")
+  }
+
+  return decodeFailureBody(parseJson(toolText(envelope)))
+}
 
 const textOfResource = (reply: McpReply): string => {
   const contents = asArray(fieldOf(resultPayload(reply), "contents"))
@@ -738,8 +794,8 @@ describe("mcp: guidance acknowledgment", () => {
         autonomyLevel: "medium",
       })
 
-      expect(reply.kind).toBe("error")
-      expect(errorData(reply).code).toBe("guidance_required")
+      expect(reply.kind).toBe("result")
+      expect(toolFailure(reply).code).toBe("guidance_required")
     } finally {
       await services.close()
     }
@@ -806,16 +862,16 @@ describe("mcp: compact dispatch end-to-end", () => {
         arguments: {},
       })
 
-      expect(unknown.kind).toBe("error")
-      expect(errorData(unknown).code).toBe("unknown_operation")
+      expect(unknown.kind).toBe("result")
+      expect(toolFailure(unknown).code).toBe("unknown_operation")
 
       const invalid = await callTool(endpoint, "tool_call", {
         name: "session_events",
         arguments: { sessionId: "", cursor: -1 },
       })
 
-      expect(invalid.kind).toBe("error")
-      expect(errorData(invalid).code).toBe("invalid_arguments")
+      expect(invalid.kind).toBe("result")
+      expect(toolFailure(invalid).code).toBe("invalid_arguments")
     } finally {
       await services.close()
     }
@@ -881,8 +937,8 @@ describe("mcp: compact dispatch end-to-end", () => {
         stopOnError: false,
       })
 
-      expect(reply.kind).toBe("error")
-      expect(errorData(reply).code).toBe("invalid_arguments")
+      expect(reply.kind).toBe("result")
+      expect(toolFailure(reply).code).toBe("invalid_arguments")
 
       const listed = await callTool(endpoint, "session_list", {})
       expect(fieldOf(toolResult(listed), "sessions")).toEqual([])
@@ -915,7 +971,7 @@ describe("mcp: compact dispatch end-to-end", () => {
 
       expect(streamed.kind).toBe("result")
 
-      const envelope = asObject(resultPayload(streamed))
+      const envelope = asObject(toolResult(streamed))
 
       if (envelope.truncated !== true) {
         throw new Error("expected a truncated continuation envelope, got inline")
@@ -971,14 +1027,14 @@ describe("mcp: compact dispatch end-to-end", () => {
 
       const foreign = await callTool(other.endpoint, "result_read", { ref, offset: 0 })
 
-      expect(foreign.kind).toBe("error")
-      expect(errorData(foreign).code).toBe("artifact_unavailable")
+      expect(foreign.kind).toBe("result")
+      expect(toolFailure(foreign).code).toBe("artifact_unavailable")
 
       // malformed refs are artifact_unavailable too
       const malformed = await callTool(endpoint, "result_read", { ref: "not-a-ref", offset: 0 })
 
-      expect(malformed.kind).toBe("error")
-      expect(errorData(malformed).code).toBe("artifact_unavailable")
+      expect(malformed.kind).toBe("result")
+      expect(toolFailure(malformed).code).toBe("artifact_unavailable")
     } finally {
       await services.close()
     }
@@ -998,30 +1054,28 @@ describe("mcp: compact dispatch end-to-end", () => {
         select: "/does/not/exist",
       })
 
-      expect(reply.kind).toBe("error")
+      expect(reply.kind).toBe("result")
 
-      const failure = errorData(reply)
+      const failure = toolFailure(reply)
 
       expect(failure.code).toBe("invalid_select")
 
-      if (reply.kind === "error") {
-        const data = asObject(reply.data ?? null)
+      const recoveryRef = failure.ref
 
-        expect(Predicate.isString(data.ref ?? null)).toBe(true)
+      if (recoveryRef === undefined) throw new Error("invalid_select carries no recovery ref")
 
-        // The recovery ref reads the full finished result — the write ran
-        // exactly once and must never be repeated.
-        const recovered = await callTool(endpoint, "result_read", {
-          ref: stringOf(data.ref ?? ""),
-          offset: 0,
-        })
+      // The recovery ref reads the full finished result — the write ran
+      // exactly once and must never be repeated.
+      const recovered = await callTool(endpoint, "result_read", {
+        ref: recoveryRef,
+        offset: 0,
+      })
 
-        expect(recovered.kind).toBe("result")
+      expect(recovered.kind).toBe("result")
 
-        const chunk = stringOf(fieldOf(toolResult(recovered), "chunk"))
+      const chunk = stringOf(fieldOf(toolResult(recovered), "chunk"))
 
-        expect(chunk).toContain("sess-")
-      }
+      expect(chunk).toContain("sess-")
     } finally {
       await services.close()
     }
@@ -1113,8 +1167,8 @@ describe("mcp: session lifecycle over frames", () => {
         waitMs: 0,
       })
 
-      expect(negative.kind).toBe("error")
-      expect(errorData(negative).code).toBe("invalid_arguments")
+      expect(negative.kind).toBe("result")
+      expect(toolFailure(negative).code).toBe("invalid_arguments")
 
       const fractional = await callTool(endpoint, "session_events", {
         sessionId,
@@ -1122,8 +1176,8 @@ describe("mcp: session lifecycle over frames", () => {
         waitMs: 0,
       })
 
-      expect(fractional.kind).toBe("error")
-      expect(errorData(fractional).code).toBe("invalid_arguments")
+      expect(fractional.kind).toBe("result")
+      expect(toolFailure(fractional).code).toBe("invalid_arguments")
 
       // a foreign/missing session is indistinguishable
       const missing = await callTool(endpoint, "session_events", {
@@ -1132,8 +1186,8 @@ describe("mcp: session lifecycle over frames", () => {
         waitMs: 0,
       })
 
-      expect(missing.kind).toBe("error")
-      expect(errorData(missing).code).toBe("not_visible")
+      expect(missing.kind).toBe("result")
+      expect(toolFailure(missing).code).toBe("not_visible")
 
       const closed = await callTool(endpoint, "session_close", { sessionId })
 
@@ -1339,8 +1393,8 @@ describe("mcp: per-caller isolation", () => {
         waitMs: 0,
       })
 
-      expect(foreignCall.kind).toBe("error")
-      expect(errorData(foreignCall).code).toBe("not_visible")
+      expect(foreignCall.kind).toBe("result")
+      expect(toolFailure(foreignCall).code).toBe("not_visible")
 
       await callTool(alice.endpoint, "session_close", { sessionId })
     } finally {

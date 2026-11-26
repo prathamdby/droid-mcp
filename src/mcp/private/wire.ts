@@ -1,9 +1,12 @@
 /**
  * Wire encoding: translates presentation results, session observations,
- * discovery pages and failure codes into the exact JSON shapes MCP clients
- * already consume. This is the only place where legacy `{ code, message }`
- * vocabularies, continuation envelopes, `eventsOmitted` and numeric cursor
- * translation live.
+ * discovery pages and failure codes into MCP protocol shapes. Tool calls use
+ * the standard `CallToolResult` envelope: a text content block carries the
+ * serialized JSON payload, object payloads also appear in `structuredContent`,
+ * and execution failures carry `isError`. JSON-RPC errors remain reserved for
+ * protocol and non-tool failures. This is the only place where the legacy
+ * `{ code, message }` failure vocabulary, continuation envelopes,
+ * `eventsOmitted` and numeric cursor translation live.
  */
 import * as Match from "effect/Match"
 import type * as Schema from "effect/Schema"
@@ -15,7 +18,7 @@ import type {
   Presented,
   ResultPage,
 } from "../../presentation/index.ts"
-import { readSessionTurnPayload } from "./payloads.ts"
+import { isJsonObject, readSessionTurnPayload, type JsonObject } from "./payloads.ts"
 import { JSON_RPC_OPERATION_FAILED, type McpReply } from "./types.ts"
 import type { FrameId } from "./types.ts"
 
@@ -30,8 +33,9 @@ type FailureDataWire = {
 }
 
 /**
- * The legacy failure body carried in a JSON-RPC error's `data` field: the
- * exact `{ code, message, ref? }` shape clients already parse.
+ * The legacy failure body carried in a JSON-RPC error's `data` field or a
+ * tool error's serialized text: the exact `{ code, message, ref? }` shape
+ * clients already parse.
  */
 export const failureData = (
   code: string,
@@ -60,6 +64,53 @@ export const failureReply = (
 })
 
 // ---------------------------------------------------------------------------
+// Tool results
+// ---------------------------------------------------------------------------
+
+type TextContentWire = {
+  readonly type: "text"
+  readonly text: string
+}
+
+type ToolResultWire = {
+  readonly content: ReadonlyArray<TextContentWire>
+  structuredContent?: JsonObject
+  isError?: true
+}
+
+const textToolResult = (payload: Schema.Json): Schema.Json => {
+  const result: ToolResultWire = {
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+  }
+
+  if (isJsonObject(payload)) result.structuredContent = payload
+
+  return result
+}
+
+/** A successful MCP tool result with readable text and structured object payloads. */
+export const renderToolSuccess = (id: FrameId, payload: Schema.Json): McpReply => ({
+  kind: "result",
+  id,
+  result: textToolResult(payload),
+})
+
+/** An execution failure inside the MCP tool result, distinct from a protocol error. */
+export const renderToolFailure = (
+  id: FrameId,
+  code: string,
+  message: string,
+  ref?: string,
+): McpReply => ({
+  kind: "result",
+  id,
+  result: {
+    content: [{ type: "text", text: JSON.stringify(failureData(code, message, ref)) }],
+    isError: true,
+  },
+})
+
+// ---------------------------------------------------------------------------
 // Presented rendering
 // ---------------------------------------------------------------------------
 
@@ -81,31 +132,25 @@ const presentedEnvelope = (presented: Presented): Schema.Json =>
   )
 
 /**
- * The successful envelope of one presented value. `Inline` becomes
- * `{ result }`; `Continuation` becomes the legacy truncated envelope;
+ * The tool result of one presented value. `Inline` carries the payload
+ * itself; `Continuation` carries the legacy truncated envelope;
  * `CompletedUnpresentable` — the operation already succeeded — renders its
- * recovery instructions as a failure body with the finished result's ref.
+ * recovery instructions as a tool error with the finished result's ref.
  */
 export const renderPresented = (id: FrameId, presented: Presented): McpReply =>
   Match.value(presented).pipe(
-    Match.when({ _tag: "Inline" }, (variant) => ({
-      kind: "result" as const,
-      id,
-      result: { result: variant.value },
-    })),
-    Match.when({ _tag: "Continuation" }, (variant) => ({
-      kind: "result" as const,
-      id,
-      result: {
+    Match.when({ _tag: "Inline" }, (variant) => renderToolSuccess(id, variant.value)),
+    Match.when({ _tag: "Continuation" }, (variant) =>
+      renderToolSuccess(id, {
         truncated: true,
         ref: variant.ref,
         totalBytes: variant.totalBytes,
         preview: variant.preview,
         hint: variant.hint,
-      },
-    })),
+      }),
+    ),
     Match.when({ _tag: "CompletedUnpresentable" }, (variant) =>
-      failureReply(id, variant.code, variant.message, variant.ref),
+      renderToolFailure(id, variant.code, variant.message, variant.ref),
     ),
     Match.exhaustive,
   )
@@ -311,13 +356,13 @@ export const renderResultPage = (page: ResultPage): Schema.Json => {
 // ---------------------------------------------------------------------------
 
 /**
- * Renders a presentation `CallFailure` as the exact legacy failure body:
- * `{ code, message, ref? }` in the error's `data` field.
+ * Renders a presentation `CallFailure` as a tool error: the exact legacy
+ * `{ code, message, ref? }` failure body serialized into readable text.
  */
 export const renderCallFailure = (
   id: FrameId,
   failure: { readonly code: string; readonly message: string; readonly ref?: string | undefined },
-): McpReply => failureReply(id, failure.code, failure.message, failure.ref)
+): McpReply => renderToolFailure(id, failure.code, failure.message, failure.ref)
 
 // ---------------------------------------------------------------------------
 // Session payloads
@@ -338,7 +383,7 @@ export const finishSessionPayload = (payload: Schema.Json): Schema.Json => {
 
   if (turn === undefined) return payload
 
-  if (!isPayloadRecord(payload)) return payload
+  if (!isJsonObject(payload)) return payload
 
   const eviction = turn.truncated && turn.omittedCount !== undefined && turn.omittedCount > 0
 
@@ -352,9 +397,6 @@ export const finishSessionPayload = (payload: Schema.Json): Schema.Json => {
 
   return { ...payload, ...additions }
 }
-
-const isPayloadRecord = (value: Schema.Json): value is { readonly [key: string]: Schema.Json } =>
-  value !== null && !Array.isArray(value) && value instanceof Object
 
 export const SESSIONS_URI = "droid://sessions"
 

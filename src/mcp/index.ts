@@ -38,6 +38,7 @@ import * as Filter from "effect/Filter"
 import * as Layer from "effect/Layer"
 import * as Match from "effect/Match"
 import * as Option from "effect/Option"
+import * as Predicate from "effect/Predicate"
 import * as Result from "effect/Result"
 import type * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
@@ -47,7 +48,7 @@ import { sameCaller } from "../caller/index.ts"
 import { CURRENT_GUIDE_EDITION, Guidance } from "../guidance/index.ts"
 import type { GuideText } from "../guidance/index.ts"
 import { Presented, Presentation } from "../presentation/index.ts"
-import type { BatchStepRequest, View } from "../presentation/index.ts"
+import type { BatchStepRequest, DiscoveryQuery, View } from "../presentation/index.ts"
 import { Sessions } from "../sessions/index.ts"
 import type { SessionChange, SessionSummary } from "../sessions/index.ts"
 import {
@@ -103,7 +104,9 @@ import {
   renderDiscovery,
   renderPresented,
   renderResultPage,
+  renderToolFailure,
   renderToolsList,
+  renderToolSuccess,
   SESSIONS_URI,
   sessionUriOf,
 } from "./private/wire.ts"
@@ -194,12 +197,6 @@ const jsonContent = (value: Schema.Json, uri: string): Schema.Json => ({
   contents: [{ uri, mimeType: "application/json", text: JSON.stringify(value) }],
 })
 
-const inlineResult = (id: FrameId, payload: Schema.Json): McpReply => ({
-  kind: "result",
-  id,
-  result: { result: payload },
-})
-
 /** Named shapes for partially built request and wire payloads. */
 type EventsBodyWire = {
   sessionId: string
@@ -214,10 +211,15 @@ type CallRequestWire = {
   name: string
   arguments: Schema.Json
   select?: string
+  maxBytes?: number
 }
 
 type SearchQueryWire = {
   query?: string
+  family?: DiscoveryQuery["family"]
+  readOnly?: boolean
+  limit?: number
+  offset?: number
 }
 
 type BatchStepWireInput = {
@@ -227,10 +229,31 @@ type BatchStepWireInput = {
   select?: string
 }
 
+type BatchRequestWire = {
+  steps: ReadonlyArray<BatchStepRequest>
+  stopOnError: boolean
+  maxBytes?: number
+}
+
 type ResultRangeWire = {
   offset?: number
   length?: number
   select?: string
+}
+
+const operationFamilyOf = (value: Schema.Json): DiscoveryQuery["family"] | undefined => {
+  switch (value) {
+    case "server":
+    case "skill":
+    case "session":
+    case "rest":
+    case "context":
+    case "daemon":
+    case "droid":
+      return value
+    default:
+      return undefined
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -541,7 +564,7 @@ export const mcpLayer = (
             sessionPayload: boolean,
           ): McpReply => {
             if (sessionPayload && Presented.$is("Inline")(presented)) {
-              return inlineResult(id, finishSessionPayload(presented.value))
+              return renderToolSuccess(id, finishSessionPayload(presented.value))
             }
 
             return renderPresented(id, presented)
@@ -553,16 +576,27 @@ export const mcpLayer = (
             name: string,
             args: Schema.Json,
             select: string | undefined,
+            maxBytes: number | undefined,
             sessionPayload: boolean,
+            unknownOperationChannel: "protocol" | "tool",
           ): Effect.Effect<McpReply> =>
             Effect.gen(function* () {
               const request: CallRequestWire = { name, arguments: args }
 
               if (select !== undefined) request.select = select
 
+              if (maxBytes !== undefined) request.maxBytes = maxBytes
+
               const outcome = yield* Effect.result(presentation.call(view, who, request))
 
               if (Result.isFailure(outcome)) {
+                if (
+                  unknownOperationChannel === "protocol" &&
+                  outcome.failure.code === "unknown_operation"
+                ) {
+                  return failureReply(id, outcome.failure.code, outcome.failure.message)
+                }
+
                 return renderCallFailure(id, outcome.failure)
               }
 
@@ -594,7 +628,7 @@ export const mcpLayer = (
               }
 
               if (readStreamDelivery(args) !== "block" || !formsAvailable(peer, revision)) {
-                return inlineResult(id, finishSessionPayload(presented.value))
+                return renderToolSuccess(id, finishSessionPayload(presented.value))
               }
 
               // Form-eligible path: answer at most one pending decision per
@@ -663,7 +697,7 @@ export const mcpLayer = (
                 }
               }
 
-              return inlineResult(id, finishSessionPayload(payload))
+              return renderToolSuccess(id, finishSessionPayload(payload))
             })
 
           const dispatchMetaTool = (
@@ -673,18 +707,34 @@ export const mcpLayer = (
           ): Effect.Effect<McpReply> => {
             if (name === "tools_search") {
               return Effect.gen(function* () {
-                const query: SearchQueryWire = {}
                 const searchText = stringField(args, "query")
+                const record = recordOf(args)
+                const query: SearchQueryWire = {}
 
                 if (searchText !== undefined) query.query = searchText
+
+                if (record !== undefined) {
+                  const family = operationFamilyOf(record.family)
+                  const readOnly = record.readOnly
+                  const limit = readOptionalNumber(record, "limit")
+                  const offset = readOptionalNumber(record, "offset")
+
+                  if (family !== undefined) query.family = family
+
+                  if (Predicate.isBoolean(readOnly)) query.readOnly = readOnly
+
+                  if (limit !== undefined) query.limit = limit
+
+                  if (offset !== undefined) query.offset = offset
+                }
 
                 const page = yield* Effect.result(presentation.describe(view, who, query))
 
                 if (Result.isFailure(page)) {
-                  return failureReply(id, "internal_error", "discovery failed")
+                  return renderToolFailure(id, "internal_error", "discovery failed")
                 }
 
-                return inlineResult(id, renderDiscovery(page.success))
+                return renderToolSuccess(id, renderDiscovery(page.success))
               })
             }
 
@@ -695,10 +745,10 @@ export const mcpLayer = (
                 )
 
                 if (Result.isFailure(page)) {
-                  return failureReply(id, "invalid_arguments", "describe needs 1 to 20 names")
+                  return renderToolFailure(id, "invalid_arguments", "describe needs 1 to 20 names")
                 }
 
-                return inlineResult(id, renderDiscovery(page.success))
+                return renderToolSuccess(id, renderDiscovery(page.success))
               })
             }
 
@@ -707,7 +757,7 @@ export const mcpLayer = (
 
               if (innerName === undefined) {
                 return Effect.succeed(
-                  failureReply(id, "invalid_arguments", "tool_call needs a name"),
+                  renderToolFailure(id, "invalid_arguments", "tool_call needs a name"),
                 )
               }
 
@@ -718,7 +768,9 @@ export const mcpLayer = (
                 innerName,
                 inner === undefined ? {} : (inner.arguments ?? {}),
                 stringField(args, "select"),
+                inner === undefined ? undefined : readOptionalNumber(inner, "maxBytes"),
                 innerName.startsWith("session_"),
+                "tool",
               )
             }
 
@@ -727,7 +779,7 @@ export const mcpLayer = (
                 const decoded = readBatchArguments(args)
 
                 if (decoded === undefined) {
-                  return failureReply(
+                  return renderToolFailure(
                     id,
                     "invalid_arguments",
                     "batch needs an array of valid steps",
@@ -748,15 +800,20 @@ export const mcpLayer = (
                   steps.push(wire)
                 }
 
-                const report = yield* Effect.result(
-                  presentation.batch(view, who, { steps, stopOnError: decoded.stopOnError }),
-                )
-
-                if (Result.isFailure(report)) {
-                  return failureReply(id, report.failure.code, report.failure.message)
+                const batchRequest: BatchRequestWire = {
+                  steps,
+                  stopOnError: decoded.stopOnError,
                 }
 
-                return inlineResult(id, renderBatch(report.success))
+                if (decoded.maxBytes !== undefined) batchRequest.maxBytes = decoded.maxBytes
+
+                const report = yield* Effect.result(presentation.batch(view, who, batchRequest))
+
+                if (Result.isFailure(report)) {
+                  return renderToolFailure(id, report.failure.code, report.failure.message)
+                }
+
+                return renderToolSuccess(id, renderBatch(report.success))
               })
             }
 
@@ -765,7 +822,7 @@ export const mcpLayer = (
               const ref = stringField(args, "ref")
 
               if (ref === undefined) {
-                return failureReply(id, "invalid_arguments", "result_read needs a ref")
+                return renderToolFailure(id, "invalid_arguments", "result_read needs a ref")
               }
 
               const record = recordOf(args)
@@ -789,16 +846,16 @@ export const mcpLayer = (
               if (Result.isFailure(page)) {
                 return Match.value(page.failure).pipe(
                   Match.when({ _tag: "ArtifactUnavailable" }, (variant) =>
-                    failureReply(id, "artifact_unavailable", variant.message, ref),
+                    renderToolFailure(id, "artifact_unavailable", variant.message, ref),
                   ),
                   Match.when({ _tag: "InvalidRange" }, (variant) =>
-                    failureReply(id, "invalid_offset", variant.message),
+                    renderToolFailure(id, "invalid_offset", variant.message),
                   ),
                   Match.exhaustive,
                 )
               }
 
-              return inlineResult(id, renderResultPage(page.success))
+              return renderToolSuccess(id, renderResultPage(page.success))
             })
           }
 
@@ -831,10 +888,14 @@ export const mcpLayer = (
                 const doc = yield* deliverRootDocument()
 
                 if (doc === undefined) {
-                  return failureReply(id, "internal_error", "the guide document is unavailable")
+                  return renderToolFailure(
+                    id,
+                    "internal_error",
+                    "the guide document is unavailable",
+                  )
                 }
 
-                return inlineResult(id, { uri: SKILL_ROOT_URI, markdown: doc.content })
+                return renderToolSuccess(id, { uri: SKILL_ROOT_URI, markdown: doc.content })
               })
             }
 
@@ -842,7 +903,15 @@ export const mcpLayer = (
               return streamWithForms(id, args)
             }
 
-            return runCall(id, name, args, undefined, name.startsWith("session_"))
+            return runCall(
+              id,
+              name,
+              args,
+              undefined,
+              undefined,
+              name.startsWith("session_"),
+              "protocol",
+            )
           }
 
           // -----------------------------------------------------------------
