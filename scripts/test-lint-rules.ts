@@ -1,5 +1,5 @@
 /**
- * Runs the vendored anti-slop plugin's rule tests.
+ * Runs the vendored anti-slop and modularity plugins' rule tests.
  *
  * The tests use oxlint's `RuleTester` harness rather than Vitest, so they run
  * as plain scripts under `node --experimental-strip-types`, the same way
@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process"
 import { readdirSync } from "node:fs"
 import { join } from "node:path"
 
-const ROOT = "tools/oxlint/anti-slop"
+const ROOTS = ["tools/oxlint/anti-slop", "tools/oxlint/modularity"]
 
 const walk = (directory: string): Array<string> =>
   readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -20,10 +20,10 @@ const walk = (directory: string): Array<string> =>
     return entry.name.endsWith(".test.ts") ? [path] : []
   })
 
-const tests = walk(ROOT).sort()
+const tests = ROOTS.flatMap((root) => walk(root)).sort()
 
 if (tests.length === 0) {
-  process.stderr.write("lint-rules: no test files found under " + ROOT + "\n")
+  process.stderr.write("lint-rules: no test files found under " + ROOTS.join(", ") + "\n")
   process.exit(1)
 }
 

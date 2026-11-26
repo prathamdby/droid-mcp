@@ -294,7 +294,7 @@ describe("dependency graph", () => {
     const base = root()
 
     base.write("custody", "index.ts", EMPTY_MODULE)
-    base.write("authority", "index.ts", 'export * from "../custody/index.ts"\n')
+    base.write("authority", "index.ts", 'export { marker } from "../custody/index.ts"\n')
 
     const only = singleViolation(base)
 
@@ -1153,13 +1153,47 @@ describe("re-export laundering", () => {
       [only],
       [
         violation(
-          "reexport_forbidden",
+          "wildcard_export",
           "authority/index.ts",
           1,
-          "re-exporting another module launders its transitive dependencies",
+          "export * forwards every present and future name of the target; name each exported symbol explicitly",
         ),
       ],
     )
+  })
+
+  it("rejects same-module export-star into own private files with wildcard_export", () => {
+    const base = root()
+
+    base.write("caller", "index.ts", 'export * from "./private/helper.ts"\n')
+    base.write("caller", "private/helper.ts", EMPTY_MODULE)
+
+    const only = singleViolation(base)
+
+    expectViolations(
+      [only],
+      [
+        violation(
+          "wildcard_export",
+          "caller/index.ts",
+          1,
+          "export * forwards every present and future name of the target; name each exported symbol explicitly",
+        ),
+      ],
+    )
+  })
+
+  it("rejects export-star-as-namespace re-exports with wildcard_export", () => {
+    const base = root()
+
+    base.write("caller", "index.ts", 'export * as ns from "./private/helper.ts"\n')
+    base.write("caller", "private/helper.ts", EMPTY_MODULE)
+
+    expect(singleViolation(base)).toMatchObject({
+      rule: "wildcard_export",
+      file: "caller/index.ts",
+      line: 1,
+    })
   })
 
   it("rejects local re-export of a binding imported from another module", () => {
@@ -1419,6 +1453,21 @@ describe("parseArgs", () => {
 describe("module graph invariants", () => {
   it("declares exactly the 22-module architecture", () => {
     expect(MODULES.size).toBe(22)
+  })
+
+  it("documents a non-empty hidden design decision for every module", () => {
+    for (const [name, moduleSpec] of MODULES) {
+      expect(
+        moduleSpec.secret.trim().length,
+        name + " must declare a non-empty secret",
+      ).toBeGreaterThan(0)
+    }
+  })
+
+  it("documents a distinct secret for every module", () => {
+    const secrets = [...MODULES.values()].map((moduleSpec) => moduleSpec.secret)
+
+    expect(new Set(secrets).size).toBe(MODULES.size)
   })
 
   it("points every dependency at a module that exists in MODULES", () => {

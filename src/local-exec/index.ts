@@ -295,6 +295,14 @@ export interface LocalExecOptions {
   readonly droidPath: string
   /** Overrides the executable arguments. */
   readonly args?: ReadonlyArray<string> | undefined
+  /**
+   * Operator-supplied base environment the launch allowlist reads `PATH`,
+   * `HOME`, `LANG` and `TERM` from. Defaults to the minimal safe values
+   * (`PATH: /usr/bin:/bin`, `HOME: /`); the module never reads ambient
+   * `process.env` itself — the product composition root passes the ambient
+   * entries in explicitly.
+   */
+  readonly baseEnv?: Readonly<Record<string, string | undefined>> | undefined
   /** Exact additional environment entries merged over the scrubbed base. */
   readonly env?: Readonly<Record<string, string>> | undefined
   /** Cap for the initialize round-trip. */
@@ -546,19 +554,23 @@ export const localExecLayer = (
 
       const buildEnvironment = (): SpawnEnvironment => {
         // The launch environment is a scrubbed allowlist plus operator-supplied
-        // additions. Nothing in it ever leaves this module.
+        // additions. Nothing in it ever leaves this module, and nothing is
+        // read from ambient process state: the composition root passes the
+        // inherited entries through `options.baseEnv`.
+        const base = options.baseEnv ?? {}
+
         const entries: Array<readonly [string, string]> = [
-          ["PATH", process.env["PATH"] ?? "/usr/bin:/bin"],
-          ["HOME", process.env["HOME"] ?? "/"],
+          ["PATH", base["PATH"] ?? "/usr/bin:/bin"],
+          ["HOME", base["HOME"] ?? "/"],
           ["FACTORY_UPSTREAM_CLIENT_TYPE", "sdk"],
           ["FACTORY_UPSTREAM_SDK", "droid-mcp/local-exec"],
         ]
 
-        const lang = process.env["LANG"]
+        const lang = base["LANG"]
 
         if (lang !== undefined) entries.push(["LANG", lang])
 
-        const term = process.env["TERM"]
+        const term = base["TERM"]
 
         if (term !== undefined) entries.push(["TERM", term])
 

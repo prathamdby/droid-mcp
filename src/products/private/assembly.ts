@@ -100,6 +100,14 @@ export const assemblePipeline = async (options: AssemblyOptions): Promise<Assemb
     localExecLayer({
       droidPath: options.droidPath ?? "droid",
       args: options.droidArgs,
+      // The composition root is the only place ambient process configuration
+      // enters the system; local-exec itself stays free of `process.env`.
+      baseEnv: {
+        PATH: process.env["PATH"],
+        HOME: process.env["HOME"],
+        LANG: process.env["LANG"],
+        TERM: process.env["TERM"],
+      },
       env: options.droidEnv,
     }),
     baseDeps,

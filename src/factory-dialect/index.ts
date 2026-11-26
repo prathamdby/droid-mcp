@@ -132,43 +132,43 @@ export interface ChallengeEndpoint {
 }
 
 export type PeerNotice = Data.TaggedEnum<{
-  SessionDelta: {
+  readonly SessionDelta: {
     readonly sessionId: string
     readonly kind: string
     readonly payload: Schema.Json
   }
-  TurnCompleted: { readonly sessionId: string; readonly summary: Schema.Json }
-  TurnInterrupted: { readonly sessionId: string; readonly reason: string }
-  TurnFailed: {
+  readonly TurnCompleted: { readonly sessionId: string; readonly summary: Schema.Json }
+  readonly TurnInterrupted: { readonly sessionId: string; readonly reason: string }
+  readonly TurnFailed: {
     readonly sessionId: string
     readonly code: string
     readonly message: string
   }
-  PermissionChallenge: {
+  readonly PermissionChallenge: {
     readonly peerRequestId: string
     readonly toolUses: Schema.Json
     readonly options: Schema.Json
     readonly endpoint: ChallengeEndpoint
   }
-  QuestionChallenge: {
+  readonly QuestionChallenge: {
     readonly peerRequestId: string
     readonly questions: Schema.Json
     readonly endpoint: ChallengeEndpoint
   }
-  OptionsChallenge: {
+  readonly OptionsChallenge: {
     readonly peerRequestId: string
     readonly title: string
     readonly options: Schema.Json
     readonly multiSelect: boolean
     readonly endpoint: ChallengeEndpoint
   }
-  ChallengeResolved: {
+  readonly ChallengeResolved: {
     readonly peerRequestId: string
     readonly toolUseIds: ReadonlyArray<string>
   }
-  ModelCatalog: { readonly models: Schema.Json }
-  SettingsChanged: { readonly settings: Schema.Json }
-  OtherNotice: { readonly method: string; readonly payload: Schema.Json }
+  readonly ModelCatalog: { readonly models: Schema.Json }
+  readonly SettingsChanged: { readonly settings: Schema.Json }
+  readonly OtherNotice: { readonly method: string; readonly payload: Schema.Json }
 }>
 
 export const PeerNotice = Data.taggedEnum<PeerNotice>()

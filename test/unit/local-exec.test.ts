@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -51,6 +51,7 @@ interface Services {
 
 interface HarnessOptions {
   readonly env?: Readonly<Record<string, string>>
+  readonly baseEnv?: Readonly<Record<string, string | undefined>>
   readonly maxAutonomy?: AutonomyLevel
   readonly spawnTimeoutMs?: number
   readonly protectedValues?: ReadonlyArray<string>
@@ -75,6 +76,7 @@ const makeServices = (options?: HarnessOptions): Services => {
     localExecLayer({
       droidPath: process.execPath,
       args: [FAKE],
+      baseEnv: options?.baseEnv,
       env: options?.env,
       spawnTimeoutMs: options?.spawnTimeoutMs,
     }),
@@ -193,6 +195,67 @@ describe("open", () => {
     expect(lease.facilities.interrupt).toBe(true)
 
     await Effect.runPromise(services.localExec.release(lease))
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+  })
+
+  it("launches the child with the scrubbed default environment when no baseEnv is given", async () => {
+    const dump = join(sandbox, "env-default.json")
+    const services = makeServices({ env: { FAKE_DROID_ENV_DUMP: dump } })
+    const caller = admitCaller(services, "open-env-default")
+    const grant = grantAt(services, caller, "high")
+    const scope = await Effect.runPromise(Scope.make())
+    const ws = await acquireWorkspace(services, caller, scope)
+
+    const lease = await openLease(services, ws, grant, scope)
+    await Effect.runPromise(services.localExec.release(lease))
+
+    // SAFETY: the fake writes its own `process.env` as JSON, which is always
+    // a flat string-to-string record.
+    const visible = JSON.parse(readFileSync(dump, "utf8")) as Record<string, string>
+
+    // Without operator-supplied base entries the launch allowlist falls back
+    // to the minimal safe values — never ambient process.env entries such as
+    // the very PATH/HOME/LANG of the test runner itself.
+    expect(visible["PATH"]).toBe("/usr/bin:/bin")
+    expect(visible["HOME"]).toBe("/")
+    expect(visible["LANG"]).toBeUndefined()
+    expect(visible["TERM"]).toBeUndefined()
+    expect(visible["FACTORY_UPSTREAM_CLIENT_TYPE"]).toBe("sdk")
+    expect(visible["FAKE_DROID_ENV_DUMP"]).toBe(dump)
+
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+  })
+
+  it("reads PATH, HOME, LANG and TERM from baseEnv instead of ambient process state", async () => {
+    const dump = join(sandbox, "env-base.json")
+
+    const services = makeServices({
+      baseEnv: {
+        PATH: "/custom/bin",
+        HOME: "/custom-home",
+        LANG: "en_US.UTF-8",
+        TERM: "xterm-256color",
+      },
+      env: { FAKE_DROID_ENV_DUMP: dump },
+    })
+
+    const caller = admitCaller(services, "open-env-base")
+    const grant = grantAt(services, caller, "high")
+    const scope = await Effect.runPromise(Scope.make())
+    const ws = await acquireWorkspace(services, caller, scope)
+
+    const lease = await openLease(services, ws, grant, scope)
+    await Effect.runPromise(services.localExec.release(lease))
+
+    // SAFETY: the fake writes its own `process.env` as JSON, which is always
+    // a flat string-to-string record.
+    const visible = JSON.parse(readFileSync(dump, "utf8")) as Record<string, string>
+
+    expect(visible["PATH"]).toBe("/custom/bin")
+    expect(visible["HOME"]).toBe("/custom-home")
+    expect(visible["LANG"]).toBe("en_US.UTF-8")
+    expect(visible["TERM"]).toBe("xterm-256color")
+
     await Effect.runPromise(Scope.close(scope, Exit.void))
   })
 

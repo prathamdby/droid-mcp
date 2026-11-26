@@ -21,52 +21,161 @@ interface ModuleSpec {
   readonly level: number
   readonly allows: ReadonlyArray<string>
   readonly typeOnly: ReadonlyArray<string>
+  /**
+   * The design decision the module hides — its Parnas secret. Every module
+   * exists to hide exactly one volatile decision from all the others; this
+   * field names it so the decomposition stays honest and reviewable.
+   */
+  readonly secret: string
 }
 
 const spec = (
   level: number,
+  secret: string,
   allows: ReadonlyArray<string>,
   typeOnly: ReadonlyArray<string> = [],
-): ModuleSpec => ({ level, allows, typeOnly })
+): ModuleSpec => ({ level, secret, allows, typeOnly })
 
 const MODULE_SPECS: ReadonlyArray<readonly [string, ModuleSpec]> = [
-  ["caller", spec(0, [])],
-  ["disclosure", spec(0, [])],
-  ["custody", spec(0, [])],
-  ["factory-dialect", spec(0, [])],
-  ["workspace", spec(1, ["caller", "custody"])],
-  ["authority", spec(1, ["caller"])],
-  ["guidance", spec(1, ["caller"])],
-  ["observations", spec(1, ["disclosure"])],
-  ["artifacts", spec(1, ["caller", "disclosure"])],
-  ["daemon-link", spec(1, ["factory-dialect", "custody", "disclosure"])],
-  ["capabilities", spec(2, ["caller", "authority", "guidance", "disclosure"])],
-  ["decisions", spec(2, ["authority", "disclosure"])],
-  ["local-exec", spec(2, ["factory-dialect", "custody", "workspace", "authority", "disclosure"])],
   [
-    "daemon-operations",
-    spec(3, [
-      "capabilities",
-      "daemon-link",
-      "factory-dialect",
-      "authority",
-      "caller",
+    "caller",
+    spec(
+      0,
+      "how principals are admitted, authenticated and bound to conversations and owned resources",
+      [],
+    ),
+  ],
+  [
+    "disclosure",
+    spec(
+      0,
+      "which payloads may leave the system and how protected values are scrubbed for each audience",
+      [],
+    ),
+  ],
+  [
+    "custody",
+    spec(
+      0,
+      "how resources are provisionally acquired, transferred across scopes and shut down within bounded time",
+      [],
+    ),
+  ],
+  [
+    "factory-dialect",
+    spec(
+      0,
+      "the exact wire versions, method strings, encodings and peer correlation formats of the Factory protocol",
+      [],
+    ),
+  ],
+  [
+    "workspace",
+    spec(
+      1,
+      "which filesystem roots are permitted and how checkouts are isolated, borrowed and cleaned up",
+      ["caller", "custody"],
+    ),
+  ],
+  [
+    "authority",
+    spec(
+      1,
+      "how required effects are compared, narrowed and granted per principal, target and evidence strength",
+      ["caller"],
+    ),
+  ],
+  [
+    "guidance",
+    spec(
+      1,
+      "the embedded operator guide content and the proof that its root instructions were delivered",
+      ["caller"],
+    ),
+  ],
+  [
+    "observations",
+    spec(1, "how observations are stored, retained, paged and woken up under backpressure", [
       "disclosure",
-      "guidance",
     ]),
   ],
   [
+    "artifacts",
+    spec(
+      1,
+      "how artifacts are selected, encoded, budgeted inline, retained and continued across pages",
+      ["caller", "disclosure"],
+    ),
+  ],
+  [
+    "daemon-link",
+    spec(
+      1,
+      "how the daemon connection is dialed, authenticated, negotiated, handed off, reconnected and replayed",
+      ["factory-dialect", "custody", "disclosure"],
+    ),
+  ],
+  [
+    "capabilities",
+    spec(
+      2,
+      "how operations are typed, bound, assembled and invoked — independent of any concrete operation list",
+      ["caller", "authority", "guidance", "disclosure"],
+    ),
+  ],
+  [
+    "decisions",
+    spec(
+      2,
+      "how outstanding offers are tracked, validated against the original choices and resolved with one-winner reply rights",
+      ["authority", "disclosure"],
+    ),
+  ],
+  [
+    "local-exec",
+    spec(
+      2,
+      "how the local executable is spawned, challenged, correlated and spoken to over its typed peer protocol",
+      ["factory-dialect", "custody", "workspace", "authority", "disclosure"],
+    ),
+  ],
+  [
+    "daemon-operations",
+    spec(
+      3,
+      "which operations the daemon serves, their replay restrictions and their enforceable settings",
+      [
+        "capabilities",
+        "daemon-link",
+        "factory-dialect",
+        "authority",
+        "caller",
+        "disclosure",
+        "guidance",
+      ],
+    ),
+  ],
+  [
     "hosted-factory",
-    spec(3, ["capabilities", "authority", "caller", "disclosure", "custody", "guidance"]),
+    spec(
+      3,
+      "which hosted operations exist at the configured origin and how their REST shapes are bound",
+      ["capabilities", "authority", "caller", "disclosure", "custody", "guidance"],
+    ),
   ],
   [
     "prem-context",
-    spec(3, ["capabilities", "authority", "caller", "disclosure", "custody", "guidance"]),
+    spec(
+      3,
+      "which Context operations exist at the configured origin and how spaces, documents and session records are bound",
+      ["capabilities", "authority", "caller", "disclosure", "custody", "guidance"],
+    ),
   ],
   [
     "placement",
     spec(
       4,
+      "how a runnable provider is selected and a live lease is bound to caller, grant, workspace and credential",
       [
         "local-exec",
         "daemon-operations",
@@ -81,27 +190,36 @@ const MODULE_SPECS: ReadonlyArray<readonly [string, ModuleSpec]> = [
   ],
   [
     "turns",
-    spec(5, ["placement", "decisions", "observations", "authority", "disclosure", "custody"]),
+    spec(
+      5,
+      "how turn lifecycles race, reconcile completion, snapshot observations atomically and interrupt honestly",
+      ["placement", "decisions", "observations", "authority", "disclosure", "custody"],
+    ),
   ],
   [
     "sessions",
-    spec(6, [
-      "turns",
-      "placement",
-      "caller",
-      "authority",
-      "custody",
-      "capabilities",
-      "disclosure",
-      "guidance",
-      "observations",
-      "decisions",
-    ]),
+    spec(
+      6,
+      "how public session references are owned, filtered per caller, subscribed to and retained after completion",
+      [
+        "turns",
+        "placement",
+        "caller",
+        "authority",
+        "custody",
+        "capabilities",
+        "disclosure",
+        "guidance",
+        "observations",
+        "decisions",
+      ],
+    ),
   ],
   [
     "presentation",
     spec(
       7,
+      "how operations are ranked, aliased, composed into compact or full views and recovered in sequential batches",
       [
         "capabilities",
         "sessions",
@@ -116,15 +234,11 @@ const MODULE_SPECS: ReadonlyArray<readonly [string, ModuleSpec]> = [
   ],
   [
     "mcp",
-    spec(8, [
-      "presentation",
-      "sessions",
-      "caller",
-      "guidance",
-      "artifacts",
-      "observations",
-      "decisions",
-    ]),
+    spec(
+      8,
+      "the MCP negotiation, tool, resource, prompt and notification encodings exposed to clients",
+      ["presentation", "sessions", "caller", "guidance", "artifacts", "observations", "decisions"],
+    ),
   ],
 ]
 
@@ -132,7 +246,14 @@ const lowerModules = MODULE_SPECS.map(([name]) => name)
 
 export const MODULES: ReadonlyMap<string, ModuleSpec> = new Map([
   ...MODULE_SPECS,
-  ["products", spec(9, lowerModules)],
+  [
+    "products",
+    spec(
+      9,
+      "operator configuration, ambient process state, transport carriers and product lifecycle wiring",
+      lowerModules,
+    ),
+  ],
 ])
 
 /** Compiler internals, module loaders and dynamic evaluation no module may touch. */
@@ -196,6 +317,7 @@ interface ModuleReference {
   readonly requireCall: boolean
   readonly typeOnly: boolean
   readonly reExport: boolean
+  readonly wildcardExport: boolean
 }
 
 interface ReferenceScan {
@@ -280,6 +402,7 @@ const scanReferences = (source: ts.SourceFile): ReferenceScan => {
     requireCall: boolean,
     typeOnly: boolean,
     reExport: boolean,
+    wildcardExport: boolean = false,
   ): void => {
     references.push({
       specifier,
@@ -288,6 +411,7 @@ const scanReferences = (source: ts.SourceFile): ReferenceScan => {
       requireCall,
       typeOnly,
       reExport,
+      wildcardExport,
     })
   }
 
@@ -303,6 +427,7 @@ const scanReferences = (source: ts.SourceFile): ReferenceScan => {
       requireCall: false,
       typeOnly: false,
       reExport: false,
+      wildcardExport: false,
     })
   }
 
@@ -314,6 +439,7 @@ const scanReferences = (source: ts.SourceFile): ReferenceScan => {
       requireCall: true,
       typeOnly: false,
       reExport: false,
+      wildcardExport: false,
     })
   }
 
@@ -343,7 +469,14 @@ const scanReferences = (source: ts.SourceFile): ReferenceScan => {
       const target = node.moduleSpecifier
 
       if (target !== undefined && ts.isStringLiteral(target)) {
-        push(target.text, target, false, node.isTypeOnly, true)
+        // `export *` (no export clause) and `export * as ns` forward every
+        // present and future name of the target, so the module no longer
+        // controls its own interface — flag them independently of where they
+        // point. Selective `export { x }` clauses are checked elsewhere.
+        const isWildcard =
+          node.exportClause === undefined || ts.isNamespaceExport(node.exportClause)
+
+        push(target.text, target, false, node.isTypeOnly, true, isWildcard)
       }
     } else if (ts.isImportEqualsDeclaration(node)) {
       if (ts.isExternalModuleReference(node.moduleReference)) {
@@ -720,6 +853,17 @@ const checkReference = (
   }
 
   const specifier = reference.specifier
+
+  if (reference.wildcardExport) {
+    record(
+      "wildcard_export",
+      relative,
+      reference.line,
+      "export * forwards every present and future name of the target; name each exported symbol explicitly",
+    )
+
+    return
+  }
 
   if (specifier === "__dynamic_code__") {
     record(
