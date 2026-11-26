@@ -12,7 +12,7 @@ import { join, relative, sep } from "node:path"
 const ROOT = "src/skill/droid"
 const OUTPUT = "src/generated/skill.ts"
 
-const walk = (directory: string): ReadonlyArray<string> =>
+const walk = (directory: string): Array<string> =>
   readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name)
 
@@ -21,7 +21,7 @@ const walk = (directory: string): ReadonlyArray<string> =>
 
 const paths = walk(ROOT).sort()
 
-const files = paths.map((path) => [
+const files: Array<readonly [string, string]> = paths.map((path) => [
   relative(ROOT, path).split(sep).join("/"),
   readFileSync(path, "utf8"),
 ])
@@ -36,7 +36,7 @@ const identifier = (path: string): string =>
     : path
         .replace(/^references\//, "")
         .replace(/\.md$/, "")
-        .replace(/[^a-zA-Z0-9]+(.)/g, (_, next: string) => next.toUpperCase())
+        .replace(/[^a-zA-Z0-9]+(.)/g, (_match: string, next: string) => next.toUpperCase())
 
 /**
  * A JS string literal in the quote style the formatter prefers: double quotes
