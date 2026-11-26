@@ -764,6 +764,21 @@ describe("httpServer", () => {
         toolValue(await call(request, "tools_search", { query: "zzzz-no-such-operation-zzzz" })),
       ).toEqual({ total: 0, tools: [] })
 
+      const invalidSearchArguments: ReadonlyArray<Schema.Json> = [
+        { family: "bogus" },
+        { readOnly: "yes" },
+        { limit: 0 },
+        { limit: 51 },
+        { limit: 1.5 },
+        { offset: -1 },
+      ]
+
+      for (const searchArguments of invalidSearchArguments) {
+        expect(toolFailure(await call(request, "tools_search", searchArguments))).toMatchObject({
+          code: "invalid_arguments",
+        })
+      }
+
       const dispatchReply = await call(request, "tool_call", {
         name: "server_info",
         arguments: {},
@@ -808,6 +823,52 @@ describe("httpServer", () => {
       for (const step of steps) {
         expect(step.status).toBe("ok")
         expect(record(step.result ?? {}).profile).toBe("compact")
+      }
+
+      const unbudgeted = record(
+        toolValue(
+          await call(request, "batch", {
+            steps: [
+              { id: "unbudgeted-first", name: "skill_read" },
+              { id: "unbudgeted-second", name: "skill_read" },
+            ],
+          }),
+        ),
+      )
+
+      for (const step of records(unbudgeted.steps ?? [])) {
+        expect(step.status).toBe("ok")
+        expect(step.truncated).toBeUndefined()
+        expect(text(record(step.result ?? {}).markdown)).toContain("# Droid")
+      }
+
+      const budgeted = record(
+        toolValue(
+          await call(request, "batch", {
+            steps: [
+              { id: "budget-first", name: "skill_read" },
+              { id: "budget-second", name: "skill_read" },
+            ],
+            maxBytes: 1,
+          }),
+        ),
+      )
+
+      const budgetedSteps = records(budgeted.steps ?? [])
+
+      expect(budgeted.completed).toBe(2)
+      expect(budgetedSteps).toHaveLength(2)
+
+      for (const step of budgetedSteps) {
+        expect(step.status).toBe("ok")
+        expect(step.result).toBeUndefined()
+        expect(step.truncated).toBe(true)
+
+        const ref = text(step.ref)
+        const page = record(toolValue(await call(request, "result_read", { ref, length: 128 })))
+
+        expect(text(page.chunk)).toContain('"markdown"')
+        expect(number(page.totalBytes)).toBeGreaterThan(1_024)
       }
     } finally {
       await server.close()

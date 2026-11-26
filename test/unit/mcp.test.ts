@@ -10,7 +10,11 @@ import { Authority, authorityLayer } from "../../src/authority/index.ts"
 import type { AutonomyLevel } from "../../src/authority/index.ts"
 import { Callers, callersLayer, trustedEvidence } from "../../src/caller/index.ts"
 import type { Conversation } from "../../src/caller/index.ts"
-import { Capabilities, capabilitiesLayer } from "../../src/capabilities/index.ts"
+import {
+  Capabilities,
+  capabilitiesLayer,
+  OPERATION_FAMILIES,
+} from "../../src/capabilities/index.ts"
 import { custodyLayer } from "../../src/custody/index.ts"
 import { decisionsLayer } from "../../src/decisions/index.ts"
 import { disclosureLayer } from "../../src/disclosure/index.ts"
@@ -34,6 +38,7 @@ import {
   createView,
   Presentation,
   presentationLayer,
+  SEARCH_LIMIT_MAX,
 } from "../../src/presentation/index.ts"
 import type { View } from "../../src/presentation/index.ts"
 import { Sessions, sessionsLayer } from "../../src/sessions/index.ts"
@@ -601,6 +606,18 @@ describe("mcp: tools/list", () => {
       expect(tools.length).toBe(services.view.toolCount)
       expect(tools.length).toBe(services.view.directNames.length + 5)
 
+      const searchTool = tools.find((tool) => fieldOf(tool, "name") === "tools_search")
+
+      if (searchTool === undefined) throw new Error("compact inventory omits tools_search")
+
+      expect(asObject(fieldOf(searchTool, "inputSchema"))).toMatchObject({
+        properties: {
+          family: { enum: [...OPERATION_FAMILIES] },
+          limit: { minimum: 1, maximum: SEARCH_LIMIT_MAX },
+          offset: { minimum: 0 },
+        },
+      })
+
       const directNames = new Set<string>(services.view.directNames)
 
       for (const tool of tools) {
@@ -846,6 +863,37 @@ describe("mcp: compact dispatch end-to-end", () => {
 
       expect(stringOf(fieldOf(firstDescribed, "name"))).toBe("session_events")
       expect(asArray(describePayload.unknown ?? []).length).toBe(0)
+    } finally {
+      await services.close()
+    }
+  })
+
+  it("tools_search rejects invalid filter values instead of ignoring them", async () => {
+    const services = buildHarness()
+
+    try {
+      const { endpoint } = await Effect.runPromise(bindEndpoint(services, "alice"))
+
+      const invalidArguments: ReadonlyArray<Schema.Json> = [
+        { family: "bogus" },
+        { readOnly: "yes" },
+        { limit: 0 },
+        { limit: 51 },
+        { limit: 1.5 },
+        { offset: -1 },
+      ]
+
+      for (const args of invalidArguments) {
+        const reply = await callTool(endpoint, "tools_search", args)
+
+        expect(reply.kind).toBe("result")
+        expect(toolFailure(reply).code).toBe("invalid_arguments")
+      }
+
+      const valid = await callTool(endpoint, "tools_search", { limit: 1 })
+
+      expect(valid.kind).toBe("result")
+      expect(numberOf(fieldOf(toolResult(valid), "total"))).toBeGreaterThan(1)
     } finally {
       await services.close()
     }

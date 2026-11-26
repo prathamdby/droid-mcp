@@ -237,7 +237,16 @@ const MODULE_SPECS: ReadonlyArray<readonly [string, ModuleSpec]> = [
     spec(
       8,
       "the MCP negotiation, tool, resource, prompt and notification encodings exposed to clients",
-      ["presentation", "sessions", "caller", "guidance", "artifacts", "observations", "decisions"],
+      [
+        "presentation",
+        "sessions",
+        "caller",
+        "guidance",
+        "artifacts",
+        "observations",
+        "decisions",
+        "capabilities",
+      ],
     ),
   ],
 ]

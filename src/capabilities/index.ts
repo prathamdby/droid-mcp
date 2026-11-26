@@ -57,14 +57,18 @@ import type { GuidanceRequired, Prerequisite } from "../guidance/index.ts"
 
 export type OperationId = string
 
-export type OperationFamily =
-  | "server"
-  | "skill"
-  | "session"
-  | "rest"
-  | "context"
-  | "daemon"
-  | "droid"
+/** The complete runtime vocabulary of operation families. */
+export const OPERATION_FAMILIES = [
+  "server",
+  "skill",
+  "session",
+  "rest",
+  "context",
+  "daemon",
+  "droid",
+] as const
+
+export type OperationFamily = (typeof OPERATION_FAMILIES)[number]
 
 export type ReplayPolicy = "safe_read" | "no_retry"
 

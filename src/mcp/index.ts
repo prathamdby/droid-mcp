@@ -38,7 +38,6 @@ import * as Filter from "effect/Filter"
 import * as Layer from "effect/Layer"
 import * as Match from "effect/Match"
 import * as Option from "effect/Option"
-import * as Predicate from "effect/Predicate"
 import * as Result from "effect/Result"
 import type * as Schema from "effect/Schema"
 import * as Stream from "effect/Stream"
@@ -48,7 +47,7 @@ import { sameCaller } from "../caller/index.ts"
 import { CURRENT_GUIDE_EDITION, Guidance } from "../guidance/index.ts"
 import type { GuideText } from "../guidance/index.ts"
 import { Presented, Presentation } from "../presentation/index.ts"
-import type { BatchStepRequest, DiscoveryQuery, View } from "../presentation/index.ts"
+import type { BatchStepRequest, View } from "../presentation/index.ts"
 import { Sessions } from "../sessions/index.ts"
 import type { SessionChange, SessionSummary } from "../sessions/index.ts"
 import {
@@ -66,6 +65,7 @@ import {
   readNamesList,
   readOptionalNumber,
   readOptionalString,
+  readSearchArguments,
   readToolCallParams,
   readStreamDelivery,
 } from "./private/payloads.ts"
@@ -214,14 +214,6 @@ type CallRequestWire = {
   maxBytes?: number
 }
 
-type SearchQueryWire = {
-  query?: string
-  family?: DiscoveryQuery["family"]
-  readOnly?: boolean
-  limit?: number
-  offset?: number
-}
-
 type BatchStepWireInput = {
   id?: string
   name: string
@@ -239,21 +231,6 @@ type ResultRangeWire = {
   offset?: number
   length?: number
   select?: string
-}
-
-const operationFamilyOf = (value: Schema.Json): DiscoveryQuery["family"] | undefined => {
-  switch (value) {
-    case "server":
-    case "skill":
-    case "session":
-    case "rest":
-    case "context":
-    case "daemon":
-    case "droid":
-      return value
-    default:
-      return undefined
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -707,25 +684,14 @@ export const mcpLayer = (
           ): Effect.Effect<McpReply> => {
             if (name === "tools_search") {
               return Effect.gen(function* () {
-                const searchText = stringField(args, "query")
-                const record = recordOf(args)
-                const query: SearchQueryWire = {}
+                const query = readSearchArguments(args)
 
-                if (searchText !== undefined) query.query = searchText
-
-                if (record !== undefined) {
-                  const family = operationFamilyOf(record.family)
-                  const readOnly = record.readOnly
-                  const limit = readOptionalNumber(record, "limit")
-                  const offset = readOptionalNumber(record, "offset")
-
-                  if (family !== undefined) query.family = family
-
-                  if (Predicate.isBoolean(readOnly)) query.readOnly = readOnly
-
-                  if (limit !== undefined) query.limit = limit
-
-                  if (offset !== undefined) query.offset = offset
+                if (query === undefined) {
+                  return renderToolFailure(
+                    id,
+                    "invalid_arguments",
+                    "tools_search has invalid arguments",
+                  )
                 }
 
                 const page = yield* Effect.result(presentation.describe(view, who, query))
