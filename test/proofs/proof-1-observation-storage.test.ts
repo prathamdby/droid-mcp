@@ -550,7 +550,14 @@ try {
         services.turns.observe(turn, initialPage.resume, 500),
       )
 
-      for (let attempt = 0; attempt < 20 && !evictedPage.gap; attempt += 1) {
+      // The flood keeps arriving while pre-prompt events already evicted set
+      // gap true, so keep polling until the prompt event itself is gone.
+      for (
+        let attempt = 0;
+        attempt < 20 &&
+        (!evictedPage.gap || eventKindsOf(evictedPage.items).includes("decision_offered"));
+        attempt += 1
+      ) {
         await Effect.runPromise(Effect.sleep("50 millis"))
         evictedPage = await Effect.runPromise(services.turns.observe(turn, initialPage.resume, 0))
       }
