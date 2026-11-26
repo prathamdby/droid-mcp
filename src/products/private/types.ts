@@ -83,6 +83,7 @@ export interface DaemonEndpointOptions {
 export interface DaemonAuthOptions {
   readonly apiKey?: string | undefined
   readonly caller?: string | undefined
+  readonly metadata?: Schema.Json
 }
 
 /** Options for the embedded product. */
