@@ -185,8 +185,66 @@ describe("parseCliArgs", () => {
     "--allow-unverified-daemon-authority=true",
     "--host",
     "--not-a-flag",
+    "--daemon-url=127.0.0.1:7338",
+    "--daemon-url=unix:",
   ])("rejects invalid argument %s", (argument) => {
     expect(() => parseCliArgs([argument], {})).toThrow(CliParseError)
+  })
+
+  it("resolves the daemon defaults: runtime socket, owned spawn, no key", () => {
+    expect(parseCliArgs([], { XDG_RUNTIME_DIR: "/run/user/1000" })).toMatchObject({
+      daemonEndpoint: { socketPath: "/run/user/1000/droid-mcp/daemon.sock" },
+      daemonAuth: undefined,
+      daemonSpawn: { command: "droid" },
+      workspaceRoots: undefined,
+    })
+
+    expect(parseCliArgs([], {}).daemonEndpoint).toEqual({
+      socketPath: "/tmp/droid-mcp/daemon.sock",
+    })
+
+    const runtime = parseCliArgs([], {
+      DROID_MCP_RUNTIME_DIR: "/run/custom",
+      DROID_MCP_DROID_PATH: "/opt/droid/bin/droid",
+    })
+
+    expect(runtime.daemonEndpoint).toEqual({ socketPath: "/run/custom/daemon.sock" })
+    expect(runtime.daemonSpawn).toMatchObject({ command: "/opt/droid/bin/droid" })
+  })
+
+  it("maps every accepted --daemon-url form and disables the owned spawn", () => {
+    for (const [url, endpoint] of [
+      ["unix:/tmp/daemon.sock", { socketPath: "/tmp/daemon.sock" }],
+      ["http://127.0.0.1:7338", { host: "127.0.0.1", port: 7338 }],
+      ["https://daemon.internal:8443", { host: "daemon.internal", port: 8443 }],
+      ["ws://localhost", { host: "localhost", port: 7338 }],
+    ] as const) {
+      expect(parseCliArgs(["--daemon-url", url], {})).toMatchObject({
+        daemonEndpoint: endpoint,
+        daemonSpawn: undefined,
+      })
+    }
+
+    expect(
+      parseCliArgs(["--daemon-url", "unix:/tmp/x.sock"], { XDG_RUNTIME_DIR: "/run" }),
+    ).toMatchObject({ daemonEndpoint: { socketPath: "/tmp/x.sock" } })
+  })
+
+  it("derives the daemon credential from the Factory API key", () => {
+    expect(parseCliArgs(["--factory-api-key", "key-1"], {}).daemonAuth).toEqual({
+      apiKey: "key-1",
+    })
+    expect(parseCliArgs([], { FACTORY_API_KEY: "env-key" }).daemonAuth).toEqual({
+      apiKey: "env-key",
+    })
+    expect(parseCliArgs([], {}).daemonAuth).toBeUndefined()
+  })
+
+  it("passes workspace roots only when the operator names them", () => {
+    expect(parseCliArgs([], {}).workspaceRoots).toBeUndefined()
+    expect(
+      parseCliArgs(["--workspace-root", "/a", "--workspace-root", "/b"], {}).workspaceRoots,
+    ).toEqual(["/a", "/b"])
   })
 })
 
@@ -239,6 +297,30 @@ describe("embedded", () => {
       ok: false,
       code: "closed",
     })
+  })
+
+  it("admits the process working directory when no roots are configured", async () => {
+    const runtime = await embedded({
+      droidPath: process.execPath,
+      droidArgs: [FAKE_EXEC],
+      includeDaemon: false,
+      principal: "operator",
+    })
+
+    try {
+      const created = await runtime.invoke("session_create", {
+        cwd: process.cwd(),
+        autonomyLevel: "low",
+      })
+
+      const sessionId = text(record(embeddedValue(created)).sessionId)
+
+      await expect(runtime.invoke("session_close", { sessionId })).resolves.toMatchObject({
+        ok: true,
+      })
+    } finally {
+      await runtime.close()
+    }
   })
 
   it("installs both configured network providers without contacting either", async () => {
@@ -322,6 +404,65 @@ describe("stdioServer", () => {
       lines.close()
       input.destroy()
       output.destroy()
+    }
+  })
+
+  it("delivers daemon operations from the configured endpoint and credential", async () => {
+    const socketPath = join(sandbox, "stdio-daemon.sock")
+
+    const daemon = await startFakeDaemon(socketPath, {
+      onRequest: () => ({ result: { sessions: [] } }),
+    })
+
+    const input = new PassThrough()
+    const output = new PassThrough()
+    const lines = createInterface({ input: output, terminal: false })
+    const replies = lines[Symbol.asyncIterator]()
+
+    const server = await stdioServer({
+      input,
+      output,
+      daemonEndpoint: { socketPath },
+      daemonAuth: { apiKey: "stdio-key" },
+      daemonServedMethods: new Set(["daemon.list_opened_sessions"]),
+    })
+
+    let id = 0
+
+    const nextReply = async (): Promise<RpcReply> => {
+      const line = await replies.next()
+
+      if (line.done) throw new Error("stdio ended before replying")
+
+      return rpcReply(json(line.value))
+    }
+
+    const request: RequestRpc = (method, params = {}) => {
+      const requestId = ++id
+
+      input.write(requestLine(requestId, method, params) + "\n")
+
+      return nextReply().then((reply) => {
+        expect(reply.id).toBe(requestId)
+
+        return reply
+      })
+    }
+
+    try {
+      result(await request("initialize"))
+      toolValue(await call(request, "skill_read"))
+
+      const listed = toolValue(await call(request, "daemon_list_opened_sessions", {}))
+
+      expect(listed).toEqual({ sessions: [] })
+      expect(daemon.requests.map(({ method }) => method)).toContain("daemon.list_opened_sessions")
+    } finally {
+      await server.close()
+      lines.close()
+      input.destroy()
+      output.destroy()
+      await daemon.close()
     }
   })
 })

@@ -39,6 +39,14 @@ export interface AssemblyOptions {
   readonly droidEnv?: Readonly<Record<string, string>> | undefined
   /** Daemon endpoint the link dials, when the daemon provider is installed. */
   readonly daemonEndpoint?: DaemonEndpointOptions | undefined
+  /**
+   * Command that launches an owned daemon when the endpoint is not listening
+   * and the daemon provider is installed. Absent means an unreachable
+   * endpoint fails the daemon operations instead of creating a daemon.
+   */
+  readonly daemonSpawn?:
+    | { readonly command: string; readonly args: ReadonlyArray<string> }
+    | undefined
   /** Credentials for the daemon handshake. */
   readonly daemonAuth?: DaemonAuthOptions | undefined
   /** Hosted API origin; installs the hosted provider when present. */

@@ -148,6 +148,7 @@ export const assemblePipeline = async (options: AssemblyOptions): Promise<Assemb
         daemonLinkLayer({
           endpoint: options.daemonEndpoint,
           auth: options.daemonAuth,
+          spawn: options.daemonSpawn,
         }),
         providerDeps,
       )

@@ -40,13 +40,27 @@ export interface CliConfig {
   readonly allowUnverifiedDaemonAuthority: boolean
   readonly maxAutonomy: AutonomyLevel
   readonly daemonUrl: string | undefined
+  /** Resolved daemon endpoint: an explicit `--daemon-url`, else the runtime socket. */
+  readonly daemonEndpoint:
+    | { readonly socketPath: string }
+    | { readonly host: string; readonly port: number }
+  /** Credentials for the daemon handshake, derived from the Factory API key. */
+  readonly daemonAuth: { readonly apiKey: string } | undefined
+  /**
+   * Command that launches an owned daemon on the runtime socket when no
+   * `--daemon-url` names an existing one. Always the local executable.
+   */
+  readonly daemonSpawn:
+    | { readonly command: string; readonly args: ReadonlyArray<string> }
+    | undefined
   readonly factoryApiKey: string | undefined
   readonly factoryBaseUrl: string | undefined
   readonly contextBaseUrl: string | undefined
   readonly includeDaemon: boolean
   readonly guidanceRequired: boolean
   readonly droidPath: string
-  readonly workspaceRoots: ReadonlyArray<string>
+  /** Permitted workspace roots; `undefined` lets the assembly admit `cwd`. */
+  readonly workspaceRoots: ReadonlyArray<string> | undefined
 }
 
 const PROFILES: ReadonlyArray<string> = ["compact", "full"]
@@ -80,6 +94,67 @@ const splitTokens = (raw: string | undefined): ReadonlyArray<string> => {
 
 const nonEmpty = (raw: string | undefined): string | undefined =>
   raw === undefined || raw.trim().length === 0 ? undefined : raw
+
+/** Port the `droid daemon` websocket listener binds when a URL names none. */
+const DEFAULT_DAEMON_PORT = 7338
+
+const DAEMON_URL_SCHEMES: ReadonlyArray<string> = ["http:", "https:", "ws:", "wss:"]
+
+/**
+ * Resolves a `--daemon-url` into an endpoint. `unix:<path>` names a socket;
+ * `http(s)://` and `ws(s)://` URLs name a host and port (defaulting the port
+ * to the daemon websocket default). Any other shape is rejected up front
+ * instead of being silently ignored at dial time.
+ */
+const parseDaemonEndpoint = (
+  raw: string,
+): { readonly socketPath: string } | { readonly host: string; readonly port: number } => {
+  if (raw.startsWith("unix:")) {
+    const socketPath = raw.slice("unix:".length)
+
+    if (socketPath.length === 0) {
+      throw error("--daemon-url unix: needs a socket path")
+    }
+
+    return { socketPath }
+  }
+
+  let url: URL
+
+  try {
+    url = new URL(raw)
+  } catch {
+    throw error("--daemon-url must be unix:<path> or http(s)://host:port")
+  }
+
+  if (!DAEMON_URL_SCHEMES.includes(url.protocol) || url.hostname.length === 0) {
+    throw error("--daemon-url must be unix:<path> or http(s)://host:port")
+  }
+
+  return url.port === ""
+    ? { host: url.hostname, port: DEFAULT_DAEMON_PORT }
+    : { host: url.hostname, port: parsePort(url.port) }
+}
+
+/** Socket the owned daemon listens on when no `--daemon-url` names a daemon. */
+const defaultDaemonSocket = (env: CliEnv): string => {
+  const runtimeDir =
+    env["DROID_MCP_RUNTIME_DIR"] ?? (env["XDG_RUNTIME_DIR"] ?? "/tmp") + "/droid-mcp"
+
+  return runtimeDir + "/daemon.sock"
+}
+
+/** The owned-daemon command line, mirroring the documented spawn default. */
+const daemonSpawnArgs = (socketPath: string, parentPid: number): ReadonlyArray<string> => [
+  "daemon",
+  "--unix",
+  socketPath,
+  "--listen",
+  "websocket",
+  "--remote-control",
+  "--parent-pid",
+  String(parentPid),
+]
 
 const VALUE_FLAGS: ReadonlyArray<string> = [
   "--profile",
@@ -215,6 +290,10 @@ export const parseCliArgs = (argv: ReadonlyArray<string>, env: CliEnv): CliConfi
 
   const host = values.get("--host") ?? env["DROID_MCP_HOST"] ?? "127.0.0.1"
   const portRaw = values.get("--port") ?? env["DROID_MCP_PORT"]
+  const droidPath = values.get("--droid-path") ?? env["DROID_MCP_DROID_PATH"] ?? "droid"
+  const daemonUrl = nonEmpty(values.get("--daemon-url") ?? env["DROID_MCP_DAEMON_URL"])
+  const factoryApiKey = nonEmpty(values.get("--factory-api-key") ?? env["FACTORY_API_KEY"])
+  const daemonSocket = defaultDaemonSocket(env)
 
   // SAFETY: both enumerations are checked against their literal member
   // lists immediately above, so the narrowed value is exactly the union.
@@ -228,14 +307,21 @@ export const parseCliArgs = (argv: ReadonlyArray<string>, env: CliEnv): CliConfi
     sharedSessions: booleans.has("--shared-sessions"),
     allowUnverifiedDaemonAuthority: booleans.has("--allow-unverified-daemon-authority"),
     maxAutonomy: maxAutonomyRaw as AutonomyLevel,
-    daemonUrl: nonEmpty(values.get("--daemon-url") ?? env["DROID_MCP_DAEMON_URL"]),
-    factoryApiKey: nonEmpty(values.get("--factory-api-key") ?? env["FACTORY_API_KEY"]),
+    daemonUrl,
+    daemonEndpoint:
+      daemonUrl === undefined ? { socketPath: daemonSocket } : parseDaemonEndpoint(daemonUrl),
+    daemonAuth: factoryApiKey === undefined ? undefined : { apiKey: factoryApiKey },
+    daemonSpawn:
+      daemonUrl === undefined
+        ? { command: droidPath, args: daemonSpawnArgs(daemonSocket, process.pid) }
+        : undefined,
+    factoryApiKey,
     factoryBaseUrl: nonEmpty(values.get("--factory-base-url") ?? env["FACTORY_BASE_URL"]),
     contextBaseUrl: nonEmpty(values.get("--context-base-url") ?? env["FACTORY_CONTEXT_BASE_URL"]),
     includeDaemon: !booleans.has("--no-daemon"),
     guidanceRequired: !booleans.has("--no-guidance"),
-    droidPath: values.get("--droid-path") ?? env["DROID_MCP_DROID_PATH"] ?? "droid",
-    workspaceRoots,
+    droidPath,
+    workspaceRoots: workspaceRoots.length > 0 ? workspaceRoots : undefined,
   }
 }
 
@@ -254,7 +340,9 @@ Flags:
   --shared-sessions                     Share the session directory across callers (opt-in)
   --allow-unverified-daemon-authority   Permit daemon authority passthrough (opt-in)
   --max-autonomy <off|low|medium|high>  Authority ceiling (default: medium)
-  --daemon-url <url>                    Use an existing daemon endpoint
+  --daemon-url <url>                    Use an existing daemon (unix:<path> or
+                                        http(s)://host:port); default: spawn one
+                                        on the runtime socket
   --no-daemon                           Omit the daemon provider entirely
   --no-guidance                         Disable the guidance receipt gate
   --factory-api-key <key>               Factory API key (FACTORY_API_KEY)
@@ -315,19 +403,14 @@ export const runCli = async (
             url: "http://" + config.host + ":" + String(config.port) + "/mcp",
             bearerToken: config.authTokens[0],
           })
-        : await (() => {
-            const endpoint =
-              config.daemonUrl !== undefined && config.daemonUrl.startsWith("unix:")
-                ? { socketPath: config.daemonUrl.slice("unix:".length) }
-                : { host: config.host, port: config.port > 0 ? config.port : 7338 }
-
-            return doctor({
-              transport: "daemon",
-              endpoint,
-              auth:
-                config.factoryApiKey === undefined ? undefined : { apiKey: config.factoryApiKey },
-            })
-          })()
+        : await doctor({
+            transport: "daemon",
+            endpoint:
+              "socketPath" in config.daemonEndpoint
+                ? { socketPath: config.daemonEndpoint.socketPath }
+                : { host: config.daemonEndpoint.host, port: config.daemonEndpoint.port },
+            auth: config.daemonAuth,
+          })
 
     io?.output?.write(JSON.stringify(report) + "\n")
 
@@ -341,6 +424,9 @@ export const runCli = async (
     guidanceRequired: config.guidanceRequired,
     workspaceRoots: config.workspaceRoots,
     droidPath: config.droidPath,
+    daemonEndpoint: config.daemonEndpoint,
+    daemonAuth: config.daemonAuth,
+    daemonSpawn: config.daemonSpawn,
     factoryBaseUrl: config.factoryBaseUrl,
     factoryApiKey: config.factoryApiKey,
     contextBaseUrl: config.contextBaseUrl,
@@ -381,13 +467,6 @@ export const runCli = async (
     return 2
   }
 
-  const daemonEndpoint =
-    config.daemonUrl === undefined
-      ? undefined
-      : config.daemonUrl.startsWith("unix:")
-        ? { socketPath: config.daemonUrl.slice("unix:".length) }
-        : undefined
-
   const { httpServer } = await import("./http.ts")
 
   const handle = await httpServer({
@@ -395,7 +474,6 @@ export const runCli = async (
     authTokens: config.authTokens,
     host: config.host,
     port: config.port,
-    daemonEndpoint,
   })
 
   io?.output?.write("listening on " + handle.url + handle.path + "\n")
