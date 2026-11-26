@@ -1,9 +1,136 @@
+import { createHash } from "node:crypto"
 import * as net from "node:net"
 
 import * as Schema from "effect/Schema"
 
-import type { JsonRpcError, JsonValue } from "../../src/droid/protocol.ts"
-import { OPCODE, computeAccept, concat, decodeFrames } from "../../src/droid/ws.ts"
+/**
+ * Self-contained fake daemon wire server for tests.
+ *
+ * Everything the client speaks — the JSON-RPC envelope shape, the RFC 6455
+ * websocket handshake and frame codec — is defined locally so this harness
+ * has zero imports from `src/`. Client frames are masked per RFC 6455, so
+ * `decodeFrames` unmasks them before parsing.
+ */
+
+export type JsonValue = Schema.Json
+
+export interface JsonRpcError {
+  readonly code: number
+  readonly message: string
+  readonly data?: JsonValue | undefined
+}
+
+const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+const MAX_FRAME_BYTES = 16 * 1024 * 1024
+
+const OPCODE = {
+  continuation: 0x0,
+  text: 0x1,
+  binary: 0x2,
+  close: 0x8,
+  ping: 0x9,
+  pong: 0xa,
+} as const
+
+interface Frame {
+  readonly fin: boolean
+  readonly opcode: number
+  readonly payload: Uint8Array
+}
+
+interface DecodeResult {
+  readonly frames: ReadonlyArray<Frame>
+  readonly rest: Uint8Array
+  readonly error?: string | undefined
+}
+
+const computeAccept = (key: string): string =>
+  createHash("sha1")
+    .update(key + WS_GUID)
+    .digest("base64")
+
+const concat = (a: Uint8Array, b: Uint8Array): Uint8Array => {
+  if (a.length === 0) return b
+  const out = new Uint8Array(a.length + b.length)
+  out.set(a, 0)
+  out.set(b, a.length)
+
+  return out
+}
+
+/**
+ * Decode every complete frame in `buffer`. Masked client frames are unmasked
+ * in place; an incomplete trailing frame stays in `rest` so the caller can
+ * wait for more socket data.
+ */
+const decodeFrames = (
+  buffer: Uint8Array,
+  maxFrameBytes: number = MAX_FRAME_BYTES,
+): DecodeResult => {
+  const frames: Array<Frame> = []
+  let offset = 0
+
+  for (;;) {
+    if (buffer.length - offset < 2) break
+    const first = buffer[offset]
+    const second = buffer[offset + 1]
+    const fin = (first & 0x80) !== 0
+    const rsv = first & 0x70
+    const opcode = first & 0x0f
+    const masked = (second & 0x80) !== 0
+    let length = second & 0x7f
+    let cursor = offset + 2
+
+    if (length === 126) {
+      if (buffer.length - cursor < 2) break
+      length = (buffer[cursor] << 8) | buffer[cursor + 1]
+      cursor += 2
+    } else if (length === 127) {
+      if (buffer.length - cursor < 8) break
+      let wide = 0
+
+      for (let i = 0; i < 8; i++) {
+        wide = wide * 256 + buffer[cursor + i]
+      }
+
+      if (wide > Number.MAX_SAFE_INTEGER) {
+        return { frames, rest: buffer.subarray(offset), error: "frame length overflow" }
+      }
+
+      length = wide
+      cursor += 8
+    }
+
+    if (rsv !== 0) {
+      return { frames, rest: buffer.subarray(offset), error: "reserved bits are not supported" }
+    }
+
+    if (length > maxFrameBytes) {
+      return { frames, rest: buffer.subarray(offset), error: "frame exceeds the size cap" }
+    }
+
+    const maskLength = masked ? 4 : 0
+
+    if (buffer.length - cursor < maskLength + length) break
+    let payload = buffer.subarray(cursor + maskLength, cursor + maskLength + length)
+
+    if (masked) {
+      const mask = buffer.subarray(cursor, cursor + 4)
+      const unmasked = new Uint8Array(length)
+
+      for (let i = 0; i < length; i++) {
+        unmasked[i] = payload[i] ^ mask[i % 4]
+      }
+
+      payload = unmasked
+    }
+
+    frames.push({ fin, opcode, payload })
+    offset = cursor + maskLength + length
+  }
+
+  return { frames, rest: offset === 0 ? buffer : buffer.subarray(offset) }
+}
 
 export interface SeenRequest {
   readonly id: string
