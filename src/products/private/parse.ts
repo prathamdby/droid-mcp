@@ -12,7 +12,7 @@
 import * as Schema from "effect/Schema"
 
 import type { AutonomyLevel } from "../../authority/index.ts"
-import type { ProductProfile } from "./types.ts"
+import type { DaemonAuthOptions, ProductProfile } from "./types.ts"
 
 export class CliParseError extends Schema.TaggedError<CliParseError>()("CliParseError", {
   message: Schema.String,
@@ -45,7 +45,7 @@ export interface CliConfig {
     | { readonly socketPath: string }
     | { readonly host: string; readonly port: number }
   /** Credentials for the daemon handshake, derived from the Factory API key. */
-  readonly daemonAuth: { readonly apiKey: string } | undefined
+  readonly daemonAuth: (DaemonAuthOptions & { readonly apiKey: string }) | undefined
   /**
    * Command that launches an owned daemon on the runtime socket when no
    * `--daemon-url` names an existing one. Always the local executable.
@@ -65,6 +65,7 @@ export interface CliConfig {
 
 const PROFILES: ReadonlyArray<string> = ["compact", "full"]
 const AUTONOMY_LEVELS: ReadonlyArray<string> = ["off", "low", "medium", "high"]
+const CLI_VERSION = "0.1.0"
 
 const error = (message: string): CliParseError => new CliParseError({ message })
 
@@ -310,7 +311,13 @@ export const parseCliArgs = (argv: ReadonlyArray<string>, env: CliEnv): CliConfi
     daemonUrl,
     daemonEndpoint:
       daemonUrl === undefined ? { socketPath: daemonSocket } : parseDaemonEndpoint(daemonUrl),
-    daemonAuth: factoryApiKey === undefined ? undefined : { apiKey: factoryApiKey },
+    daemonAuth:
+      factoryApiKey === undefined
+        ? undefined
+        : {
+            apiKey: factoryApiKey,
+            metadata: { sdk: { language: "typescript", version: CLI_VERSION } },
+          },
     daemonSpawn:
       daemonUrl === undefined
         ? { command: droidPath, args: daemonSpawnArgs(daemonSocket, process.pid) }
@@ -388,7 +395,7 @@ export const runCli = async (
   }
 
   if (config.command === "version") {
-    io?.output?.write("0.1.0\n")
+    io?.output?.write(CLI_VERSION + "\n")
 
     return 0
   }
