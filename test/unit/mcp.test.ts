@@ -970,6 +970,70 @@ describe("mcp: compact dispatch end-to-end", () => {
     }
   })
 
+  it("batch maxBytes truncates large steps into readable refs", async () => {
+    const services = buildHarness()
+
+    try {
+      const { endpoint } = await Effect.runPromise(bindEndpoint(services, "alice"))
+
+      expect((await callTool(endpoint, "skill_read", {})).kind).toBe("result")
+
+      const created = await callTool(endpoint, "session_create", {
+        cwd: sandbox,
+        autonomyLevel: "medium",
+      })
+
+      const sessionId = stringOf(fieldOf(toolResult(created), "sessionId"))
+      const streamArguments = { sessionId, prompt: "bulk:1", waitMs: 5_000 }
+
+      const unbudgeted = await callTool(endpoint, "batch", {
+        steps: [
+          { id: "unbudgeted-first", name: "session_stream", arguments: streamArguments },
+          { id: "unbudgeted-second", name: "session_stream", arguments: streamArguments },
+        ],
+        stopOnError: false,
+      })
+
+      for (const step of asArray(fieldOf(toolResult(unbudgeted), "steps"))) {
+        const entry = asObject(step)
+
+        expect(entry.status).toBe("ok")
+        expect(entry.truncated).toBeUndefined()
+        expect(isObject(entry.result ?? null)).toBe(true)
+      }
+
+      const budgeted = await callTool(endpoint, "batch", {
+        steps: [
+          { id: "budgeted-first", name: "session_stream", arguments: streamArguments },
+          { id: "budgeted-second", name: "session_stream", arguments: streamArguments },
+        ],
+        stopOnError: false,
+        maxBytes: 1,
+      })
+
+      const payload = asObject(toolResult(budgeted))
+
+      expect(numberOf(payload.completed ?? 0)).toBe(2)
+
+      for (const step of asArray(payload.steps ?? [])) {
+        const entry = asObject(step)
+
+        expect(entry.status).toBe("ok")
+        expect(entry.result).toBeUndefined()
+        expect(entry.truncated).toBe(true)
+
+        const ref = stringOf(entry.ref ?? "")
+        const page = await callTool(endpoint, "result_read", { ref, length: 128 })
+        const pagePayload = asObject(toolResult(page))
+
+        expect(numberOf(fieldOf(pagePayload, "totalBytes"))).toBeGreaterThan(1_024)
+        expect(stringOf(fieldOf(pagePayload, "chunk")).length).toBeGreaterThan(0)
+      }
+    } finally {
+      await services.close()
+    }
+  })
+
   it("rejects a malformed batch before executing any step", async () => {
     const services = buildHarness()
 
