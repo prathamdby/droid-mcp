@@ -325,6 +325,81 @@ describe("read paging", () => {
     expect(page.chunk).toBe("")
   })
 
+  it("pages a selected member from the requested offset", async () => {
+    const { artifacts, disclosure } = makeServices()
+    const caller = trustedCaller("select-page-user")
+    const big = { data: "abcdef".repeat(1_000) }
+    const released = await releaseJson(disclosure, big)
+
+    const delivery = await runEffect(artifacts.present(caller, released, { maxBytes: 1_024 }))
+    const preview = expectPreview(delivery)
+
+    const expected = JSON.stringify(big.data)
+    const totalBytes = encodeLength(expected)
+
+    let offset = 1
+    let assembled = ""
+
+    for (;;) {
+      const page = await runEffect(
+        artifacts.read(caller, preview.ref, { select: "/data", offset, length: 997 }),
+      )
+
+      expect(page.offset).toBe(offset)
+      assembled += page.chunk
+
+      if (page.done || page.nextOffset === null) {
+        expect(page.totalBytes).toBe(totalBytes)
+        break
+      }
+
+      expect(page.nextOffset).toBeGreaterThan(offset)
+      offset = page.nextOffset
+    }
+
+    expect(assembled).toBe(expected.slice(1))
+  })
+
+  it("rejects out-of-bounds and mid-character offsets inside a selected member", async () => {
+    const { artifacts, disclosure } = makeServices()
+    const caller = trustedCaller("select-bounds-user")
+    const big = { pad: "w".repeat(2_000), data: "😀" }
+    const released = await releaseJson(disclosure, big)
+
+    const delivery = await runEffect(artifacts.present(caller, released, { maxBytes: 1_024 }))
+    const preview = expectPreview(delivery)
+
+    // The selected member's exact encoding is "😀": quote, 4 emoji bytes,
+    // quote — 6 bytes total.
+    expect(encodeLength(JSON.stringify(big.data))).toBe(6)
+
+    const beyond = Effect.runSyncExit(
+      artifacts.read(caller, preview.ref, { select: "/data", offset: 7, length: 10 }),
+    )
+
+    const beyondError = expectFailure(beyond)
+
+    expect(Predicate.isTagged("InvalidRange")(beyondError)).toBe(true)
+
+    if (Predicate.isTagged("InvalidRange")(beyondError)) {
+      expect(beyondError.reason).toBe("offset_out_of_bounds")
+      expect(beyondError.totalBytes).toBe(6)
+    }
+
+    const mid = Effect.runSyncExit(
+      artifacts.read(caller, preview.ref, { select: "/data", offset: 2, length: 10 }),
+    )
+
+    const midError = expectFailure(mid)
+
+    expect(Predicate.isTagged("InvalidRange")(midError)).toBe(true)
+
+    if (Predicate.isTagged("InvalidRange")(midError)) {
+      expect(midError.reason).toBe("offset_mid_character")
+      expect(midError.offset).toBe(2)
+    }
+  })
+
   it("keeps the first and last pages consistent with nextOffset chaining", async () => {
     const { artifacts, disclosure } = makeServices()
     const caller = trustedCaller("chain-user")

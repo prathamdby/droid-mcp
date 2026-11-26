@@ -467,10 +467,11 @@ export const artifactsLayer = (
 
           if (range.select !== undefined && range.select !== "") {
             // Pointer selection within the stored document: decode the
-            // revalidated bytes once and page the selected part's own exact
-            // encoding. Ownership and the current disclosure policy were
-            // both enforced above; a select request is self-contained and
-            // does not continue the byte-range paging of the whole document.
+            // revalidated bytes once, then page the selected part's own
+            // exact encoding from the requested offset. Ownership and the
+            // current disclosure policy were both enforced above; the
+            // selected part is paged under the same bounds and character
+            // checks as the whole document.
             const decoded = Schema.decodeUnknownOption(Schema.Json)(
               JSON.parse(decodeRange(encoded, 0, encoded.length)),
             )
@@ -482,13 +483,42 @@ export const artifactsLayer = (
             const selected = yield* selectJson(decoded.value, range.select)
             const selectedBytes = encode(serializeJson(selected))
             const selectedTotal = selectedBytes.length
+            const offset = range.offset ?? 0
+
+            if (offset < 0 || offset > selectedTotal) {
+              return yield* Effect.fail(
+                new InvalidRange({
+                  message:
+                    "offset " +
+                    offset +
+                    " is outside the selected part's " +
+                    selectedTotal +
+                    " bytes",
+                  offset,
+                  totalBytes: selectedTotal,
+                  reason: "offset_out_of_bounds",
+                }),
+              )
+            }
+
+            if (isContinuationByte(selectedBytes, offset)) {
+              return yield* Effect.fail(
+                new InvalidRange({
+                  message: "offset " + offset + " splits a multi-byte UTF-8 character",
+                  offset,
+                  totalBytes: selectedTotal,
+                  reason: "offset_mid_character",
+                }),
+              )
+            }
+
             const length = Math.max(1, Math.floor(range.length ?? DEFAULT_INLINE_BYTES))
-            const end = pageEnd(selectedBytes, 0, length)
+            const end = pageEnd(selectedBytes, offset, length)
 
             const page: Page = {
               ref,
-              chunk: decodeRange(selectedBytes, 0, end),
-              offset: 0,
+              chunk: decodeRange(selectedBytes, offset, end),
+              offset,
               nextOffset: end >= selectedTotal ? null : end,
               totalBytes: selectedTotal,
               done: end >= selectedTotal,
