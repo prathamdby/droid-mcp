@@ -1,3 +1,9 @@
+import { execFileSync } from "node:child_process"
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+
 import { LoadSessionResultSchema } from "@factory/droid-sdk"
 import type * as JsonSchema from "effect/JsonSchema"
 import * as Schema from "effect/Schema"
@@ -121,5 +127,78 @@ describe("generated schemas", () => {
 
     expect(() => decode(schemaOf(entry.params), {})).toThrow()
     expect(() => decode(schemaOf(entry.params), { cwd: "/tmp" })).not.toThrow()
+  })
+})
+
+describe("codegen optional guards", () => {
+  it("keeps bare wrappers and non-reference types required without changing their schemas", () => {
+    const root = fileURLToPath(new URL("../../", import.meta.url))
+    const directory = mkdtempSync(join(tmpdir(), "droid-mcp-codegen-"))
+
+    try {
+      const modules = join(directory, "node_modules")
+      const sdk = join(modules, "@factory/droid-sdk")
+      mkdirSync(sdk, { recursive: true })
+      mkdirSync(join(directory, "src/generated"), { recursive: true })
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ type: "module" }))
+      copyFileSync(join(root, "scripts/codegen.ts"), join(directory, "codegen.ts"))
+
+      for (const dependency of ["effect", "oxfmt", "typescript"]) {
+        symlinkSync(join(root, "node_modules", dependency), join(modules, dependency), "dir")
+      }
+
+      writeFileSync(join(sdk, "package.json"), JSON.stringify({ main: "index.js" }))
+      writeFileSync(join(sdk, "index.js"), "")
+      writeFileSync(
+        join(sdk, "index-fixture.d.ts"),
+        `declare const GuardRequestSchema: z.ZodObject<{
+  method: z.ZodLiteral<"daemon.guard">;
+  params: z.ZodObject<{
+    bare: z.ZodReadonly;
+    union: z.ZodString | z.ZodNumber;
+    literal: "fixed";
+    wrappedUnion: z.ZodReadonly<z.ZodString | z.ZodNumber>;
+    wrappedLiteral: z.ZodReadonly<"fixed">;
+    optional: z.ZodReadonly<z.ZodOptional<z.ZodString>>;
+    defaulted: z.ZodReadonly<z.ZodDefault<z.ZodNumber>>;
+  }>;
+}>;
+`,
+      )
+
+      execFileSync(process.execPath, ["--experimental-strip-types", "codegen.ts"], {
+        cwd: directory,
+        encoding: "utf8",
+        timeout: 20_000,
+      })
+
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          "--input-type=module",
+          "-e",
+          'import { SURFACE } from "./src/generated/surface.ts"; console.log(JSON.stringify(SURFACE[0].params))',
+        ],
+        { cwd: directory, encoding: "utf8", timeout: 5_000 },
+      )
+
+      expect(JSON.parse(output)).toEqual({
+        type: "object",
+        properties: {
+          bare: {},
+          union: { anyOf: [{ type: "string" }, { type: "number" }] },
+          literal: { const: "fixed" },
+          wrappedUnion: { anyOf: [{ type: "string" }, { type: "number" }] },
+          wrappedLiteral: { const: "fixed" },
+          optional: { type: "string" },
+          defaulted: { type: "number" },
+        },
+        additionalProperties: false,
+        required: ["bare", "union", "literal", "wrappedUnion", "wrappedLiteral"],
+      })
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })

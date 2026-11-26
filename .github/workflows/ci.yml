@@ -32,6 +32,9 @@ jobs:
       # The generated surface and the embedded skill must match their sources.
       - run: pnpm codegen:check
 
+      # The vendored anti-slop plugin's own rule tests (RuleTester + CLI autofix).
+      - run: pnpm test:lint-rules
+
       # unit, http, process, and integration (tests that need no model or key).
       - run: pnpm vitest run --project unit --project http --project process --project integration
 

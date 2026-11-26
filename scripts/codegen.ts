@@ -298,7 +298,7 @@ const isOptionalMember = (member: ts.PropertySignature): boolean => {
 
     if (!TRANSPARENT_ZOD.has(name)) return false
 
-    node = node.typeArguments?.[0]
+    node = ts.isTypeReferenceNode(node) ? node.typeArguments?.[0] : undefined
   }
 
   return false
@@ -323,7 +323,7 @@ const objectOfMembers = (
     const optional = isOptionalMember(member)
 
     const inner =
-      wrapper !== undefined && TRANSPARENT_ZOD.has(wrapper)
+      wrapper !== undefined && TRANSPARENT_ZOD.has(wrapper) && ts.isTypeReferenceNode(member.type)
         ? (member.type.typeArguments?.[0] ?? member.type)
         : member.type
 
