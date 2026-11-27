@@ -368,6 +368,17 @@ describe("parseCliArgs", () => {
     })
   })
 
+  it("keeps empty Context header values empty after trimming", () => {
+    expect(parseCliArgs([], { FACTORY_CONTEXT_HEADERS: '{"X-Org":""}' }).contextHeaders).toEqual({
+      "X-Org": "",
+    })
+    expect(parseCliArgs([], { FACTORY_CONTEXT_HEADERS: '{"X-Org":"   "}' }).contextHeaders).toEqual(
+      {
+        "X-Org": "",
+      },
+    )
+  })
+
   it.each(["not json", "[]", '["a"]', '"text"', "3", '{"X-Org":3}', '{"X-Org":null}'])(
     "rejects invalid FACTORY_CONTEXT_HEADERS input %s",
     (raw) => {
@@ -379,6 +390,8 @@ describe("parseCliArgs", () => {
   )
 
   it.each([
+    "accept",
+    "Accept",
     "authorization",
     "Authorization",
     "COOKIE",
@@ -405,6 +418,8 @@ describe("parseCliArgs", () => {
     for (const raw of [
       '{"bad name":"v"}',
       '{"X-Org":"a\\r\\nX-Evil: 1"}',
+      '{"X-Org":"a\\u0001b"}',
+      '{"X-Org":"a\\u007fb"}',
       '{"X-Org":"secret-\\u0100"}',
       '{"X-Org":"a","x-org":"b"}',
     ]) {
@@ -414,16 +429,22 @@ describe("parseCliArgs", () => {
 
   it("rejects invalid Context headers without echoing their values", () => {
     const secret = "tenant-secret-canary"
-    let message = ""
 
-    try {
-      parseCliArgs([], { FACTORY_CONTEXT_HEADERS: JSON.stringify({ cookie: secret }) })
-    } catch (failure) {
-      message = failure instanceof Error ? failure.message : ""
+    for (const raw of [
+      JSON.stringify({ cookie: secret }),
+      JSON.stringify({ "X-Org": secret + "\r\nX-Evil: 1" }),
+    ]) {
+      let message = ""
+
+      try {
+        parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })
+      } catch (failure) {
+        message = failure instanceof Error ? failure.message : ""
+      }
+
+      expect(message).toContain("FACTORY_CONTEXT_HEADERS")
+      expect(message).not.toContain(secret)
     }
-
-    expect(message).toContain("FACTORY_CONTEXT_HEADERS")
-    expect(message).not.toContain(secret)
   })
 
   it("passes workspace roots only when the operator names them", () => {
@@ -1654,7 +1675,7 @@ describe("cli entry point", () => {
 
   it("forwards CLI Context headers and bearer authentication through MCP", async () => {
     const api = await startFakeContextApi()
-    const tenant = "cli-tenant-canary"
+    const tenant = "toolCount"
 
     const server = await startCliHttp(["--no-daemon"], {
       FACTORY_API_KEY: "env-key",
@@ -1671,6 +1692,9 @@ describe("cli entry point", () => {
       expect(
         toolValue(await call(request, "tool_call", { name: "context_list_spaces", arguments: {} })),
       ).toEqual({ items: [] })
+      expect(toolValue(await call(request, "server_info"))).toMatchObject({
+        toolCount: expect.any(Number),
+      })
 
       const recorded = api.requests.find(
         (recordedRequest) => recordedRequest.route === "GET /api/context/spaces",

@@ -84,10 +84,11 @@ export class ContextConflict extends Schema.TaggedError<ContextConflict>()("Cont
  *
  * `token` is the scoped bearer getter; it is the only credential path, and
  * its value is scrubbed from anything that crosses a boundary. `headers` are
- * static operator-configured additions (such as a tenant marker); their
- * values are scrubbed the same way. `fetch` and `timeoutMs` exist so a test
- * or embedding product can inject transport behavior; `maxFileBytes` bounds
- * file downloads and uploads.
+ * static operator-configured additions (such as a tenant marker); transport-owned
+ * names are ignored, surrounding spaces and tabs are normalized away, and the
+ * remaining values are scrubbed the same way. `fetch` and `timeoutMs` exist so
+ * a test or embedding product can inject transport behavior; `maxFileBytes`
+ * bounds file downloads and uploads.
  */
 export interface ContextInstallation {
   readonly origin?: string
@@ -196,7 +197,7 @@ export const contextOperationsLayer: Layer.Layer<
      * service never invokes them itself.
      */
     yield* Authority
-    const disclosure = yield* Disclosure
+    yield* Disclosure
     yield* Custody
     yield* Guidance
     yield* Callers
@@ -204,11 +205,6 @@ export const contextOperationsLayer: Layer.Layer<
     const entries: ContextOperationsService["entries"] = (site) =>
       Effect.gen(function* () {
         const origin = yield* validateOrigin(site.origin)
-        const headerValues = Object.values(site.headers ?? {}).filter((value) => value.length > 0)
-
-        if (headerValues.length > 0) {
-          yield* disclosure.tightenPolicy(headerValues)
-        }
 
         const binders = contextDefinitions({
           origin,

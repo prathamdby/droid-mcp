@@ -172,6 +172,7 @@ const makeHarness = async (
   api: FakeContextApi,
   options?: Parameters<typeof makeServices>[0] & {
     readonly timeoutMs?: number
+    readonly headers?: Readonly<Record<string, string>>
   },
 ): Promise<Harness> => {
   const services = makeServices(options)
@@ -179,7 +180,7 @@ const makeHarness = async (
   const installation = {
     origin: api.baseUrl,
     token: () => Effect.succeed<string | undefined>(TOKEN),
-    headers: { "x-factory-organization": TENANT },
+    headers: options?.headers ?? { "x-factory-organization": " \t" + TENANT + "\t " },
     timeoutMs: options?.timeoutMs,
   }
 
@@ -371,6 +372,24 @@ describe("prem-context", () => {
       )
 
       expect(read).toMatchObject({ id: second, name: "two" })
+    })
+
+    it("normalizes operator headers and keeps transport-owned accept single", async () => {
+      const harness = await makeHarness(api, {
+        headers: {
+          accept: "text/html",
+          "x-factory-organization": " " + TENANT + " ",
+        },
+      })
+
+      await invokeJson(harness, "context_list_spaces", {})
+
+      const request = api.requests.find(
+        (recordedRequest) => recordedRequest.route === "GET /api/context/spaces",
+      )
+
+      expect(request?.headers.accept).toBe("application/json")
+      expect(request?.headers["x-factory-organization"]).toBe(TENANT)
     })
 
     it("creates, reads and lists documents by id and by path", async () => {
@@ -750,7 +769,7 @@ describe("prem-context", () => {
 
   describe("protected bytes", () => {
     it("a file part containing a protected value triggers a ProtectedBytes refusal", async () => {
-      const harness = await makeHarness(api, { protectedValues: [TENANT] })
+      const harness = await makeHarness(api)
 
       const space = decode(
         IdOnly,

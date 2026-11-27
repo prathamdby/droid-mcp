@@ -48,6 +48,10 @@ export type FetchLike = (
 ) => Promise<Response>
 
 export interface ContextTransport {
+  /** Normalized static header values that operations must never publish. */
+  readonly staticSensitiveValues: ReadonlyArray<string>
+  /** Static header values plus the credential used for this installation. */
+  readonly secretValues: () => Effect.Effect<ReadonlyArray<string>>
   readonly send: (
     request: ContextHttpRequest,
     maxBytes: number,
@@ -58,6 +62,38 @@ export interface ContextTransport {
 export const RESPONSE_MAX_BYTES = 32 * 1024 * 1024
 
 export const DEFAULT_TIMEOUT_MS = 30_000
+
+/** Fetch strips surrounding spaces and tabs before sending, so the stored value matches the wire. */
+const HEADER_WHITESPACE = /^[ \t]+|[ \t]+$/g
+
+/** Headers this transport owns or that would break routing, authentication or framing. */
+const RESERVED_HEADERS = new Set([
+  "accept",
+  "authorization",
+  "cookie",
+  "host",
+  "proxy-authorization",
+  "connection",
+  "content-length",
+  "content-type",
+  "transfer-encoding",
+  "te",
+  "upgrade",
+  "keep-alive",
+  "expect",
+  "trailer",
+])
+
+/** Replaces every occurrence of a non-empty secret. Longer secrets first, so one containing a shorter is replaced whole. */
+export const scrubText = (text: string, secrets: ReadonlyArray<string>, marker: string): string => {
+  let result = text
+
+  for (const secret of [...secrets].sort((left, right) => right.length - left.length)) {
+    if (secret.length > 0) result = result.split(secret).join(marker)
+  }
+
+  return result
+}
 
 /** The default fetch implementation; tests inject a recording one. */
 export const defaultFetch: FetchLike = (input, init) =>
@@ -139,61 +175,87 @@ interface RequestHeaders {
 }
 
 /** Builds the transport for one validated origin; the origin is fixed at construction. */
-export const openTransport = (origin: string, options: TransportOptions): ContextTransport => ({
-  send: (request, maxBytes) =>
-    Effect.gen(function* () {
-      const url = urlFor(origin, request.path, request.query)
+export const openTransport = (origin: string, options: TransportOptions): ContextTransport => {
+  const staticHeaders: Record<string, string> = {}
 
-      if (url === undefined) {
-        // Unreachable in practice: paths are constants built inside this module.
-        return yield* Effect.fail<SendFailure>({ kind: "unreachable" })
-      }
+  for (const [name, value] of Object.entries(options.headers ?? {})) {
+    if (!RESERVED_HEADERS.has(name.toLowerCase())) {
+      staticHeaders[name] = value.replace(HEADER_WHITESPACE, "")
+    }
+  }
 
-      const token = options.token === undefined ? undefined : yield* options.token()
+  const staticSensitiveValues = Object.values(staticHeaders).filter((value) => value.length > 0)
 
-      const headers: RequestHeaders = { ...options.headers, accept: "application/json" }
+  return {
+    staticSensitiveValues,
 
-      if (token !== undefined && token.length > 0) headers.authorization = "Bearer " + token
+    secretValues: () =>
+      Effect.map(
+        options.token === undefined ? Effect.succeed(undefined) : options.token(),
+        (token) => {
+          const values = [...staticSensitiveValues]
 
-      let body: string | Uint8Array | undefined
+          if (token !== undefined && token.length > 0) values.push(token)
 
-      if (request.body instanceof Uint8Array) {
-        headers["content-type"] = "application/octet-stream"
-        body = request.body
-      } else if (request.body !== undefined) {
-        headers["content-type"] = "application/json"
-        body = JSON.stringify(request.body)
-      }
-
-      const timeout = AbortSignal.timeout(options.timeoutMs)
-
-      /*
-       * A DNS or connection refusal can happen either before or after the
-       * peer received the request, so a network failure is uncertain
-       * delivery, never a silent retry.
-       */
-      const exchange = yield* Effect.tryPromise({
-        try: async (signal) => {
-          const response = await options.fetch(url, {
-            method: request.method,
-            headers,
-            body,
-            redirect: "manual",
-            signal: AbortSignal.any([signal, timeout]),
-          })
-
-          return { status: response.status, bytes: await readCapped(response, maxBytes) }
+          return values
         },
-        catch: (): SendFailure => ({ kind: "uncertain", timedOut: timeout.aborted }),
-      })
+      ),
 
-      if (exchange.bytes === undefined) {
-        return yield* Effect.fail<SendFailure>({ kind: "oversized", status: exchange.status })
-      }
+    send: (request, maxBytes) =>
+      Effect.gen(function* () {
+        const url = urlFor(origin, request.path, request.query)
 
-      return { status: exchange.status, bytes: exchange.bytes }
-    }),
-})
+        if (url === undefined) {
+          // Unreachable in practice: paths are constants built inside this module.
+          return yield* Effect.fail<SendFailure>({ kind: "unreachable" })
+        }
+
+        const token = options.token === undefined ? undefined : yield* options.token()
+
+        const headers: RequestHeaders = { ...staticHeaders, accept: "application/json" }
+
+        if (token !== undefined && token.length > 0) headers.authorization = "Bearer " + token
+
+        let body: string | Uint8Array | undefined
+
+        if (request.body instanceof Uint8Array) {
+          headers["content-type"] = "application/octet-stream"
+          body = request.body
+        } else if (request.body !== undefined) {
+          headers["content-type"] = "application/json"
+          body = JSON.stringify(request.body)
+        }
+
+        const timeout = AbortSignal.timeout(options.timeoutMs)
+
+        /*
+         * A DNS or connection refusal can happen either before or after the
+         * peer received the request, so a network failure is uncertain
+         * delivery, never a silent retry.
+         */
+        const exchange = yield* Effect.tryPromise({
+          try: async (signal) => {
+            const response = await options.fetch(url, {
+              method: request.method,
+              headers,
+              body,
+              redirect: "manual",
+              signal: AbortSignal.any([signal, timeout]),
+            })
+
+            return { status: response.status, bytes: await readCapped(response, maxBytes) }
+          },
+          catch: (): SendFailure => ({ kind: "uncertain", timedOut: timeout.aborted }),
+        })
+
+        if (exchange.bytes === undefined) {
+          return yield* Effect.fail<SendFailure>({ kind: "oversized", status: exchange.status })
+        }
+
+        return { status: exchange.status, bytes: exchange.bytes }
+      }),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Reply decoding helpers

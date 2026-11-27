@@ -98,8 +98,9 @@ const splitTokens = (raw: string | undefined): ReadonlyArray<string> => {
 const nonEmpty = (raw: string | undefined): string | undefined =>
   raw === undefined || raw.trim().length === 0 ? undefined : raw
 
-/** Headers the server owns or that would break routing, authentication or framing. */
+/** Headers the server owns or that would break routing, authentication, negotiation or framing. */
 const RESERVED_HEADERS: ReadonlyArray<string> = [
+  "accept",
   "authorization",
   "cookie",
   "host",
@@ -117,8 +118,18 @@ const RESERVED_HEADERS: ReadonlyArray<string> = [
 
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
 
-/** Framing characters, and anything past Latin-1, which an HTTP header cannot carry. */
-const HEADER_VALUE_FORBIDDEN = /[\r\n\0\u{100}-\u{10FFFF}]/u
+/** Whether a value carries a control character other than tab, or anything past Latin-1. */
+const hasForbiddenHeaderValueCharacter = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+
+    if (code <= 0x08 || (code >= 0x0b && code <= 0x1f) || code === 0x7f || code > 0xff) {
+      return true
+    }
+  }
+
+  return false
+}
 
 /** Fetch strips surrounding spaces and tabs before sending, so the stored value matches the wire. */
 const HEADER_WHITESPACE = /^[ \t]+|[ \t]+$/g
@@ -157,7 +168,7 @@ const parseContextHeaders = (
 
     if (seen.has(lower)) throw invalid("sets " + lower + " twice")
 
-    if (HEADER_VALUE_FORBIDDEN.test(value)) throw invalid("has an invalid value for " + name)
+    if (hasForbiddenHeaderValueCharacter(value)) throw invalid("has an invalid value for " + name)
 
     seen.add(lower)
   }

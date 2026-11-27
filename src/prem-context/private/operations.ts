@@ -39,6 +39,7 @@ import {
   errorDetailOf,
   openTransport,
   RESPONSE_MAX_BYTES,
+  scrubText,
 } from "./http.ts"
 import type { ContextHttpRequest, ContextTransport, FetchLike, SendFailure } from "./http.ts"
 import {
@@ -158,9 +159,15 @@ const sendFailure = (operation: string, failure: SendFailure): Failure => {
 }
 
 /** Maps a non-2xx status onto the operation failure vocabulary, preserving conflicts. */
-const statusFailure = (operation: string, status: number, bytes: Uint8Array): Failure => {
+const statusFailure = (
+  operation: string,
+  status: number,
+  bytes: Uint8Array,
+  secrets: ReadonlyArray<string>,
+): Failure => {
   const json = decodeReplyJson(bytes)
-  const detail = errorDetailOf(json)
+  const rawDetail = errorDetailOf(json)
+  const detail = rawDetail === undefined ? undefined : scrubText(rawDetail, secrets, "[REDACTED]")
   const suffix = detail === undefined ? "" : ": " + detail
 
   if (status === 409) {
@@ -232,12 +239,16 @@ const exchange = (
   request: Omit<ContextHttpRequest, "operation">,
   maxBytes: number,
 ): Effect.Effect<{ readonly status: number; readonly bytes: Uint8Array }, Failure> =>
-  transport.send({ operation, ...request }, maxBytes).pipe(
-    Effect.mapError((failure) => sendFailure(operation, failure)),
-    Effect.flatMap((received) =>
-      received.status >= 200 && received.status < 300
-        ? Effect.succeed(received)
-        : Effect.fail(statusFailure(operation, received.status, received.bytes)),
+  transport.secretValues().pipe(
+    Effect.flatMap((secrets) =>
+      transport.send({ operation, ...request }, maxBytes).pipe(
+        Effect.mapError((failure) => sendFailure(operation, failure)),
+        Effect.flatMap((received) =>
+          received.status >= 200 && received.status < 300
+            ? Effect.succeed(received)
+            : Effect.fail(statusFailure(operation, received.status, received.bytes, secrets)),
+        ),
+      ),
     ),
   )
 
@@ -377,23 +388,6 @@ interface OperationParts<I, O> {
   readonly classify: (input: I, output: O) => ReleasePayload
 }
 
-const operation = <I, O>(parts: OperationParts<I, O>): Definition<I, O> => ({
-  facts: {
-    id: parts.id,
-    family: "context",
-    description: parts.description,
-    inputSchema: parts.inputSchema,
-    effect: parts.effect,
-    replay: parts.replay,
-    annotations: parts.annotations,
-  },
-  decode: parts.decode,
-  target: parts.target,
-  demand: parts.demand,
-  perform: (_grant, input) => parts.perform(input),
-  classify: (input, output) => ({ payload: parts.classify(input, output) }),
-})
-
 const jsonPayload = (value: Schema.Json): ReleasePayload => ReleasePayload.JsonValue({ value })
 
 /**
@@ -414,6 +408,26 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     timeoutMs: ctx.timeoutMs,
     headers: ctx.headers,
     token: ctx.token,
+  })
+
+  const operation = <I, O>(parts: OperationParts<I, O>): Definition<I, O> => ({
+    facts: {
+      id: parts.id,
+      family: "context",
+      description: parts.description,
+      inputSchema: parts.inputSchema,
+      effect: parts.effect,
+      replay: parts.replay,
+      annotations: parts.annotations,
+    },
+    decode: parts.decode,
+    target: parts.target,
+    demand: parts.demand,
+    perform: (_grant, input) => parts.perform(input),
+    classify: (input, output) => ({
+      payload: parts.classify(input, output),
+      sensitiveValues: transport.staticSensitiveValues,
+    }),
   })
 
   /*
