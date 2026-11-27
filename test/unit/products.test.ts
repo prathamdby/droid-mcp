@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { once } from "node:events"
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
@@ -9,6 +10,7 @@ import { PassThrough } from "node:stream"
 import { isDeepStrictEqual, promisify } from "node:util"
 
 import { Effect, Option, Schema } from "effect"
+import * as Predicate from "effect/Predicate"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import { Callers, callersLayer, createBearerVerifier } from "../../src/caller/index.ts"
@@ -21,8 +23,13 @@ import {
   stdioServer,
 } from "../../src/products/index.ts"
 import type { EmbeddedResult, HttpServerHandle } from "../../src/products/index.ts"
-import { startFakeDaemon } from "../support/fake-daemon.ts"
-import type { ScriptedReply } from "../support/fake-daemon.ts"
+import { startFakeDaemon, startFakeTcpDaemon } from "../support/fake-daemon.ts"
+import type {
+  FakeDaemon,
+  FakeTcpDaemon,
+  ScriptedHandler,
+  ScriptedReply,
+} from "../support/fake-daemon.ts"
 
 const FAKE_EXEC = join(import.meta.dirname, "../support/fake-droid-exec.mjs")
 
@@ -286,7 +293,6 @@ describe("parseCliArgs", () => {
     for (const [url, endpoint] of [
       ["unix:/tmp/daemon.sock", { socketPath: "/tmp/daemon.sock" }],
       ["http://127.0.0.1:7338", { host: "127.0.0.1", port: 7338 }],
-      ["https://daemon.internal:8443", { host: "daemon.internal", port: 8443 }],
       ["ws://localhost", { host: "localhost", port: 7338 }],
     ] as const) {
       expect(parseCliArgs(["--daemon-url", url], {})).toMatchObject({
@@ -298,6 +304,43 @@ describe("parseCliArgs", () => {
     expect(
       parseCliArgs(["--daemon-url", "unix:/tmp/x.sock"], { XDG_RUNTIME_DIR: "/run" }),
     ).toMatchObject({ daemonEndpoint: { socketPath: "/tmp/x.sock" } })
+  })
+
+  it.each([
+    {
+      source: "flag",
+      args: ["--daemon-url", "https://daemon.internal:8443"],
+      env: {},
+      scheme: "https:",
+    },
+    {
+      source: "flag",
+      args: ["--daemon-url", "wss://daemon.internal:8443"],
+      env: {},
+      scheme: "wss:",
+    },
+    {
+      source: "environment",
+      args: [],
+      env: { DROID_MCP_DAEMON_URL: "https://daemon.internal:8443" },
+      scheme: "https:",
+    },
+    {
+      source: "environment",
+      args: [],
+      env: { DROID_MCP_DAEMON_URL: "WSS://DAEMON.INTERNAL:8443" },
+      scheme: "wss:",
+    },
+  ])("rejects a secure daemon URL from the $source", ({ args, env, scheme }) => {
+    const parse = () => parseCliArgs(args, env)
+
+    const message =
+      "--daemon-url scheme " +
+      scheme +
+      " is not supported; use unix:<path>, http://host:port, or ws://host:port"
+
+    expect(parse).toThrow(CliParseError)
+    expect(parse).toThrow(message)
   })
 
   it("derives the daemon credential from the Factory API key", () => {
@@ -1168,6 +1211,40 @@ describe("doctor", () => {
   })
 })
 
+interface ConnectionCounter {
+  readonly port: number
+  readonly connections: () => number
+  readonly close: () => Promise<void>
+}
+
+const startConnectionCounter = async (): Promise<ConnectionCounter> => {
+  let connections = 0
+
+  const server = createServer((socket) => {
+    connections += 1
+    socket.destroy()
+  })
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve())
+  })
+
+  const address = server.address()
+
+  if (address === null || Predicate.isString(address)) {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    throw new Error("connection counter did not bind")
+  }
+
+  return {
+    port: address.port,
+    connections: () => connections,
+    close: async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+  }
+}
+
 describe("cli entry point", () => {
   const execFileAsync = promisify(execFile)
   const CLI_PATH = join(import.meta.dirname, "../../src/products/private/cli.ts")
@@ -1178,11 +1255,10 @@ describe("cli entry point", () => {
 
   const cliVersion = async (): Promise<string> => (await cli(["--version"])).stdout.trim()
 
-  const startCliDaemon = async (apiKey: string) => {
-    const version = await cliVersion()
+  const cliDaemonHandler = (apiKey: string, version: string): ScriptedHandler => {
     let authenticated = false
 
-    return startFakeDaemon(join(sandbox, "cli-daemon.sock"), {
+    return {
       onRequest: ({ method, params }): ScriptedReply => {
         if (method === "daemon.authenticate") {
           authenticated = isDeepStrictEqual(params, {
@@ -1202,7 +1278,19 @@ describe("cli entry point", () => {
 
         return { error: { code: -32601, message: "Method not found" } }
       },
-    })
+    }
+  }
+
+  const startCliDaemon = async (apiKey: string): Promise<FakeDaemon> => {
+    const version = await cliVersion()
+
+    return startFakeDaemon(join(sandbox, "cli-daemon.sock"), cliDaemonHandler(apiKey, version))
+  }
+
+  const startCliTcpDaemon = async (apiKey: string): Promise<FakeTcpDaemon> => {
+    const version = await cliVersion()
+
+    return startFakeTcpDaemon(cliDaemonHandler(apiKey, version))
   }
 
   it("prints version and usage from the executable CLI entry point", async () => {
@@ -1212,6 +1300,11 @@ describe("cli entry point", () => {
 
     expect(help.stdout).toContain("droid-mcp serve [flags]")
     expect(help.stdout).toContain("droid-mcp doctor [flags]")
+    expect(help.stdout).toContain("unix:<path>")
+    expect(help.stdout).toContain("http://host:port")
+    expect(help.stdout).toContain("ws://host:port")
+    expect(help.stdout).not.toContain("http(s)")
+    expect(help.stdout).not.toContain("ws(s)")
   })
 
   it.each([
@@ -1228,6 +1321,61 @@ describe("cli entry point", () => {
         })
 
         await expect(probe).resolves.toMatchObject({
+          stdout: '{"transport":"daemon","reachable":true}\n',
+        })
+        expect(daemon.requests.map(({ method }) => method)).toEqual(["daemon.authenticate"])
+      } finally {
+        await daemon.close()
+      }
+    },
+  )
+
+  it.each([
+    ["serve", "https", "flag"],
+    ["serve", "wss", "flag"],
+    ["serve", "https", "environment"],
+    ["serve", "wss", "environment"],
+    ["doctor", "https", "flag"],
+    ["doctor", "wss", "flag"],
+    ["doctor", "https", "environment"],
+    ["doctor", "wss", "environment"],
+  ] as const)(
+    "%s rejects a %s daemon URL from the %s before connecting",
+    async (command, scheme, source) => {
+      const counter = await startConnectionCounter()
+
+      try {
+        const secureUrl = scheme + "://127.0.0.1:" + String(counter.port)
+        const args = source === "flag" ? [command, "--daemon-url", secureUrl] : [command]
+        const env = source === "environment" ? { DROID_MCP_DAEMON_URL: secureUrl } : {}
+
+        const message =
+          "--daemon-url scheme " +
+          scheme +
+          ": is not supported; use unix:<path>, http://host:port, or ws://host:port"
+
+        await expect(cli(args, env)).rejects.toMatchObject({
+          code: 2,
+          stderr: expect.stringContaining(message),
+        })
+        expect(counter.connections()).toBe(0)
+      } finally {
+        await counter.close()
+      }
+    },
+  )
+
+  it.each(["http", "ws"] as const)(
+    "authenticates CLI doctor over plaintext %s daemon URLs",
+    async (scheme) => {
+      const daemon = await startCliTcpDaemon("env-key")
+
+      try {
+        const url = scheme + "://" + daemon.host + ":" + String(daemon.port)
+
+        await expect(
+          cli(["doctor", "--daemon-url", url], { FACTORY_API_KEY: "env-key" }),
+        ).resolves.toMatchObject({
           stdout: '{"transport":"daemon","reachable":true}\n',
         })
         expect(daemon.requests.map(({ method }) => method)).toEqual(["daemon.authenticate"])
@@ -1254,60 +1402,64 @@ describe("cli entry point", () => {
     expect(existsSync(executable + ".launched")).toBe(false)
   })
 
-  it("authenticates CLI HTTP serve before running a daemon-backed read", async () => {
-    const daemon = await startCliDaemon("env-key")
+  it.each([
+    { endpoint: "Unix socket", startDaemon: startCliDaemon },
+    { endpoint: "plaintext TCP", startDaemon: startCliTcpDaemon },
+  ])(
+    "authenticates CLI HTTP serve over a $endpoint endpoint before running a daemon-backed read",
+    async ({ startDaemon }) => {
+      const daemon = await startDaemon("env-key")
 
-    const child = spawn(
-      process.execPath,
-      [
-        ...CLI_ARGS,
-        "serve",
-        "--http",
-        "--auth-token",
-        ALICE,
-        "--daemon-url",
-        "unix:" + daemon.socketPath,
-      ],
-      {
-        env: { FACTORY_API_KEY: "env-key" },
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 6_000,
-        killSignal: "SIGKILL",
-      },
-    )
+      const daemonUrl =
+        "socketPath" in daemon
+          ? "unix:" + daemon.socketPath
+          : "http://" + daemon.host + ":" + String(daemon.port)
 
-    const closed = once(child, "close")
-    const lines = createInterface({ input: child.stdout, terminal: false })
-    let stderr = ""
+      const child = spawn(
+        process.execPath,
+        [...CLI_ARGS, "serve", "--http", "--auth-token", ALICE, "--daemon-url", daemonUrl],
+        {
+          env: { FACTORY_API_KEY: "env-key" },
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 6_000,
+          killSignal: "SIGKILL",
+        },
+      )
 
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-      stderr += chunk
-    })
+      const closed = once(child, "close")
+      const lines = createInterface({ input: child.stdout, terminal: false })
+      let stderr = ""
 
-    try {
-      const line = await lines[Symbol.asyncIterator]().next()
-      const prefix = "listening on "
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+        stderr += chunk
+      })
 
-      if (line.done || !line.value.startsWith(prefix)) {
-        throw new Error("CLI did not announce its HTTP endpoint: " + stderr)
+      try {
+        const line = await lines[Symbol.asyncIterator]().next()
+        const prefix = "listening on "
+
+        if (line.done || !line.value.startsWith(prefix)) {
+          throw new Error("CLI did not announce its HTTP endpoint: " + stderr)
+        }
+
+        const endpoint = new URL(line.value.slice(prefix.length))
+        const request = httpClient({ url: endpoint.origin, path: endpoint.pathname }, ALICE)
+
+        toolValue(await call(request, "skill_read"))
+        expect(
+          toolValue(await call(request, "tool_call", { name: "daemon_list_opened_sessions" })),
+        ).toEqual({ sessions: [] })
+        expect(daemon.requests.map(({ method }) => method)).toEqual([
+          "daemon.authenticate",
+          "daemon.list_opened_sessions",
+        ])
+      } finally {
+        lines.close()
+        child.kill()
+        await closed
+        await daemon.close()
       }
-
-      const endpoint = new URL(line.value.slice(prefix.length))
-      const request = httpClient({ url: endpoint.origin, path: endpoint.pathname }, ALICE)
-
-      toolValue(await call(request, "skill_read"))
-      expect(
-        toolValue(await call(request, "tool_call", { name: "daemon_list_opened_sessions" })),
-      ).toEqual({ sessions: [] })
-      expect(daemon.requests.map(({ method }) => method)).toEqual([
-        "daemon.authenticate",
-        "daemon.list_opened_sessions",
-      ])
-    } finally {
-      lines.close()
-      child.kill()
-      await closed
-      await daemon.close()
-    }
-  }, 8_000)
+    },
+    8_000,
+  )
 })

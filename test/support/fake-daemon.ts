@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import * as net from "node:net"
 
+import * as Predicate from "effect/Predicate"
 import * as Schema from "effect/Schema"
 
 /**
@@ -155,13 +156,21 @@ export interface ScriptedHandler {
   readonly onOpen?: (push: (value: JsonValue) => void) => void
 }
 
-export interface FakeDaemon {
-  readonly socketPath: string
+interface FakeDaemonCore {
   readonly requests: ReadonlyArray<SeenRequest>
   readonly push: (value: JsonValue) => void
   readonly openSockets: () => number
   readonly dropSockets: () => void
   readonly close: () => Promise<void>
+}
+
+export interface FakeDaemon extends FakeDaemonCore {
+  readonly socketPath: string
+}
+
+export interface FakeTcpDaemon extends FakeDaemonCore {
+  readonly host: string
+  readonly port: number
 }
 
 /** The version a current daemon reports; the client adopts it on mismatch. */
@@ -227,10 +236,11 @@ const replyEnvelope = (id: string, response: ScriptedReply): ReplyEnvelope => {
   return base
 }
 
-export const startFakeDaemon = async (
-  socketPath: string,
-  handler: ScriptedHandler,
-): Promise<FakeDaemon> => {
+interface FakeDaemonServer extends FakeDaemonCore {
+  readonly server: net.Server
+}
+
+const createFakeDaemonServer = (handler: ScriptedHandler): FakeDaemonServer => {
   const requests: Array<SeenRequest> = []
   const sockets: Array<net.Socket> = []
   let open = 0
@@ -310,12 +320,8 @@ export const startFakeDaemon = async (
     })
   })
 
-  await new Promise<void>((resolve) => {
-    server.listen(socketPath, () => resolve())
-  })
-
   return {
-    socketPath,
+    server,
     requests,
     push,
     openSockets: () => open,
@@ -326,5 +332,50 @@ export const startFakeDaemon = async (
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))
     },
+  }
+}
+
+export const startFakeDaemon = async (
+  socketPath: string,
+  handler: ScriptedHandler,
+): Promise<FakeDaemon> => {
+  const created = createFakeDaemonServer(handler)
+
+  await new Promise<void>((resolve) => {
+    created.server.listen(socketPath, () => resolve())
+  })
+
+  return {
+    socketPath,
+    requests: created.requests,
+    push: created.push,
+    openSockets: created.openSockets,
+    dropSockets: created.dropSockets,
+    close: created.close,
+  }
+}
+
+export const startFakeTcpDaemon = async (handler: ScriptedHandler): Promise<FakeTcpDaemon> => {
+  const created = createFakeDaemonServer(handler)
+
+  await new Promise<void>((resolve) => {
+    created.server.listen(0, "127.0.0.1", () => resolve())
+  })
+
+  const address = created.server.address()
+
+  if (address === null || Predicate.isString(address)) {
+    await created.close()
+    throw new Error("fake TCP daemon did not bind")
+  }
+
+  return {
+    host: "127.0.0.1",
+    port: address.port,
+    requests: created.requests,
+    push: created.push,
+    openSockets: created.openSockets,
+    dropSockets: created.dropSockets,
+    close: created.close,
   }
 }
