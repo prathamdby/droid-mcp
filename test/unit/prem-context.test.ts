@@ -880,8 +880,8 @@ describe("prem-context", () => {
   })
 
   describe("scrubbing", () => {
-    it("secrets in a successful response are scrubbed through disclosure", async () => {
-      const harness = await makeHarness(api, { protectedValues: [TENANT] })
+    it("installation header values in a successful response are scrubbed through disclosure", async () => {
+      const harness = await makeHarness(api)
 
       const space = decode(
         IdOnly,
@@ -909,10 +909,10 @@ describe("prem-context", () => {
       expect(read).toMatchObject({ body: "tenant [REDACTED]" })
     })
 
-    it("secrets inside a peer rejection detail are scrubbed before surfacing", async () => {
+    it("installation header values inside a peer rejection detail are scrubbed before surfacing", async () => {
       api.failNext("GET /api/context/spaces", contextError(403, "denied for tenant " + TENANT))
 
-      const harness = await makeHarness(api, { protectedValues: [TENANT] })
+      const harness = await makeHarness(api)
       const exit = await invoke(harness, "context_list_spaces", {})
       const error = expectFailure(exit)
 

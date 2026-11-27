@@ -196,7 +196,7 @@ export const contextOperationsLayer: Layer.Layer<
      * service never invokes them itself.
      */
     yield* Authority
-    yield* Disclosure
+    const disclosure = yield* Disclosure
     yield* Custody
     yield* Guidance
     yield* Callers
@@ -204,6 +204,11 @@ export const contextOperationsLayer: Layer.Layer<
     const entries: ContextOperationsService["entries"] = (site) =>
       Effect.gen(function* () {
         const origin = yield* validateOrigin(site.origin)
+        const headerValues = Object.values(site.headers ?? {}).filter((value) => value.length > 0)
+
+        if (headerValues.length > 0) {
+          yield* disclosure.tightenPolicy(headerValues)
+        }
 
         const binders = contextDefinitions({
           origin,

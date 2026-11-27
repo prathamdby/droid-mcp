@@ -9,6 +9,7 @@
  * profile choice, a transport choice, nor any other flag ever flips either
  * one; they are independent operator startup choices.
  */
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
 import type { AutonomyLevel } from "../../authority/index.ts"
@@ -56,6 +57,7 @@ export interface CliConfig {
   readonly factoryApiKey: string | undefined
   readonly factoryBaseUrl: string | undefined
   readonly contextBaseUrl: string | undefined
+  readonly contextHeaders: Readonly<Record<string, string>> | undefined
   readonly includeDaemon: boolean
   readonly guidanceRequired: boolean
   readonly droidPath: string
@@ -95,6 +97,75 @@ const splitTokens = (raw: string | undefined): ReadonlyArray<string> => {
 
 const nonEmpty = (raw: string | undefined): string | undefined =>
   raw === undefined || raw.trim().length === 0 ? undefined : raw
+
+/** Headers the server owns or that would break routing, authentication or framing. */
+const RESERVED_HEADERS: ReadonlyArray<string> = [
+  "authorization",
+  "cookie",
+  "host",
+  "proxy-authorization",
+  "connection",
+  "content-length",
+  "content-type",
+  "transfer-encoding",
+  "te",
+  "upgrade",
+  "keep-alive",
+  "expect",
+  "trailer",
+]
+
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+
+/** Framing characters, and anything past Latin-1, which an HTTP header cannot carry. */
+const HEADER_VALUE_FORBIDDEN = /[\r\n\0\u{100}-\u{10FFFF}]/u
+
+/** Fetch strips surrounding spaces and tabs before sending, so the stored value matches the wire. */
+const HEADER_WHITESPACE = /^[ \t]+|[ \t]+$/g
+
+const HeaderRecord = Schema.Record(Schema.String, Schema.String)
+
+/**
+ * Parses `FACTORY_CONTEXT_HEADERS` under its documented contract: one JSON
+ * object with string values, no reserved or case-insensitively duplicated
+ * names, and no value an HTTP header cannot carry. Errors name the variable
+ * and the offending header name, never a configured value.
+ */
+const parseContextHeaders = (
+  raw: string | undefined,
+): Readonly<Record<string, string>> | undefined => {
+  if (raw === undefined || raw.trim().length === 0) return undefined
+
+  const invalid = (reason: string): CliParseError => error("FACTORY_CONTEXT_HEADERS " + reason)
+
+  const headers = Option.getOrUndefined(
+    Schema.decodeUnknownOption(Schema.fromJsonString(HeaderRecord))(raw),
+  )
+
+  if (headers === undefined) {
+    throw invalid("must be a JSON object of string values")
+  }
+
+  const seen = new Set<string>()
+
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase()
+
+    if (!HEADER_NAME.test(name)) throw invalid("has an invalid header name")
+
+    if (RESERVED_HEADERS.includes(lower)) throw invalid("may not set " + lower)
+
+    if (seen.has(lower)) throw invalid("sets " + lower + " twice")
+
+    if (HEADER_VALUE_FORBIDDEN.test(value)) throw invalid("has an invalid value for " + name)
+
+    seen.add(lower)
+  }
+
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name, value.replace(HEADER_WHITESPACE, "")]),
+  )
+}
 
 /** Port the `droid daemon` websocket listener binds when a URL names none. */
 const DEFAULT_DAEMON_PORT = 7338
@@ -334,6 +405,7 @@ export const parseCliArgs = (argv: ReadonlyArray<string>, env: CliEnv): CliConfi
     factoryApiKey,
     factoryBaseUrl: nonEmpty(values.get("--factory-base-url") ?? env["FACTORY_BASE_URL"]),
     contextBaseUrl: nonEmpty(values.get("--context-base-url") ?? env["FACTORY_CONTEXT_BASE_URL"]),
+    contextHeaders: parseContextHeaders(env["FACTORY_CONTEXT_HEADERS"]),
     includeDaemon: !booleans.has("--no-daemon"),
     guidanceRequired: !booleans.has("--no-guidance"),
     droidPath,
@@ -364,6 +436,7 @@ Flags:
   --factory-api-key <key>               Factory API key (FACTORY_API_KEY)
   --factory-base-url <url>              Factory API origin (FACTORY_BASE_URL)
   --context-base-url <url>              Prem Context origin (FACTORY_CONTEXT_BASE_URL)
+                                        FACTORY_CONTEXT_HEADERS adds JSON object headers
   --workspace-root <path>               Permitted workspace root; repeatable
   --droid-path <path>                   Local executable path (DROID_MCP_DROID_PATH)
   -h, --help                            Show this help
@@ -446,6 +519,7 @@ export const runCli = async (
     factoryBaseUrl: config.factoryBaseUrl,
     factoryApiKey: config.factoryApiKey,
     contextBaseUrl: config.contextBaseUrl,
+    contextHeaders: config.contextHeaders,
     includeDaemon: config.includeDaemon,
     profile: config.profile,
   } as const
