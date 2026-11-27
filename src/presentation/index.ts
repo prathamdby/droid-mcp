@@ -42,7 +42,7 @@ import * as Schema from "effect/Schema"
 
 import { Artifacts, Delivery, parseArtifactRef } from "../artifacts/index.ts"
 import type { ArtifactRef } from "../artifacts/index.ts"
-import { Capabilities } from "../capabilities/index.ts"
+import { Capabilities, OPERATION_FAMILIES } from "../capabilities/index.ts"
 import type {
   BoundOperation,
   Catalog,
@@ -544,10 +544,10 @@ const searchSchema = {
   type: "object",
   properties: {
     query: { type: "string" },
-    family: { type: "string" },
+    family: { type: "string", enum: [...OPERATION_FAMILIES] },
     readOnly: { type: "boolean" },
-    limit: { type: "integer" },
-    offset: { type: "integer" },
+    limit: { type: "integer", minimum: 1, maximum: SEARCH_LIMIT_MAX },
+    offset: { type: "integer", minimum: 0 },
   },
 } satisfies { readonly [key: string]: Schema.Json }
 
@@ -1401,19 +1401,8 @@ export const presentationLayer: Layer.Layer<Presentation, never, Capabilities | 
         )
       }
 
-      const familyList = (body: ViewBody): string => {
-        const families: Array<OperationFamily> = [
-          "server",
-          "skill",
-          "session",
-          "rest",
-          "context",
-          "daemon",
-          "droid",
-        ]
-
-        return families.filter((family) => body.familyCounts[family] > 0).join(", ")
-      }
+      const familyList = (body: ViewBody): string =>
+        OPERATION_FAMILIES.filter((family) => body.familyCounts[family] > 0).join(", ")
 
       return { advertise, describe, call, batch, continueResult, instructions }
     }),

@@ -49,10 +49,20 @@ const localOptions = () => ({
 
 const json = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))
 const record = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))
+const records = Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)))
 const text = Schema.decodeUnknownSync(Schema.String)
+const number = Schema.decodeUnknownSync(Schema.Number)
 
 const toolNames = Schema.decodeUnknownSync(
   Schema.Struct({ tools: Schema.Array(Schema.Struct({ name: Schema.String })) }),
+)
+
+const failureBody = Schema.decodeUnknownSync(
+  Schema.Struct({
+    code: Schema.String,
+    message: Schema.String,
+    ref: Schema.optionalKey(Schema.String),
+  }),
 )
 
 const embeddedValue = (outcome: EmbeddedResult): Schema.Json => {
@@ -92,12 +102,67 @@ const result = (reply: RpcReply): Schema.Json => {
 const call = (request: RequestRpc, name: string, args: Schema.Json = {}): Promise<RpcReply> =>
   request("tools/call", { name, arguments: args })
 
-const toolValue = (reply: RpcReply): Schema.Json => {
-  const { result: value } = record(result(reply))
+const toolEnvelope = Schema.decodeUnknownSync(
+  Schema.Struct({
+    content: Schema.Array(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })),
+    isError: Schema.optionalKey(Schema.Boolean),
+    structuredContent: Schema.optionalKey(Schema.Json),
+  }),
+)
 
-  if (value === undefined) throw new Error("expected tool result: " + JSON.stringify(reply))
+type ToolEnvelope = ReturnType<typeof toolEnvelope>
+
+const toolText = (envelope: ToolEnvelope): string => {
+  if (envelope.content.length !== 1) {
+    throw new Error("expected one tool content block: " + JSON.stringify(envelope))
+  }
+
+  const block = envelope.content[0]
+
+  if (block === undefined || block.text.length === 0) {
+    throw new Error("tool result carries no readable text: " + JSON.stringify(envelope))
+  }
+
+  return block.text
+}
+
+const toolPayload = (envelope: ToolEnvelope): Schema.Json => json(toolText(envelope))
+
+/** Decodes a successful standard CallToolResult and proves its structured mirror. */
+const toolValue = (reply: RpcReply): Schema.Json => {
+  const envelope = toolEnvelope(result(reply))
+
+  if (envelope.isError === true) throw new Error("expected a successful tool result")
+
+  const value = toolPayload(envelope)
+  const isObjectPayload = value !== null && !Array.isArray(value) && value instanceof Object
+
+  if (isObjectPayload) {
+    if (envelope.structuredContent === undefined) {
+      throw new Error("object tool payload has no structuredContent")
+    }
+
+    expect(envelope.structuredContent).toEqual(value)
+  } else if (envelope.structuredContent !== undefined) {
+    throw new Error("scalar tool payload unexpectedly carries structuredContent")
+  }
 
   return value
+}
+
+/** Decodes a tool execution failure inside a successful JSON-RPC reply. */
+const toolFailure = (reply: RpcReply) => {
+  const envelope = toolEnvelope(result(reply))
+
+  if (envelope.isError !== true) {
+    throw new Error("expected an isError tool result: " + JSON.stringify(reply))
+  }
+
+  if (envelope.structuredContent !== undefined) {
+    throw new Error("tool failure unexpectedly carries structuredContent")
+  }
+
+  return failureBody(toolPayload(envelope))
 }
 
 const post = (
@@ -607,7 +672,7 @@ describe("httpServer", () => {
         sessions: [{ sessionId }],
       })
       expect(toolValue(await call(bob, "session_list"))).toEqual({ sessions: [] })
-      expect((await call(bob, "session_close", { sessionId })).error?.data).toMatchObject({
+      expect(toolFailure(await call(bob, "session_close", { sessionId }))).toMatchObject({
         code: "not_visible",
       })
 
@@ -623,6 +688,191 @@ describe("httpServer", () => {
     }
 
     await expect(post(server, requestLine(1, "ping", {}), ALICE)).rejects.toThrow()
+  })
+
+  it("encodes direct, discovery, dispatch and batch results as visible MCP content", async () => {
+    const server = await httpServer({ authTokens: [ALICE], includeDaemon: false, port: 0 })
+
+    try {
+      const request = httpClient(server, ALICE)
+
+      expect(record(result(await request("initialize"))).content).toBeUndefined()
+      expect(record(result(await request("tools/list"))).content).toBeUndefined()
+
+      const directReply = await call(request, "server_info")
+      const direct = record(toolValue(directReply))
+
+      expect(direct).toMatchObject({
+        serverName: "droid-mcp",
+        profile: "compact",
+        maxAutonomy: "medium",
+      })
+      expect(number(direct.operationCount)).toBeGreaterThan(0)
+
+      const search = record(
+        toolValue(await call(request, "tools_search", { query: "session events" })),
+      )
+
+      const entries = records(search.tools ?? [])
+      const names = entries.map((entry) => text(entry.name))
+
+      expect(number(search.total)).toBeGreaterThan(0)
+      expect(names).toContain("session_events")
+
+      const filtered = record(
+        toolValue(
+          await call(request, "tools_search", {
+            family: "session",
+            readOnly: true,
+            limit: 2,
+            offset: 0,
+          }),
+        ),
+      )
+
+      const filteredEntries = records(filtered.tools ?? [])
+      const filteredNames = filteredEntries.map((entry) => text(entry.name))
+
+      expect(number(filtered.total)).toBeGreaterThan(2)
+      expect(filteredEntries).toHaveLength(2)
+      expect(number(filtered.nextOffset)).toBe(2)
+
+      for (const entry of filteredEntries) {
+        expect(entry.family).toBe("session")
+        expect(entry.readOnly).toBe(true)
+      }
+
+      const offsetPage = record(
+        toolValue(
+          await call(request, "tools_search", {
+            family: "session",
+            readOnly: true,
+            limit: 2,
+            offset: 2,
+          }),
+        ),
+      )
+
+      const offsetNames = records(offsetPage.tools ?? []).map((entry) => text(entry.name))
+      const firstOffsetName = offsetNames[0]
+
+      if (firstOffsetName === undefined) throw new Error("offset search page is empty")
+
+      expect(filteredNames).not.toContain(firstOffsetName)
+
+      expect(
+        toolValue(await call(request, "tools_search", { query: "zzzz-no-such-operation-zzzz" })),
+      ).toEqual({ total: 0, tools: [] })
+
+      const invalidSearchArguments: ReadonlyArray<Schema.Json> = [
+        { family: "bogus" },
+        { readOnly: "yes" },
+        { limit: 0 },
+        { limit: 51 },
+        { limit: 1.5 },
+        { offset: -1 },
+      ]
+
+      for (const searchArguments of invalidSearchArguments) {
+        expect(toolFailure(await call(request, "tools_search", searchArguments))).toMatchObject({
+          code: "invalid_arguments",
+        })
+      }
+
+      const dispatchReply = await call(request, "tool_call", {
+        name: "server_info",
+        arguments: {},
+      })
+
+      expect(result(dispatchReply)).toEqual(result(directReply))
+
+      const scalarReply = await call(request, "tool_call", {
+        name: "server_info",
+        arguments: {},
+        select: "/profile",
+      })
+
+      expect(toolValue(scalarReply)).toBe("compact")
+
+      const arrayReply = await call(request, "tool_call", {
+        name: "server_info",
+        arguments: {},
+        select: "/providerKinds",
+      })
+
+      expect(toolValue(arrayReply)).toEqual([])
+
+      const batch = record(
+        toolValue(
+          await call(request, "batch", {
+            steps: [
+              { id: "first", name: "server_info" },
+              { id: "second", name: "server_info", arguments: {} },
+            ],
+            stopOnError: false,
+          }),
+        ),
+      )
+
+      const steps = records(batch.steps ?? [])
+
+      expect(batch.completed).toBe(2)
+      expect(batch.failed).toBe(0)
+      expect(steps).toHaveLength(2)
+
+      for (const step of steps) {
+        expect(step.status).toBe("ok")
+        expect(record(step.result ?? {}).profile).toBe("compact")
+      }
+
+      const unbudgeted = record(
+        toolValue(
+          await call(request, "batch", {
+            steps: [
+              { id: "unbudgeted-first", name: "skill_read" },
+              { id: "unbudgeted-second", name: "skill_read" },
+            ],
+          }),
+        ),
+      )
+
+      for (const step of records(unbudgeted.steps ?? [])) {
+        expect(step.status).toBe("ok")
+        expect(step.truncated).toBeUndefined()
+        expect(text(record(step.result ?? {}).markdown)).toContain("# Droid")
+      }
+
+      const budgeted = record(
+        toolValue(
+          await call(request, "batch", {
+            steps: [
+              { id: "budget-first", name: "skill_read" },
+              { id: "budget-second", name: "skill_read" },
+            ],
+            maxBytes: 1,
+          }),
+        ),
+      )
+
+      const budgetedSteps = records(budgeted.steps ?? [])
+
+      expect(budgeted.completed).toBe(2)
+      expect(budgetedSteps).toHaveLength(2)
+
+      for (const step of budgetedSteps) {
+        expect(step.status).toBe("ok")
+        expect(step.result).toBeUndefined()
+        expect(step.truncated).toBe(true)
+
+        const ref = text(step.ref)
+        const page = record(toolValue(await call(request, "result_read", { ref, length: 128 })))
+
+        expect(text(page.chunk)).toContain('"markdown"')
+        expect(number(page.totalBytes)).toBeGreaterThan(1_024)
+      }
+    } finally {
+      await server.close()
+    }
   })
 
   it("shares sessions only, not receipts, artifacts, or daemon authority", async () => {
@@ -651,7 +901,7 @@ describe("httpServer", () => {
         const sessionId = text(record(created).sessionId)
 
         expect(
-          (await call(bob, "session_stream", { sessionId, prompt: "hello" })).error?.data,
+          toolFailure(await call(bob, "session_stream", { sessionId, prompt: "hello" })),
         ).toMatchObject({
           code: "guidance_required",
         })
@@ -662,13 +912,45 @@ describe("httpServer", () => {
           maxBytes: 1_024,
         })
 
-        const continuation = record(result(large))
+        const continuation = record(toolValue(large))
         const ref = text(continuation.ref)
+        const totalBytes = number(continuation.totalBytes)
+        const preview = text(continuation.preview)
 
         expect(continuation.truncated).toBe(true)
-        expect(toolValue(await call(alice, "result_read", { ref, length: 100 }))).toHaveProperty(
-          "chunk",
-        )
+        expect(totalBytes).toBeGreaterThan(1_024)
+        expect(preview.length).toBeGreaterThan(0)
+        expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(1_024)
+        expect(text(continuation.hint)).toContain("result_read")
+
+        let offset = 0
+        let assembled = ""
+        let finished = false
+
+        for (let round = 0; round < 100; round += 1) {
+          const page = record(
+            toolValue(await call(alice, "result_read", { ref, offset, length: 16_384 })),
+          )
+
+          expect(text(page.ref)).toBe(ref)
+          expect(number(page.offset)).toBe(offset)
+
+          assembled += text(page.chunk)
+
+          if (page.done === true) {
+            finished = true
+            expect(page.nextOffset).toBeUndefined()
+            break
+          }
+
+          const nextOffset = number(page.nextOffset)
+
+          expect(nextOffset).toBeGreaterThan(offset)
+          offset = nextOffset
+        }
+
+        expect(finished).toBe(true)
+        expect(Buffer.byteLength(assembled, "utf8")).toBe(totalBytes)
 
         toolValue(await call(bob, "skill_read"))
 
@@ -698,10 +980,10 @@ describe("httpServer", () => {
         const foreign = await call(bob, "result_read", { ref, length: 100 })
         const missing = await call(bob, "result_read", { ref: "res_0000000000000000", length: 100 })
 
-        const absence = record(missing.error?.data)
+        const absence = toolFailure(missing)
 
         expect(absence).toMatchObject({ code: "artifact_unavailable" })
-        expect(foreign.error?.data).toEqual({ ...absence, ref })
+        expect(toolFailure(foreign)).toEqual({ ...absence, ref })
 
         for (const request of [alice, bob]) {
           const load = await call(request, "tool_call", {
@@ -709,7 +991,7 @@ describe("httpServer", () => {
             arguments: { sessionId, token: "fixture-daemon-token" },
           })
 
-          expect(load.error?.data).toMatchObject({ code: "authority_unverifiable" })
+          expect(toolFailure(load)).toMatchObject({ code: "authority_unverifiable" })
         }
 
         expect(daemon.requests).toEqual([])
@@ -718,6 +1000,91 @@ describe("httpServer", () => {
       }
     } finally {
       await daemon.close()
+    }
+  })
+
+  it("keeps execution failures visible and protocol errors on the error channel", async () => {
+    const server = await httpServer({
+      ...localOptions(),
+      authTokens: [ALICE],
+      includeDaemon: false,
+      port: 0,
+    })
+
+    try {
+      const request = httpClient(server, ALICE)
+
+      toolValue(await call(request, "skill_read"))
+
+      const invalid = await call(request, "session_events", {
+        sessionId: "",
+        cursor: -1,
+        waitMs: 0,
+      })
+
+      expect(invalid.error).toBeUndefined()
+      expect(toolFailure(invalid)).toMatchObject({ code: "invalid_arguments" })
+
+      const innerUnknown = await call(request, "tool_call", {
+        name: "no_such_operation",
+        arguments: {},
+      })
+
+      expect(innerUnknown.error).toBeUndefined()
+      expect(toolFailure(innerUnknown)).toMatchObject({ code: "unknown_operation" })
+
+      const directUnknown = await call(request, "no_such_direct_tool")
+
+      expect(directUnknown.error?.code).toBe(-32_000)
+      expect(record(directUnknown.error?.data ?? {})).toMatchObject({
+        code: "unknown_operation",
+      })
+
+      const invalidEnvelope = await request("tools/call", { arguments: {} })
+
+      expect(invalidEnvelope.error?.code).toBe(-32_000)
+      expect(record(invalidEnvelope.error?.data ?? {})).toMatchObject({
+        code: "invalid_arguments",
+      })
+
+      const malformed = await post(server, "{", ALICE)
+
+      expect(malformed.status).toBe(200)
+
+      const malformedError = record(record(json(await malformed.text())).error ?? {})
+
+      expect(malformedError.code).toBe(-32_700)
+
+      const badFrame = await post(
+        server,
+        JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tools/call", params: "bad" }),
+        ALICE,
+      )
+
+      expect(badFrame.status).toBe(200)
+
+      const badFrameError = record(record(json(await badFrame.text())).error ?? {})
+
+      expect(badFrameError.code).toBe(-32_600)
+
+      const invalidSelect = await call(request, "tool_call", {
+        name: "session_create",
+        arguments: { cwd: sandbox, autonomyLevel: "low" },
+        select: "/does/not/exist",
+      })
+
+      const failure = toolFailure(invalidSelect)
+
+      expect(invalidSelect.error).toBeUndefined()
+      expect(failure).toMatchObject({ code: "invalid_select" })
+
+      const ref = text(failure.ref)
+      const recovered = record(toolValue(await call(request, "result_read", { ref, length: 200 })))
+
+      expect(text(recovered.ref)).toBe(ref)
+      expect(text(recovered.chunk)).toContain("sess-")
+    } finally {
+      await server.close()
     }
   })
 

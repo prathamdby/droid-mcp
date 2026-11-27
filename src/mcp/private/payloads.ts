@@ -7,6 +7,10 @@ import * as Option from "effect/Option"
 import * as Predicate from "effect/Predicate"
 import * as Schema from "effect/Schema"
 
+import { OPERATION_FAMILIES } from "../../capabilities/index.ts"
+import { SEARCH_LIMIT_MAX } from "../../presentation/index.ts"
+import type { DiscoveryQuery } from "../../presentation/index.ts"
+
 export type JsonObject = { readonly [key: string]: Schema.Json }
 
 export const isJsonObject = (value: Schema.Json): value is JsonObject =>
@@ -108,6 +112,28 @@ export const readStreamDelivery = (value: Schema.Json): "detach" | "block" | und
   return decoded.value.delivery
 }
 
+/** The filter fields of `tools_search` arguments. */
+const SearchArgumentsSchema = Schema.Struct({
+  query: Schema.optionalKey(Schema.String),
+  family: Schema.optionalKey(Schema.Literals(OPERATION_FAMILIES)),
+  readOnly: Schema.optionalKey(Schema.Boolean),
+  limit: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: SEARCH_LIMIT_MAX })),
+  ),
+  offset: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+})
+
+/** Decodes the complete `tools_search` filter object, rejecting invalid values. */
+export const readSearchArguments = (value: Schema.Json): DiscoveryQuery | undefined => {
+  if (!isJsonObject(value)) return undefined
+
+  const decoded = Schema.decodeUnknownOption(SearchArgumentsSchema)(value)
+
+  if (Option.isNone(decoded)) return undefined
+
+  return decoded.value
+}
+
 /** One batch step's wire shape inside `batch` arguments. */
 const BatchStepSchema = Schema.Struct({
   id: Schema.optionalKey(Schema.String),
@@ -119,6 +145,7 @@ const BatchStepSchema = Schema.Struct({
 const BatchArgumentsSchema = Schema.Struct({
   steps: Schema.Array(BatchStepSchema),
   stopOnError: Schema.optionalKey(Schema.Boolean),
+  maxBytes: Schema.optionalKey(Schema.Number),
 })
 
 export interface BatchStepInput {
@@ -131,6 +158,7 @@ export interface BatchStepInput {
 export interface BatchArguments {
   readonly steps: ReadonlyArray<BatchStepInput>
   readonly stopOnError: boolean
+  readonly maxBytes: number | undefined
 }
 
 /** Decodes the entire batch before any step can execute. */
@@ -148,7 +176,11 @@ export const readBatchArguments = (value: Schema.Json): BatchArguments | undefin
     select: step.select,
   }))
 
-  return { steps, stopOnError: decoded.value.stopOnError !== false }
+  return {
+    steps,
+    stopOnError: decoded.value.stopOnError !== false,
+    maxBytes: decoded.value.maxBytes,
+  }
 }
 
 /** The optional paging fields of `result_read` and `tool_call` arguments. */
