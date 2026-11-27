@@ -51,7 +51,7 @@ export interface AssemblyOptions {
   readonly daemonAuth?: DaemonAuthOptions | undefined
   /** Hosted API origin; installs the hosted provider when present. */
   readonly factoryBaseUrl?: string | undefined
-  /** Hosted API bearer key. */
+  /** Hosted API bearer key; when set, supplied to the local executable as `FACTORY_API_KEY`. */
   readonly factoryApiKey?: string | undefined
   /** Prem Context origin; installs the context provider when present. */
   readonly contextBaseUrl?: string | undefined

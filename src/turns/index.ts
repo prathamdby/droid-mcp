@@ -59,7 +59,7 @@ import type {
   ReplyUncertain,
 } from "../decisions/index.ts"
 import { Disclosure, releasedJson, ReleasePayload } from "../disclosure/index.ts"
-import type { Audience, Released } from "../disclosure/index.ts"
+import type { Audience, Released, TextScrubStream } from "../disclosure/index.ts"
 import { Observations } from "../observations/index.ts"
 import type { History, InvalidPosition, ObservationPage, Position } from "../observations/index.ts"
 import { PlacementNotice } from "../placement/index.ts"
@@ -223,6 +223,7 @@ interface TurnRecord {
   status: TurnStatus
   summary: Released<"client"> | undefined
   readonly textChunks: Array<string>
+  readonly textStream: TextScrubStream
   lastText: string | undefined
   failureReason: string | undefined
   finishedAtMs: number | undefined
@@ -255,6 +256,23 @@ const wakeWaiters = (leaseState: LeaseState): void => {
   for (const wake of leaseState.waiters) {
     wake()
   }
+}
+
+/**
+ * Replaces the fragmented text of a delta payload with the scrubbed text the
+ * stream released for it. Only `assistant_text_delta` carries fragmented
+ * text in this shape; other payloads pass through unchanged.
+ */
+const rewriteDeltaText = (kind: string, payload: Schema.Json, released: string): Schema.Json => {
+  if (kind !== "assistant_text_delta") return payload
+
+  const decoded = Option.getOrUndefined(
+    Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json))(payload),
+  )
+
+  if (decoded === undefined) return payload
+
+  return { ...decoded, textDelta: released }
 }
 
 const recordSettledGeneration = (leaseState: LeaseState, workRef: PlacementWorkRef | undefined) => {
@@ -499,6 +517,18 @@ export const turnsLayer = (
           }
 
           yield* decisions.retire(turn.decisionScope)
+
+          const streamTail = turn.textStream.flush()
+
+          if (streamTail.length > 0) {
+            yield* appendEvent(leaseState, {
+              kind: "delta",
+              turnId: turn.id,
+              deltaKind: "assistant_text_delta",
+              payload: { textDelta: streamTail },
+            })
+          }
+
           yield* appendEvent(leaseState, eventPayload)
 
           recordSettledGeneration(leaseState, turn.workRef)
@@ -554,6 +584,8 @@ export const turnsLayer = (
 
               const deltaText = extractDeltaText(variant.kind, variant.payload)
 
+              let payload = variant.payload
+
               if (deltaText !== undefined) {
                 turn.textChunks.push(deltaText)
 
@@ -561,13 +593,23 @@ export const turnsLayer = (
                 const scrubbed = yield* scrubClientText(leaseState, combined)
 
                 turn.lastText = scrubbed ?? combined
+
+                // Stream scrubbing is the only correct boundary for fragmented
+                // text: atomic scrubbing cannot see a protected value split
+                // across deltas, so the released text here may lag the peer
+                // while a possible prefix is withheld.
+                payload = rewriteDeltaText(
+                  variant.kind,
+                  variant.payload,
+                  turn.textStream.push(deltaText),
+                )
               }
 
               yield* appendEvent(leaseState, {
                 kind: "delta",
                 turnId: turn.id,
                 deltaKind: variant.kind,
-                payload: variant.payload,
+                payload,
               })
 
               turn.activityCount += 1
@@ -921,6 +963,7 @@ export const turnsLayer = (
                 status: "running",
                 summary: undefined,
                 textChunks: [],
+                textStream: disclosure.scrubStream(),
                 lastText: undefined,
                 failureReason: undefined,
                 finishedAtMs: undefined,

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { PassThrough } from "node:stream"
+import { pathToFileURL } from "node:url"
 import { isDeepStrictEqual, promisify } from "node:util"
 
 import { Effect, Option, Schema } from "effect"
@@ -410,6 +411,63 @@ describe("embedded", () => {
       ok: false,
       code: "closed",
     })
+  })
+
+  it("prefers the configured Factory key over a conflicting droidEnv entry", async () => {
+    const runtime = await embedded({
+      ...localOptions(),
+      principal: "operator",
+      includeDaemon: false,
+      factoryApiKey: "configured-key",
+      droidEnv: { FACTORY_API_KEY: "override-loses" },
+    })
+
+    try {
+      const created = await runtime.invoke("session_create", { cwd: sandbox, autonomyLevel: "low" })
+      const sessionId = text(record(embeddedValue(created)).sessionId)
+
+      const turn = await runtime.invoke("session_stream", {
+        sessionId,
+        prompt: "env-echo",
+        waitMs: 5_000,
+      })
+
+      expect(embeddedValue(turn)).toMatchObject({
+        status: "completed",
+        result: { structuredOutput: { echo: "[REDACTED]" } },
+      })
+      expect(JSON.stringify(embeddedValue(turn))).not.toContain("override-loses")
+      expect(JSON.stringify(embeddedValue(turn))).not.toContain("configured-key")
+    } finally {
+      await runtime.close()
+    }
+
+    const blank = await embedded({
+      ...localOptions(),
+      principal: "operator",
+      includeDaemon: false,
+      factoryApiKey: "   ",
+      droidEnv: { FACTORY_API_KEY: "kept-key" },
+    })
+
+    try {
+      const created = await blank.invoke("session_create", { cwd: sandbox, autonomyLevel: "low" })
+      const sessionId = text(record(embeddedValue(created)).sessionId)
+
+      const turn = await blank.invoke("session_stream", {
+        sessionId,
+        prompt: "env-echo",
+        waitMs: 5_000,
+      })
+
+      expect(embeddedValue(turn)).toMatchObject({
+        status: "completed",
+        result: { structuredOutput: { echo: "[REDACTED]" } },
+      })
+      expect(JSON.stringify(embeddedValue(turn))).not.toContain("kept-key")
+    } finally {
+      await blank.close()
+    }
   })
 
   it("admits the process working directory when no roots are configured", async () => {
@@ -1462,4 +1520,173 @@ describe("cli entry point", () => {
     },
     8_000,
   )
+
+  it("passes the CLI Factory key to local sessions without widening the child environment", async () => {
+    const expectedKey = "env-key"
+    const daemon = await startCliDaemon(expectedKey)
+    const keyedExecutable = join(sandbox, "keyed-droid.mjs")
+
+    writeFileSync(
+      keyedExecutable,
+      [
+        "#!" + process.execPath,
+        "const expectedKey = " + JSON.stringify(expectedKey),
+        "if (process.env.FACTORY_API_KEY !== expectedKey) {",
+        '  console.error("the configured Factory API key did not reach the child")',
+        "  process.exit(42)",
+        "}",
+        "if (",
+        "  process.env.DROID_MCP_KEYS !== undefined ||",
+        "  process.env.UNRELATED_SERVICE_SECRET !== undefined",
+        ") {",
+        '  console.error("the child environment was not restricted")',
+        "  process.exit(43)",
+        "}",
+        "await import(" + JSON.stringify(pathToFileURL(FAKE_EXEC).href) + ")",
+        "",
+      ].join("\n"),
+      { mode: 0o700 },
+    )
+
+    const child = spawn(
+      process.execPath,
+      [
+        ...CLI_ARGS,
+        "serve",
+        "--http",
+        "--daemon-url",
+        "unix:" + daemon.socketPath,
+        "--droid-path",
+        keyedExecutable,
+        "--workspace-root",
+        sandbox,
+      ],
+      {
+        env: {
+          FACTORY_API_KEY: expectedKey,
+          DROID_MCP_KEYS: ALICE,
+          UNRELATED_SERVICE_SECRET: "unrelated-service-secret",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 6_000,
+        killSignal: "SIGKILL",
+      },
+    )
+
+    const closed = once(child, "close")
+    const lines = createInterface({ input: child.stdout, terminal: false })
+    let stderr = ""
+
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk
+    })
+
+    try {
+      const line = await lines[Symbol.asyncIterator]().next()
+      const prefix = "listening on "
+
+      if (line.done || !line.value.startsWith(prefix)) {
+        throw new Error("CLI did not announce its HTTP endpoint: " + stderr)
+      }
+
+      const endpoint = new URL(line.value.slice(prefix.length))
+      const request = httpClient({ url: endpoint.origin, path: endpoint.pathname }, ALICE)
+
+      toolValue(await call(request, "skill_read"))
+      expect(
+        toolValue(await call(request, "tool_call", { name: "daemon_list_opened_sessions" })),
+      ).toEqual({ sessions: [] })
+      expect(daemon.requests.map(({ method }) => method)).toEqual([
+        "daemon.authenticate",
+        "daemon.list_opened_sessions",
+      ])
+
+      const created = toolValue(
+        await call(request, "session_create", { cwd: sandbox, autonomyLevel: "low" }),
+      )
+
+      const sessionId = text(record(created).sessionId)
+
+      const turn = toolValue(
+        await call(request, "session_stream", { sessionId, prompt: "env-echo", waitMs: 5_000 }),
+      )
+
+      expect(turn).toMatchObject({
+        status: "completed",
+        result: { structuredOutput: { echo: "[REDACTED]" } },
+      })
+      expect(JSON.stringify(turn)).not.toContain(expectedKey)
+
+      const events = toolValue(
+        await call(request, "session_events", { sessionId, cursor: 0, waitMs: 0 }),
+      )
+
+      expect(events).toMatchObject({
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "turn_completed",
+            summary: expect.objectContaining({
+              structuredOutput: { echo: "[REDACTED]" },
+            }),
+          }),
+        ]),
+      })
+      expect(JSON.stringify(events)).not.toContain(expectedKey)
+
+      const streamed = toolValue(
+        await call(request, "session_stream", { sessionId, prompt: "env-stream", waitMs: 5_000 }),
+      )
+
+      expect(streamed).toMatchObject({ status: "completed" })
+      expect(JSON.stringify(streamed)).not.toContain(expectedKey)
+
+      const streamEvents = toolValue(
+        await call(request, "session_events", { sessionId, cursor: 0, waitMs: 0 }),
+      )
+
+      // The key arrives split across two deltas, so plain containment is
+      // toothless: the security property is that reassembling every released
+      // fragment in order never yields the key.
+      const deltas = records(record(streamEvents).events)
+        .filter((event) => event.kind === "delta")
+        .map((event) => text(record(record(event).payload).textDelta))
+        .join("")
+
+      expect(deltas).not.toContain(expectedKey)
+      expect(deltas).toContain("echo [REDACTED] done")
+      expect(JSON.stringify(streamEvents)).not.toContain(expectedKey)
+
+      const crashed = toolValue(
+        await call(request, "session_stream", { sessionId, prompt: "env-crash", waitMs: 5_000 }),
+      )
+
+      expect(crashed).toMatchObject({
+        status: "failed",
+        failureReason: expect.stringContaining("[REDACTED]"),
+      })
+      expect(JSON.stringify(crashed)).not.toContain(expectedKey)
+
+      const failureEvents = toolValue(
+        await call(request, "session_events", { sessionId, cursor: 0, waitMs: 0 }),
+      )
+
+      expect(failureEvents).toMatchObject({
+        events: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "turn_failed",
+            message: expect.stringContaining("[REDACTED]"),
+          }),
+        ]),
+      })
+      expect(JSON.stringify(failureEvents)).not.toContain(expectedKey)
+      expect(toolValue(await call(request, "session_close", { sessionId }))).toMatchObject({
+        closed: true,
+      })
+    } finally {
+      lines.close()
+      child.kill()
+      await closed
+      await daemon.close()
+    }
+  }, 8_000)
 })

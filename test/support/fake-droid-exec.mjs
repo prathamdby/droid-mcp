@@ -33,6 +33,9 @@
  *   "spec"        asks to leave spec mode with an edited plan
  *   "interrupt"   stays running until `droid.interrupt_session`
  *   "echo:<text>" completes with <text> as structured output
+ *   "env-echo"    completes with the child FACTORY_API_KEY as structured output
+ *   "env-crash"   writes the child FACTORY_API_KEY to stderr and exits 3 mid-turn
+ *   "env-stream"  echoes the child FACTORY_API_KEY split across two text deltas
  *
  * Environment:
  *   FAKE_DROID_INIT=hang       never answer initialize
@@ -498,6 +501,13 @@ const handleMessage = (text, id) => {
 
   respond(id, {})
 
+  if (text === "env-crash") {
+    process.stderr.write("boom: " + (process.env.FACTORY_API_KEY ?? "") + "\n")
+    setTimeout(() => process.exit(3), 40)
+
+    return
+  }
+
   if (text === "done-exit") {
     notify({
       type: "agent_turn_completed",
@@ -613,6 +623,33 @@ const handleMessage = (text, id) => {
 
   if (text.startsWith("echo:")) {
     complete("completed", { structuredOutput: { echo: text.slice(5) } })
+
+    return
+  }
+
+  if (text === "env-echo") {
+    complete("completed", { structuredOutput: { echo: process.env.FACTORY_API_KEY ?? "" } })
+
+    return
+  }
+
+  if (text === "env-stream") {
+    const key = process.env.FACTORY_API_KEY ?? ""
+    const cut = Math.max(1, Math.floor(key.length / 2))
+
+    notify({
+      type: "assistant_text_delta",
+      messageId: "m-stream",
+      blockIndex: 0,
+      textDelta: "echo " + key.slice(0, cut),
+    })
+    notify({
+      type: "assistant_text_delta",
+      messageId: "m-stream",
+      blockIndex: 0,
+      textDelta: key.slice(cut) + " done",
+    })
+    complete("completed")
 
     return
   }

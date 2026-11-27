@@ -147,3 +147,73 @@ export const mediaContainsProtectedBytes = (
 
   return false
 }
+
+/**
+ * A stateful scrubber for text that crosses the boundary in ordered
+ * fragments. Atomic scrubbing cannot see a protected value split across
+ * fragments, so the scrubber withholds every suffix that might still grow
+ * into one: the longest proper secret prefix at the tail, widened leftward
+ * over any protected occurrence that straddles the cut. Widening covers
+ * self-overlapping values such as `abab`, where one occurrence can end
+ * inside the prefix span of the next. Everything before the cut is final:
+ * no occurrence straddles it, so scrubbing it atomically is exact, and the
+ * concatenation of all released output is exactly the scrubbed stream.
+ */
+export const openScrubStream = (secretsFor: () => ReadonlyArray<string>, marker: string) => {
+  let pending = ""
+
+  const properPrefixHold = (text: string, secrets: ReadonlyArray<string>): number => {
+    let hold = 0
+
+    for (const secret of secrets) {
+      for (let length = 1; length < secret.length; length++) {
+        if (length <= text.length && length > hold && text.endsWith(secret.slice(0, length))) {
+          hold = length
+        }
+      }
+    }
+
+    return hold
+  }
+
+  const push = (text: string): string => {
+    pending += text
+
+    const secrets = secretsFor().filter((secret) => secret.length > 0)
+    let cut = pending.length - properPrefixHold(pending, secrets)
+
+    let widened = true
+
+    while (widened) {
+      widened = false
+
+      for (const secret of secrets) {
+        let index = pending.indexOf(secret)
+
+        while (index !== -1) {
+          if (index < cut && index + secret.length > cut) {
+            cut = index
+            widened = true
+          }
+
+          index = pending.indexOf(secret, index + 1)
+        }
+      }
+    }
+
+    const head = pending.slice(0, cut)
+    pending = pending.slice(cut)
+
+    return scrubText(head, secrets, marker)
+  }
+
+  const flush = (): string => {
+    const secrets = secretsFor().filter((secret) => secret.length > 0)
+    const out = scrubText(pending, secrets, marker)
+    pending = ""
+
+    return out
+  }
+
+  return { push, flush }
+}

@@ -665,3 +665,136 @@ describe("disclosure", () => {
     })
   })
 })
+
+describe("scrubStream", () => {
+  const streamOf = (secrets: ReadonlyArray<string>) => {
+    const exit = runWith(
+      withDisclosure((api) => Effect.succeed(api.scrubStream())),
+      disclosureLayer({ protectedValues: secrets }),
+    )
+
+    return expectSuccess(exit)
+  }
+
+  it("releases unprotected text without lag", () => {
+    const stream = streamOf(["secret-key"])
+
+    expect(stream.push("hello ")).toBe("hello ")
+    expect(stream.push("world")).toBe("world")
+    expect(stream.flush()).toBe("")
+  })
+
+  it("redacts a whole secret inside one push immediately", () => {
+    const stream = streamOf(["secret-key"])
+
+    expect(stream.push("the secret-key here")).toBe("the [REDACTED] here")
+  })
+
+  it("withholds a split secret so its fragments never reassemble", () => {
+    const stream = streamOf(["secret-key"])
+    const emitted: Array<string> = []
+
+    emitted.push(stream.push("the secret-"))
+    emitted.push(stream.push("key is out"))
+    emitted.push(stream.flush())
+
+    const joined = emitted.join("")
+
+    expect(joined).not.toContain("secret-key")
+    expect(joined).toContain("[REDACTED]")
+    expect(joined).toBe("the [REDACTED] is out")
+  })
+
+  it("survives per-character fragmentation of the secret", () => {
+    const secret = "abc123xyz"
+    const stream = streamOf([secret])
+    const emitted: Array<string> = []
+
+    for (const char of "pre " + secret + " post") {
+      emitted.push(stream.push(char))
+    }
+
+    emitted.push(stream.flush())
+
+    const joined = emitted.join("")
+
+    expect(joined).not.toContain(secret)
+    expect(joined).toBe("pre [REDACTED] post")
+  })
+
+  it("never releases half of a self-overlapping secret", () => {
+    const stream = streamOf(["abab"])
+    const emitted: Array<string> = []
+
+    for (const char of "ababx") {
+      emitted.push(stream.push(char))
+    }
+
+    emitted.push(stream.flush())
+
+    const joined = emitted.join("")
+
+    expect(joined).not.toContain("abab")
+    expect(joined).toBe("[REDACTED]x")
+  })
+
+  it("never releases halves of a two-character secret", () => {
+    const stream = streamOf(["aa"])
+    const emitted: Array<string> = []
+
+    emitted.push(stream.push("a"))
+    emitted.push(stream.push("a"))
+    emitted.push(stream.push("a"))
+    emitted.push(stream.flush())
+
+    const joined = emitted.join("")
+
+    expect(joined).not.toContain("aa")
+    expect(joined).toBe("[REDACTED]a")
+  })
+
+  it("releases an innocent partial prefix at flush", () => {
+    const stream = streamOf(["secret-key"])
+
+    expect(stream.push("use secret-")).toBe("use ")
+    expect(stream.flush()).toBe("secret-")
+  })
+
+  it("redacts overlapping occurrences across pushes", () => {
+    const stream = streamOf(["aa"])
+    const emitted: Array<string> = []
+
+    for (const char of "aaa") {
+      emitted.push(stream.push(char))
+    }
+
+    emitted.push(stream.flush())
+
+    const joined = emitted.join("")
+
+    expect(joined).not.toContain("aa")
+    expect(joined).toBe("[REDACTED]a")
+  })
+
+  it("tracks values protected after the stream was created", () => {
+    const exit = run(
+      withDisclosure((api) =>
+        Effect.gen(function* () {
+          const stream = api.scrubStream()
+          yield* api.tightenPolicy(["late-secret"])
+          const first = stream.push("late-")
+          const second = stream.push("secret!")
+          const tail = stream.flush()
+
+          return [first, second, tail] as const
+        }),
+      ),
+    )
+
+    const [first, second, tail] = expectSuccess(exit)
+    const joined = [first, second, tail].join("")
+
+    expect(joined).not.toContain("late-secret")
+    expect(joined).toBe("[REDACTED]!")
+  })
+})
