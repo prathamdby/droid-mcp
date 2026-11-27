@@ -66,7 +66,14 @@ export const assemblePipeline = async (options: AssemblyOptions): Promise<Assemb
   const guidanceRequired = options.guidanceRequired ?? true
   const maxAutonomy = options.maxAutonomy ?? "medium"
 
-  const disclosureLive = disclosureLayer({})
+  const disclosureLive = disclosureLayer({
+    protectedValues: options.factoryApiKey === undefined ? [] : [options.factoryApiKey],
+  })
+
+  const droidEnv =
+    options.factoryApiKey === undefined
+      ? options.droidEnv
+      : { ...options.droidEnv, FACTORY_API_KEY: options.factoryApiKey }
 
   const authorityLive = authorityLayer({
     maxAutonomy,
@@ -108,7 +115,7 @@ export const assemblePipeline = async (options: AssemblyOptions): Promise<Assemb
         LANG: process.env["LANG"],
         TERM: process.env["TERM"],
       },
-      env: options.droidEnv,
+      env: droidEnv,
     }),
     baseDeps,
   )
