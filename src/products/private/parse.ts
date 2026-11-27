@@ -1,7 +1,7 @@
 /**
  * Pure CLI and environment parsing for the products. Nothing here imports a
- * service layer, a carrier or a provider: this file turns `argv` and `env`
- * into a narrow `CliConfig` that `runCli` dispatches to a product root.
+ * carrier or provider runtime wiring: this file turns `argv` and `env` into a
+ * narrow `CliConfig` that `runCli` dispatches to a product root.
  *
  * Security defaults hold in every mode: `sharedSessions` is `false` unless
  * `--shared-sessions` is passed, and `allowUnverifiedDaemonAuthority` is
@@ -13,6 +13,7 @@ import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
 import type { AutonomyLevel } from "../../authority/index.ts"
+import { validateContextHeaders, type ContextHeaderProblem } from "../../context-headers/index.ts"
 import type { DaemonAuthOptions, ProductProfile } from "./types.ts"
 
 export class CliParseError extends Schema.TaggedError<CliParseError>()("CliParseError", {
@@ -98,50 +99,26 @@ const splitTokens = (raw: string | undefined): ReadonlyArray<string> => {
 const nonEmpty = (raw: string | undefined): string | undefined =>
   raw === undefined || raw.trim().length === 0 ? undefined : raw
 
-/** Headers the server owns or that would break routing, authentication, negotiation or framing. */
-const RESERVED_HEADERS: ReadonlyArray<string> = [
-  "accept",
-  "authorization",
-  "cookie",
-  "host",
-  "proxy-authorization",
-  "connection",
-  "content-length",
-  "content-type",
-  "transfer-encoding",
-  "te",
-  "upgrade",
-  "keep-alive",
-  "expect",
-  "trailer",
-]
-
-const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
-
-/** Whether a value carries a control character other than tab, or anything past Latin-1. */
-const hasForbiddenHeaderValueCharacter = (value: string): boolean => {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
-
-    if (code <= 0x08 || (code >= 0x0b && code <= 0x1f) || code === 0x7f || code > 0xff) {
-      return true
-    }
-  }
-
-  return false
-}
-
-/** Fetch strips surrounding spaces and tabs before sending, so the stored value matches the wire. */
-const HEADER_WHITESPACE = /^[ \t]+|[ \t]+$/g
-
 const HeaderRecord = Schema.Record(Schema.String, Schema.String)
 
 /**
  * Parses `FACTORY_CONTEXT_HEADERS` under its documented contract: one JSON
- * object with string values, no reserved or case-insensitively duplicated
- * names, and no value an HTTP header cannot carry. Errors name the variable
- * and the offending header name, never a configured value.
+ * object with string values, validated by the Context module that owns the
+ * wire rules. Errors name the variable and the failure class, never an
+ * offending header name or a configured value.
  */
+const contextHeaderProblemText = (problem: ContextHeaderProblem): string => {
+  if (problem.reason === "invalid-shape") return "must be a JSON object of string values"
+
+  if (problem.reason === "invalid-name") return "has an invalid header name"
+
+  if (problem.reason === "reserved-name") return "may not set a transport-owned header"
+
+  if (problem.reason === "duplicate-name") return "sets the same header twice"
+
+  return "has a value HTTP cannot carry"
+}
+
 const parseContextHeaders = (
   raw: string | undefined,
 ): Readonly<Record<string, string>> | undefined => {
@@ -157,25 +134,11 @@ const parseContextHeaders = (
     throw invalid("must be a JSON object of string values")
   }
 
-  const seen = new Set<string>()
+  const validation = validateContextHeaders(headers, { reserved: "reject" })
 
-  for (const [name, value] of Object.entries(headers)) {
-    const lower = name.toLowerCase()
+  if (!validation.ok) throw invalid(contextHeaderProblemText(validation.problem))
 
-    if (!HEADER_NAME.test(name)) throw invalid("has an invalid header name")
-
-    if (RESERVED_HEADERS.includes(lower)) throw invalid("may not set " + lower)
-
-    if (seen.has(lower)) throw invalid("sets " + lower + " twice")
-
-    if (hasForbiddenHeaderValueCharacter(value)) throw invalid("has an invalid value for " + name)
-
-    seen.add(lower)
-  }
-
-  return Object.fromEntries(
-    Object.entries(headers).map(([name, value]) => [name, value.replace(HEADER_WHITESPACE, "")]),
-  )
+  return validation.headers
 }
 
 /** Port the `droid daemon` websocket listener binds when a URL names none. */

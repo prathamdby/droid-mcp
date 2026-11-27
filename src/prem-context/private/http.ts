@@ -48,13 +48,12 @@ export type FetchLike = (
 ) => Promise<Response>
 
 export interface ContextTransport {
-  /** Normalized static header values that operations must never publish. */
-  readonly staticSensitiveValues: ReadonlyArray<string>
-  /** Static header values plus the credential used for this installation. */
-  readonly secretValues: () => Effect.Effect<ReadonlyArray<string>>
+  /** Static header values disclosure must never publish. */
+  readonly staticSecretValues: () => Effect.Effect<ReadonlyArray<string>>
   readonly send: (
     request: ContextHttpRequest,
     maxBytes: number,
+    protect?: (values: ReadonlyArray<string>) => Effect.Effect<void>,
   ) => Effect.Effect<Received, SendFailure>
 }
 
@@ -62,38 +61,6 @@ export interface ContextTransport {
 export const RESPONSE_MAX_BYTES = 32 * 1024 * 1024
 
 export const DEFAULT_TIMEOUT_MS = 30_000
-
-/** Fetch strips surrounding spaces and tabs before sending, so the stored value matches the wire. */
-const HEADER_WHITESPACE = /^[ \t]+|[ \t]+$/g
-
-/** Headers this transport owns or that would break routing, authentication or framing. */
-const RESERVED_HEADERS = new Set([
-  "accept",
-  "authorization",
-  "cookie",
-  "host",
-  "proxy-authorization",
-  "connection",
-  "content-length",
-  "content-type",
-  "transfer-encoding",
-  "te",
-  "upgrade",
-  "keep-alive",
-  "expect",
-  "trailer",
-])
-
-/** Replaces every occurrence of a non-empty secret. Longer secrets first, so one containing a shorter is replaced whole. */
-export const scrubText = (text: string, secrets: ReadonlyArray<string>, marker: string): string => {
-  let result = text
-
-  for (const secret of [...secrets].sort((left, right) => right.length - left.length)) {
-    if (secret.length > 0) result = result.split(secret).join(marker)
-  }
-
-  return result
-}
 
 /** The default fetch implementation; tests inject a recording one. */
 export const defaultFetch: FetchLike = (input, init) =>
@@ -174,34 +141,27 @@ interface RequestHeaders {
   [name: string]: string
 }
 
+/**
+ * Bearer credentials cannot carry surrounding HTTP whitespace as credential
+ * text. Fetch also strips trailing CR and LF before writing a header value,
+ * so the normalized credential must follow the same wire rule exactly.
+ */
+const BEARER_WHITESPACE = /^[ \t]+|[ \t\r\n]+$/g
+
 /** Builds the transport for one validated origin; the origin is fixed at construction. */
 export const openTransport = (origin: string, options: TransportOptions): ContextTransport => {
   const staticHeaders: Record<string, string> = {}
 
   for (const [name, value] of Object.entries(options.headers ?? {})) {
-    if (!RESERVED_HEADERS.has(name.toLowerCase())) {
-      staticHeaders[name] = value.replace(HEADER_WHITESPACE, "")
-    }
+    staticHeaders[name] = value
   }
 
   const staticSensitiveValues = Object.values(staticHeaders).filter((value) => value.length > 0)
 
   return {
-    staticSensitiveValues,
+    staticSecretValues: () => Effect.succeed([...staticSensitiveValues]),
 
-    secretValues: () =>
-      Effect.map(
-        options.token === undefined ? Effect.succeed(undefined) : options.token(),
-        (token) => {
-          const values = [...staticSensitiveValues]
-
-          if (token !== undefined && token.length > 0) values.push(token)
-
-          return values
-        },
-      ),
-
-    send: (request, maxBytes) =>
+    send: (request, maxBytes, protect) =>
       Effect.gen(function* () {
         const url = urlFor(origin, request.path, request.query)
 
@@ -211,10 +171,15 @@ export const openTransport = (origin: string, options: TransportOptions): Contex
         }
 
         const token = options.token === undefined ? undefined : yield* options.token()
+        const bearer = token?.replace(BEARER_WHITESPACE, "")
 
         const headers: RequestHeaders = { ...staticHeaders, accept: "application/json" }
 
-        if (token !== undefined && token.length > 0) headers.authorization = "Bearer " + token
+        if (bearer !== undefined && bearer.length > 0) {
+          headers.authorization = "Bearer " + bearer
+
+          if (protect !== undefined) yield* protect([bearer])
+        }
 
         let body: string | Uint8Array | undefined
 
@@ -303,7 +268,13 @@ export const conflictFieldsOf = (json: Schema.Json | undefined): ConflictFields 
 
 const DETAIL_MAX_LENGTH = 500
 
-/** The human-readable detail of an upstream error body, capped for a failure message. */
+/**
+ * The human-readable detail of an upstream error body, bounded for a failure
+ * message. The detail crosses byte-for-byte once accepted: JavaScript trims
+ * Latin-1 nonbreaking spaces that HTTP preserved, and even that small rewrite
+ * can turn a protected value into an unmatched fragment. Oversized detail is
+ * omitted whole for the same reason.
+ */
 const ErrorDetailFields = Schema.Struct({ detail: Schema.optional(Schema.String) })
 
 export const errorDetailOf = (json: Schema.Json | undefined): string | undefined => {
@@ -314,9 +285,5 @@ export const errorDetailOf = (json: Schema.Json | undefined): string | undefined
 
   if (detail === undefined || detail.trim().length === 0) return undefined
 
-  const trimmed = detail.trim()
-
-  return trimmed.length <= DETAIL_MAX_LENGTH
-    ? trimmed
-    : trimmed.slice(0, DETAIL_MAX_LENGTH - 1) + "…"
+  return detail.length <= DETAIL_MAX_LENGTH ? detail : undefined
 }

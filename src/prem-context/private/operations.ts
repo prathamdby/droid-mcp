@@ -29,9 +29,10 @@ import type {
   JsonSchemaObject,
   OperationAnnotations,
   OperationFailure,
+  ProtectValues,
   ReplayPolicy,
 } from "../../capabilities/index.ts"
-import { ReleasePayload } from "../../disclosure/index.ts"
+import { ReleasePayload, type JsonProtection } from "../../disclosure/index.ts"
 import {
   conflictFieldsOf,
   decodeReplyJson,
@@ -39,7 +40,6 @@ import {
   errorDetailOf,
   openTransport,
   RESPONSE_MAX_BYTES,
-  scrubText,
 } from "./http.ts"
 import type { ContextHttpRequest, ContextTransport, FetchLike, SendFailure } from "./http.ts"
 import {
@@ -159,15 +159,9 @@ const sendFailure = (operation: string, failure: SendFailure): Failure => {
 }
 
 /** Maps a non-2xx status onto the operation failure vocabulary, preserving conflicts. */
-const statusFailure = (
-  operation: string,
-  status: number,
-  bytes: Uint8Array,
-  secrets: ReadonlyArray<string>,
-): Failure => {
+const statusFailure = (operation: string, status: number, bytes: Uint8Array): Failure => {
   const json = decodeReplyJson(bytes)
-  const rawDetail = errorDetailOf(json)
-  const detail = rawDetail === undefined ? undefined : scrubText(rawDetail, secrets, "[REDACTED]")
+  const detail = errorDetailOf(json)
   const suffix = detail === undefined ? "" : ": " + detail
 
   if (status === 409) {
@@ -239,16 +233,12 @@ const exchange = (
   request: Omit<ContextHttpRequest, "operation">,
   maxBytes: number,
 ): Effect.Effect<{ readonly status: number; readonly bytes: Uint8Array }, Failure> =>
-  transport.secretValues().pipe(
-    Effect.flatMap((secrets) =>
-      transport.send({ operation, ...request }, maxBytes).pipe(
-        Effect.mapError((failure) => sendFailure(operation, failure)),
-        Effect.flatMap((received) =>
-          received.status >= 200 && received.status < 300
-            ? Effect.succeed(received)
-            : Effect.fail(statusFailure(operation, received.status, received.bytes, secrets)),
-        ),
-      ),
+  transport.send({ operation, ...request }, maxBytes).pipe(
+    Effect.mapError((failure) => sendFailure(operation, failure)),
+    Effect.flatMap((received) =>
+      received.status >= 200 && received.status < 300
+        ? Effect.succeed(received)
+        : Effect.fail(statusFailure(operation, received.status, received.bytes)),
     ),
   )
 
@@ -344,6 +334,107 @@ const writeDemand = (): Demand => ({ effect: "write" })
 const READ: EffectKind = "read"
 const WRITE: EffectKind = "write"
 
+// ---------------------------------------------------------------------------
+// Reply field sensitivity
+// ---------------------------------------------------------------------------
+
+const protection = (
+  fixedKeys: ReadonlyArray<string>,
+  atomicKeys: ReadonlyArray<string> = [],
+  members?: { readonly [key: string]: JsonProtection },
+): JsonProtection => {
+  const base: JsonProtection = { fixedKeys, atomicKeys }
+
+  return members === undefined ? base : { ...base, members }
+}
+
+const pageProtection = (item: JsonProtection): JsonProtection => ({
+  fixedKeys: ["items", "nextCursor"],
+  atomicKeys: ["nextCursor"],
+  members: { items: { fixedKeys: [], atomicKeys: [], item } },
+})
+
+const ATTRIBUTION_FIXED_KEYS = [
+  "createdByPrincipalKind",
+  "createdByPrincipalId",
+  "updatedByPrincipalKind",
+  "updatedByPrincipalId",
+  "createdAt",
+  "updatedAt",
+] as const
+
+const SPACE_PROTECTION = protection(
+  ["id", "name", "accessScope", ...ATTRIBUTION_FIXED_KEYS],
+  ["id"],
+)
+
+const SPACE_PAGE_PROTECTION = pageProtection(SPACE_PROTECTION)
+
+const FILE_FIXED_KEYS = [
+  "fileId",
+  "contentType",
+  "sizeBytes",
+  "sha256",
+  "partSizeBytes",
+  "partCount",
+] as const
+
+const FILE_PROTECTION = protection(FILE_FIXED_KEYS, ["fileId"])
+
+const METADATA_FIXED_KEYS = [
+  "id",
+  "spaceId",
+  "path",
+  "version",
+  "retiredAt",
+  ...ATTRIBUTION_FIXED_KEYS,
+  "file",
+] as const
+
+const METADATA_ATOMIC_KEYS = ["id", "spaceId", "path", "version"] as const
+
+const METADATA_PROTECTION = protection(METADATA_FIXED_KEYS, METADATA_ATOMIC_KEYS, {
+  file: FILE_PROTECTION,
+})
+
+const METADATA_PAGE_PROTECTION = pageProtection(METADATA_PROTECTION)
+
+const DOCUMENT_PROTECTION = protection(
+  [...METADATA_FIXED_KEYS, "body"],
+  METADATA_ATOMIC_KEYS,
+  METADATA_PROTECTION.members,
+)
+
+const UPLOAD_PROTECTION = protection(
+  ["fileId", "partSizeBytes", "partCount", "expiresAt"],
+  ["fileId"],
+)
+
+const SESSION_PROTECTION = protection(
+  [
+    "sessionId",
+    "spaceId",
+    "parentSessionId",
+    "ownerKind",
+    "ownerId",
+    "lastSequence",
+    "createdAt",
+    "updatedAt",
+  ],
+  ["sessionId", "spaceId", "parentSessionId", "lastSequence"],
+)
+
+const SESSION_PAGE_PROTECTION = pageProtection(SESSION_PROTECTION)
+
+const APPEND_PROTECTION = protection(
+  ["lastSequence", "acceptedThroughSequence", "appendedRecords"],
+  ["lastSequence", "acceptedThroughSequence"],
+)
+
+const RECEIPT_PROTECTION = protection(["ok", "partIndex", "sizeBytes"])
+
+const OK_PROTECTION = protection(["ok"])
+
 /** Discovery schema placeholder; the typed codec is authoritative. */
 const schemaOf = (properties: { readonly [key: string]: Schema.Json }): JsonSchemaObject => ({
   type: "object",
@@ -381,10 +472,11 @@ interface OperationParts<I, O> {
   readonly annotations: OperationAnnotations
   readonly effect: EffectKind
   readonly replay: ReplayPolicy
+  readonly protection?: JsonProtection
   readonly decode: (input: Schema.Json) => Effect.Effect<I, InvalidInput>
   readonly target: (input: I) => TargetRef
   readonly demand: (input: I) => Demand
-  readonly perform: (input: I) => Effect.Effect<O, Failure>
+  readonly perform: (input: I, transport: ContextTransport) => Effect.Effect<O, Failure>
   readonly classify: (input: I, output: O) => ReleasePayload
 }
 
@@ -403,11 +495,16 @@ export type BindOperation = (capabilities: CapabilitiesApi) => BoundOperation
 
 /** Builds every Context operation binding thunk against one validated installation. */
 export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOperation> => {
-  const transport = openTransport(ctx.origin, {
+  const sharedTransport = openTransport(ctx.origin, {
     fetch: ctx.fetch ?? defaultFetch,
     timeoutMs: ctx.timeoutMs,
     headers: ctx.headers,
     token: ctx.token,
+  })
+
+  const invocationTransport = (protect: ProtectValues): ContextTransport => ({
+    staticSecretValues: sharedTransport.staticSecretValues,
+    send: (request, maxBytes) => sharedTransport.send(request, maxBytes, protect),
   })
 
   const operation = <I, O>(parts: OperationParts<I, O>): Definition<I, O> => ({
@@ -423,11 +520,15 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     decode: parts.decode,
     target: parts.target,
     demand: parts.demand,
-    perform: (_grant, input) => parts.perform(input),
-    classify: (input, output) => ({
-      payload: parts.classify(input, output),
-      sensitiveValues: transport.staticSensitiveValues,
-    }),
+    sensitiveValues: sharedTransport.staticSecretValues,
+    perform: (_grant, input, _who, protect) => parts.perform(input, invocationTransport(protect)),
+    classify: (input, output) => {
+      const payload = parts.classify(input, output)
+
+      return parts.protection === undefined
+        ? { payload }
+        : { payload, jsonProtection: parts.protection }
+    },
   })
 
   /*
@@ -436,6 +537,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
    * redacted into a corrupted payload and never dumped raw.
    */
   const readPartBytes = (
+    transport: ContextTransport,
     operationName: string,
     input: { readonly spaceId: string; readonly fileId: string; readonly partIndex: number },
   ): Effect.Effect<Uint8Array, Failure> =>
@@ -480,6 +582,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: writeAnnotations,
     effect: WRITE,
     replay: "no_retry",
+    protection: SPACE_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({ name: Schema.String, accessScope: AccessScope }),
       "arguments do not match the schema",
@@ -490,7 +593,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: () => SPACES_TARGET,
     demand: writeDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_create_space",
@@ -516,13 +619,14 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: readOnly,
     effect: READ,
     replay: "safe_read",
+    protection: SPACE_PAGE_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({ limit: Schema.optionalKey(Limit), cursor: Schema.optionalKey(Cursor) }),
       "arguments do not match the schema",
     ),
     target: () => SPACES_TARGET,
     demand: readDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_list_spaces",
@@ -549,10 +653,11 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: readOnly,
     effect: READ,
     replay: "safe_read",
+    protection: SPACE_PROTECTION,
     decode: checkedDecode(Schema.Struct({ spaceId: SpaceId }), "arguments do not match the schema"),
     target: (input) => spaceTarget(input.spaceId),
     demand: readDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_get_space",
@@ -588,6 +693,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: writeAnnotations,
     effect: WRITE,
     replay: "no_retry",
+    protection: METADATA_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({
         spaceId: SpaceId,
@@ -600,7 +706,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_create_document",
@@ -636,6 +742,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: readOnly,
     effect: READ,
     replay: "safe_read",
+    protection: METADATA_PAGE_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({
         spaceId: SpaceId,
@@ -647,7 +754,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: readDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_list_documents",
@@ -679,13 +786,14 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: readOnly,
     effect: READ,
     replay: "safe_read",
+    protection: DOCUMENT_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({ spaceId: SpaceId, documentId: DocumentId }),
       "arguments do not match the schema",
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: readDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_get_document",
@@ -710,6 +818,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: readOnly,
     effect: READ,
     replay: "safe_read",
+    protection: DOCUMENT_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({ spaceId: SpaceId, path: DocumentPath }),
       "arguments do not match the schema",
@@ -717,7 +826,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: readDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_get_document_by_path",
@@ -759,6 +868,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: writeAnnotations,
     effect: WRITE,
     replay: "no_retry",
+    protection: DOCUMENT_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({
         spaceId: SpaceId,
@@ -779,7 +889,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
-    perform: (input) => {
+    perform: (input, transport) => {
       const merge = input.merge ?? "auto"
       const body = input.body ?? ""
       const path = documentPath(input.spaceId, input.documentId)
@@ -842,13 +952,14 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: destructive,
     effect: WRITE,
     replay: "no_retry",
+    protection: METADATA_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({ spaceId: SpaceId, documentId: DocumentId, expectedVersion: Version }),
       "arguments do not match the schema",
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_delete_document",
@@ -886,6 +997,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: writeAnnotations,
     effect: WRITE,
     replay: "no_retry",
+    protection: UPLOAD_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({
         spaceId: SpaceId,
@@ -901,7 +1013,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_create_file",
@@ -941,6 +1053,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: writeAnnotations,
     effect: WRITE,
     replay: "no_retry",
+    protection: RECEIPT_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({
         spaceId: SpaceId,
@@ -953,7 +1066,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
-    perform: (input) => {
+    perform: (input, transport) => {
       const content = decodePart(input.contentBase64) ?? new Uint8Array()
 
       return exchange(
@@ -1010,8 +1123,8 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: readDemand,
-    perform: (input) =>
-      Effect.map(readPartBytes("context_read_file_part", input), (bytes) => ({
+    perform: (input, transport) =>
+      Effect.map(readPartBytes(transport, "context_read_file_part", input), (bytes) => ({
         partIndex: input.partIndex,
         bytes,
       })),
@@ -1039,13 +1152,14 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: destructive,
     effect: WRITE,
     replay: "no_retry",
+    protection: OK_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({ spaceId: SpaceId, fileId: FileId }),
       "arguments do not match the schema",
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       exchange(
         transport,
         "context_delete_file",
@@ -1077,6 +1191,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: idempotentWrite,
     effect: WRITE,
     replay: "no_retry",
+    protection: SESSION_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({
         spaceId: SpaceId,
@@ -1087,7 +1202,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_register_session",
@@ -1112,13 +1227,14 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: readOnly,
     effect: READ,
     replay: "safe_read",
+    protection: SESSION_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({ spaceId: SpaceId, sessionId: SessionId }),
       "arguments do not match the schema",
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: readDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_get_session",
@@ -1152,6 +1268,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: readOnly,
     effect: READ,
     replay: "safe_read",
+    protection: SESSION_PAGE_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({
         spaceId: SpaceId,
@@ -1163,7 +1280,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: readDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_list_sessions",
@@ -1203,6 +1320,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     annotations: writeAnnotations,
     effect: WRITE,
     replay: "no_retry",
+    protection: APPEND_PROTECTION,
     decode: checkedDecode(
       Schema.Struct({
         spaceId: SpaceId,
@@ -1219,7 +1337,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     ),
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
-    perform: (input) =>
+    perform: (input, transport) =>
       jsonCall(
         transport,
         "context_append_session",
@@ -1276,7 +1394,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
       ),
       target: (input) => spaceTarget(input.spaceId),
       demand: readDemand,
-      perform: (input) =>
+      perform: (input, transport) =>
         exchange(
           transport,
           "context_read_session_records",

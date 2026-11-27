@@ -23,8 +23,13 @@
  *
  * Failure messages and details pass through the error audience before
  * surfacing, so a secret embedded in a peer rejection or a conflict detail
- * cannot cross the boundary inside an error string. Success output and error
- * output face the same policy.
+ * cannot cross the boundary inside an error string. `perform` receives a
+ * fresh invocation-scoped protection sink for secrets only known once they
+ * are committed to a transport, so rotating credentials cannot race the
+ * release that follows. Conflict continuation values cross unchanged or not
+ * at all, and a release refusal after a non-read `perform` is uncertain
+ * delivery rather than a definite failure. Success output and error output
+ * face the same policy.
  *
  * `annotations`, `effect`, `replay` and `prerequisite` are explicit
  * structural facts supplied by the owner. Nothing here parses a description,
@@ -46,7 +51,7 @@ import { Callers, NotVisible } from "../caller/index.ts"
 import type { Caller, Conversation, TargetRef } from "../caller/index.ts"
 import type { DelegationUnavailable } from "../caller/index.ts"
 import { Disclosure, ReleasePayload } from "../disclosure/index.ts"
-import type { Audience, Released } from "../disclosure/index.ts"
+import type { Audience, JsonProtection, Released } from "../disclosure/index.ts"
 import type { DisclosureRefused, ProtectedBytes } from "../disclosure/index.ts"
 import { Guidance } from "../guidance/index.ts"
 import type { GuidanceRequired, Prerequisite } from "../guidance/index.ts"
@@ -208,6 +213,7 @@ export type ReleaseInput = {
   readonly payload: ReleasePayload
   readonly sensitiveValues?: ReadonlyArray<string>
   readonly sensitiveKeys?: ReadonlyArray<string>
+  readonly jsonProtection?: JsonProtection
 }
 
 // ---------------------------------------------------------------------------
@@ -215,9 +221,21 @@ export type ReleaseInput = {
 // ---------------------------------------------------------------------------
 
 /**
+ * Registers values that became sensitive during one invocation, such as the
+ * exact credential a transport placed on the wire. The binder creates a fresh
+ * collector for every execution and applies it to both outcome release and
+ * failure scrubbing, so credential rotation cannot race disclosure.
+ */
+export type ProtectValues = (values: ReadonlyArray<string>) => Effect.Effect<void>
+
+/**
  * The owner-supplied typed definition of one operation. `evidence` is
  * optional: when omitted, the binder constructs explicit evidence from the
  * authority ceiling plus the demand's own level and permission fields.
+ * `sensitiveValues` supplies installation-scoped secrets independently of
+ * input; the binder applies them to both the client release and the error
+ * audience. Input-dependent secrets still belong to `classify`, while secrets
+ * only known once `perform` reaches a transport belong to `protect`.
  */
 export interface Definition<I, O> {
   readonly facts: OperationFacts
@@ -225,7 +243,13 @@ export interface Definition<I, O> {
   readonly target: (input: I) => TargetRef
   readonly demand: (input: I) => Demand
   readonly evidence?: (who: Invocation, input: I) => Effect.Effect<Evidence, OperationFailure>
-  readonly perform: (grant: Grant, input: I, who: Invocation) => Effect.Effect<O, OperationFailure>
+  readonly sensitiveValues?: () => Effect.Effect<ReadonlyArray<string>>
+  readonly perform: (
+    grant: Grant,
+    input: I,
+    who: Invocation,
+    protect: ProtectValues,
+  ) => Effect.Effect<O, OperationFailure>
   readonly classify: (input: I, output: O) => ReleaseInput
 }
 
@@ -471,18 +495,21 @@ const notVisible = (id: OperationId): NotVisible =>
 // Failure scrubbing through the error audience
 // ---------------------------------------------------------------------------
 
-/** Scrubbed copies of one failure's free-text fields. */
+/** Scrubbed copies of one failure's free-text and conflict-continuation fields. */
 interface ScrubbedText {
   readonly message?: string
   readonly detail?: string
+  readonly currentVersion?: string
+  readonly currentSequence?: string
 }
 
 /**
- * Rebuilds one operation failure with scrubbed text installed. The scrubbed
- * text is authoritative: an absent scrubbed detail means the detail does not
- * cross the boundary, never that the unscrubbed original is restored. Each
- * branch constructs the error through its own tagged constructor, so the
- * rebuild is total and no prototype surgery is involved.
+ * Rebuilds one operation failure with scrubbed fields installed. The scrubbed
+ * record is authoritative: an absent scrubbed detail or conflict field means
+ * the original does not cross the boundary, never that the unscrubbed
+ * original is restored. Each branch constructs the error through its own
+ * tagged constructor, so the rebuild is total and no prototype surgery is
+ * involved.
  */
 const rebuildFailure = (failure: OperationFailure, text: ScrubbedText): OperationFailure =>
   Match.value(failure).pipe(
@@ -518,20 +545,20 @@ const rebuildFailure = (failure: OperationFailure, text: ScrubbedText): Operatio
     Match.when({ _tag: "OperationConflict" }, (variant) => {
       const base = { message: text.message ?? variant.message }
 
-      if (variant.currentVersion !== undefined && variant.currentSequence !== undefined) {
+      if (text.currentVersion !== undefined && text.currentSequence !== undefined) {
         return new OperationConflict({
           ...base,
-          currentVersion: variant.currentVersion,
-          currentSequence: variant.currentSequence,
+          currentVersion: text.currentVersion,
+          currentSequence: text.currentSequence,
         })
       }
 
-      if (variant.currentVersion !== undefined) {
-        return new OperationConflict({ ...base, currentVersion: variant.currentVersion })
+      if (text.currentVersion !== undefined) {
+        return new OperationConflict({ ...base, currentVersion: text.currentVersion })
       }
 
-      if (variant.currentSequence !== undefined) {
-        return new OperationConflict({ ...base, currentSequence: variant.currentSequence })
+      if (text.currentSequence !== undefined) {
+        return new OperationConflict({ ...base, currentSequence: text.currentSequence })
       }
 
       return new OperationConflict(base)
@@ -559,16 +586,19 @@ const rebuildFailure = (failure: OperationFailure, text: ScrubbedText): Operatio
     Match.exhaustive,
   )
 
-interface ErrorTextFields {
+interface ErrorFields {
   readonly message: string
   readonly detail?: string
+  readonly currentVersion?: string
+  readonly currentSequence?: string
 }
 
 /**
- * Extracts the free-text fields of one failure. Every variant carries a
- * `message`; only some carry a `detail`, so extraction is a total match.
+ * Extracts the fields of one failure that cross the error audience. Every
+ * variant carries a `message`; some carry a `detail`, and a conflict carries
+ * continuation values a client may reuse exactly.
  */
-const errorTextOf = (failure: OperationFailure): ErrorTextFields =>
+const errorFieldsOf = (failure: OperationFailure): ErrorFields =>
   Match.value(failure).pipe(
     Match.when({ _tag: "InvalidInput" }, (variant) =>
       variant.detail !== undefined
@@ -590,6 +620,25 @@ const errorTextOf = (failure: OperationFailure): ErrorTextFields =>
         ? { message: variant.message, detail: variant.detail }
         : { message: variant.message },
     ),
+    Match.when({ _tag: "OperationConflict" }, (variant) => {
+      if (variant.currentVersion !== undefined && variant.currentSequence !== undefined) {
+        return {
+          message: variant.message,
+          currentVersion: variant.currentVersion,
+          currentSequence: variant.currentSequence,
+        }
+      }
+
+      if (variant.currentVersion !== undefined) {
+        return { message: variant.message, currentVersion: variant.currentVersion }
+      }
+
+      if (variant.currentSequence !== undefined) {
+        return { message: variant.message, currentSequence: variant.currentSequence }
+      }
+
+      return { message: variant.message }
+    }),
     Match.orElse((variant) => ({ message: variant.message })),
   )
 
@@ -597,6 +646,8 @@ const errorTextOf = (failure: OperationFailure): ErrorTextFields =>
 const ScrubbedErrorText = Schema.Struct({
   message: Schema.optional(Schema.String),
   detail: Schema.optional(Schema.String),
+  currentVersion: Schema.optional(Schema.String),
+  currentSequence: Schema.optional(Schema.String),
 })
 
 interface ErrorAudienceAccess {
@@ -610,25 +661,46 @@ interface ErrorAudienceAccess {
 /**
  * The free-text fields of a failure are released to the error audience and
  * the released copies are read back through a schema, so the surfaced error
- * carries exactly what the error sink would receive. A refused or malformed
- * release swaps in an opaque message rather than leaking the original text.
+ * carries exactly what the error sink would receive. Conflict continuation
+ * values cross unchanged or not at all: a refused or malformed release swaps
+ * in an opaque message and strips them rather than leaking or corrupting one.
  */
+const ERROR_JSON_PROTECTION: JsonProtection = {
+  fixedKeys: ["message", "detail", "currentVersion", "currentSequence"],
+  atomicKeys: ["currentVersion", "currentSequence"],
+}
+
 const scrubFailureText = (
   access: ErrorAudienceAccess,
   who: Invocation,
   failure: OperationFailure,
+  sensitiveValues: ReadonlyArray<string>,
 ): Effect.Effect<OperationFailure, never> =>
   Effect.gen(function* () {
-    const fields = errorTextOf(failure)
+    const fields = errorFieldsOf(failure)
     const audience = yield* access.audience("error", String(who.caller.id))
 
-    const record: Schema.Json =
-      fields.detail !== undefined
-        ? { message: fields.message, detail: fields.detail }
-        : { message: fields.message }
+    const entries: Array<readonly [string, string]> = [["message", fields.message]]
+
+    if (fields.detail !== undefined) entries.push(["detail", fields.detail])
+
+    if (fields.currentVersion !== undefined) entries.push(["currentVersion", fields.currentVersion])
+
+    if (fields.currentSequence !== undefined) {
+      entries.push(["currentSequence", fields.currentSequence])
+    }
+
+    const record = Object.fromEntries(entries)
 
     const outcome = yield* Effect.match(
-      access.release({ payload: ReleasePayload.JsonValue({ value: record }) }, audience),
+      access.release(
+        {
+          payload: ReleasePayload.JsonValue({ value: record }),
+          sensitiveValues,
+          jsonProtection: ERROR_JSON_PROTECTION,
+        },
+        audience,
+      ),
       {
         onFailure: () => ({ ok: false as const }),
         onSuccess: (released) => ({ ok: true as const, payload: released.payload }),
@@ -636,7 +708,7 @@ const scrubFailureText = (
     )
 
     if (!outcome.ok) {
-      return rebuildFailure(failure, { message: "operation failure", detail: undefined })
+      return rebuildFailure(failure, { message: "operation failure" })
     }
 
     const json = ReleasePayload.$match(outcome.payload, {
@@ -652,8 +724,7 @@ const scrubFailureText = (
 
     return Option.match(decoded, {
       onNone: () => rebuildFailure(failure, { message: "operation failure" }),
-      onSome: (scrubbed) =>
-        rebuildFailure(failure, { message: scrubbed.message, detail: scrubbed.detail }),
+      onSome: (scrubbed) => rebuildFailure(failure, scrubbed),
     })
   })
 
@@ -678,7 +749,11 @@ interface GateServices {
     demand: Demand,
     evidence: Evidence,
   ) => Effect.Effect<Grant, DeniedFailure | AuthorityUnverifiableFailure>
-  readonly scrub: (who: Invocation, failure: OperationFailure) => Effect.Effect<OperationFailure>
+  readonly scrub: (
+    who: Invocation,
+    failure: OperationFailure,
+    sensitiveValues: ReadonlyArray<string>,
+  ) => Effect.Effect<OperationFailure>
   readonly release: (
     who: Invocation,
     input: ReleaseInput,
@@ -801,7 +876,8 @@ export const capabilitiesLayer: Layer.Layer<
       decide: (caller, target, demand, evidence) =>
         authority.decide(caller, target, demand, evidence).pipe(Effect.mapError(translateDecision)),
 
-      scrub: (who, failure) => scrubFailureText(errorAccess, who, failure),
+      scrub: (who, failure, sensitiveValues) =>
+        scrubFailureText(errorAccess, who, failure, sensitiveValues),
 
       release: (who, input) =>
         Effect.flatMap(disclosure.audience("client", String(who.caller.id)), (audience) =>
@@ -841,8 +917,20 @@ export const capabilitiesLayer: Layer.Layer<
        * information is never discarded and re-asserted: each step consumes
        * exactly what the previous step produced.
        */
+      const installationSensitiveValues = (): Effect.Effect<ReadonlyArray<string>> =>
+        definition.sensitiveValues === undefined ? Effect.succeed([]) : definition.sensitiveValues()
+
       const execute: ErasedExecution = (who, input) =>
         Effect.gen(function* () {
+          const performedSensitiveValues = new Set<string>()
+
+          const protectValues: ProtectValues = (values) =>
+            Effect.sync(() => {
+              for (const value of values) {
+                if (value.length > 0) performedSensitiveValues.add(value)
+              }
+            })
+
           /*
            * Every owner-authored failure — decode, evidence and perform
            * alike — crosses the error audience before it surfaces, so a
@@ -854,7 +942,12 @@ export const capabilitiesLayer: Layer.Layer<
           ): Effect.Effect<A, OperationFailure> =>
             Effect.matchEffect(program, {
               onFailure: (failure) =>
-                Effect.flatMap(gates.scrub(who, failure), (clean) => Effect.fail(clean)),
+                Effect.flatMap(installationSensitiveValues(), (sensitiveValues) =>
+                  Effect.flatMap(
+                    gates.scrub(who, failure, [...sensitiveValues, ...performedSensitiveValues]),
+                    (clean) => Effect.fail(clean),
+                  ),
+                ),
               onSuccess: (value) => Effect.succeed(value),
             })
 
@@ -878,12 +971,36 @@ export const capabilitiesLayer: Layer.Layer<
           const evidence = yield* scrubbed(evidenceFor(who, decoded, demand))
           const grant = yield* gates.decide(who.caller, target, demand, evidence)
 
-          const output = yield* scrubbed(definition.perform(grant, decoded, who))
+          const output = yield* scrubbed(definition.perform(grant, decoded, who, protectValues))
 
           // Classification and release for the client audience. The output
           // crosses no boundary until disclosure approves it; an empty
-          // payload stays `Empty` and a JSON null stays `null`.
-          return yield* gates.release(who, definition.classify(decoded, output))
+          // payload stays `Empty` and a JSON null stays `null`. Once a
+          // non-read perform has returned, a release refusal cannot be
+          // reported as a definite failure: the effect may already have
+          // reached the peer.
+          const classified = definition.classify(decoded, output)
+          const installationValues = yield* installationSensitiveValues()
+
+          return yield* gates
+            .release(who, {
+              ...classified,
+              sensitiveValues: [
+                ...installationValues,
+                ...performedSensitiveValues,
+                ...(classified.sensitiveValues ?? []),
+              ],
+            })
+            .pipe(
+              Effect.mapError((failure) =>
+                definition.facts.effect === "read"
+                  ? failure
+                  : new DeliveryUncertain({
+                      message:
+                        "the operation may have been applied, but its reply could not be disclosed safely",
+                    }),
+              ),
+            )
         })
 
       const body: BoundBody = {

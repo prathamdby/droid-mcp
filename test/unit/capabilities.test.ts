@@ -14,6 +14,7 @@ import {
   Capabilities,
   capabilitiesLayer,
   type Definition,
+  DeliveryUncertain,
   DeniedFailure,
   DuplicateIdentity,
   InvalidEntry,
@@ -730,6 +731,98 @@ describe("disclosure integration", () => {
     }
   })
 
+  it("definition-scoped sensitive values are scrubbed from the success payload", () => {
+    const services = makeServices()
+
+    const echo: Definition<WriteInput, WriteOutput> = {
+      ...writeDefinition(succeedWrite),
+      sensitiveValues: () => Effect.succeed(["installation-secret"]),
+      perform: (_grant, input) => Effect.succeed({ bytesWritten: input.contents.length }),
+      classify: () => ({
+        payload: ReleasePayload.JsonValue({ value: { echo: "uses installation-secret" } }),
+      }),
+    }
+
+    const bound = services.capabilities.bind(echo)
+    const catalog = Effect.runSync(services.capabilities.assemble([bound]))
+    const who = makeInvocation(services.callers, "operator")
+
+    const exit = runEffect(
+      services.capabilities.invoke(catalog, who, "write_file", { path: "/x", contents: "d" }),
+    )
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+
+    if (Exit.isSuccess(exit)) {
+      const json = releasedJson(exit.value)
+
+      expect(Option.isSome(json)).toBe(true)
+
+      if (Option.isSome(json)) {
+        expect(json.value).toEqual({ echo: "uses [REDACTED]" })
+      }
+    }
+  })
+
+  it("definition-scoped sensitive values are scrubbed through the error audience", () => {
+    const services = makeServices()
+
+    const failing: Definition<WriteInput, WriteOutput> = {
+      ...writeDefinition(() =>
+        Effect.fail(
+          new PeerFailure({
+            code: "PEER_ERR",
+            message: "peer echoed installation-secret",
+          }),
+        ),
+      ),
+      sensitiveValues: () => Effect.succeed(["installation-secret"]),
+    }
+
+    const bound = services.capabilities.bind(failing)
+    const catalog = Effect.runSync(services.capabilities.assemble([bound]))
+    const who = makeInvocation(services.callers, "operator")
+
+    const exit = runEffect(
+      services.capabilities.invoke(catalog, who, "write_file", { path: "/x", contents: "d" }),
+    )
+
+    const error = expectFailure(exit)
+
+    expect(error).toBeInstanceOf(PeerFailure)
+
+    if (error instanceof PeerFailure) {
+      expect(error.message).toBe("peer echoed [REDACTED]")
+    }
+  })
+
+  it("keeps failure member names fixed when a sensitive value overlaps one", () => {
+    const services = makeServices()
+
+    const failing: Definition<WriteInput, WriteOutput> = {
+      ...writeDefinition(() =>
+        Effect.fail(new PeerFailure({ code: "PEER_ERR", message: "the message field survives" })),
+      ),
+      sensitiveValues: () => Effect.succeed(["message"]),
+    }
+
+    const bound = services.capabilities.bind(failing)
+    const catalog = Effect.runSync(services.capabilities.assemble([bound]))
+    const who = makeInvocation(services.callers, "operator")
+
+    const exit = runEffect(
+      services.capabilities.invoke(catalog, who, "write_file", { path: "/x", contents: "d" }),
+    )
+
+    const error = expectFailure(exit)
+
+    expect(error).toBeInstanceOf(PeerFailure)
+
+    if (error instanceof PeerFailure) {
+      expect(error.message).toBe("the [REDACTED] field survives")
+    }
+  })
+
   it("error messages are scrubbed through the error audience before surfacing", () => {
     const services = makeServices({ protectedValues: ["supersecret"] })
     let performed = false
@@ -765,6 +858,97 @@ describe("disclosure integration", () => {
       expect(error.message).not.toContain("supersecret")
       expect(error.message).toContain("[REDACTED]")
       expect(error.detail ?? "").not.toContain("supersecret")
+    }
+  })
+
+  it("a read output refusal remains a definite disclosure refusal", () => {
+    const services = makeServices()
+
+    const colliding: Definition<ReadInput, ReadOutput> = {
+      ...readDefinition(succeedRead("x")),
+      classify: () => ({
+        payload: ReleasePayload.JsonValue({ value: { id: "tenant-7", note: "ok" } }),
+        sensitiveValues: ["tenant-7"],
+        jsonProtection: { fixedKeys: ["id", "note"], atomicKeys: ["id"] },
+      }),
+    }
+
+    const bound = services.capabilities.bind(colliding)
+    const catalog = Effect.runSync(services.capabilities.assemble([bound]))
+    const who = makeInvocation(services.callers, "operator")
+
+    const exit = runEffect(services.capabilities.invoke(catalog, who, "read_file", { path: "/x" }))
+    const error = expectFailure(exit)
+
+    expect(error._tag).toBe("DisclosureRefused")
+    expect(JSON.stringify(error)).not.toContain("tenant-7")
+  })
+
+  it("a post-write output refusal is uncertain delivery, never a definite failure", () => {
+    const services = makeServices()
+    let performed = false
+
+    const colliding: Definition<WriteInput, WriteOutput> = {
+      ...writeDefinition(() => {
+        performed = true
+
+        return Effect.succeed({ bytesWritten: 1 })
+      }),
+      sensitiveValues: () => Effect.succeed(["tenant-7"]),
+      classify: () => ({
+        payload: ReleasePayload.JsonValue({ value: { id: "tenant-7", note: "ok" } }),
+        jsonProtection: { fixedKeys: ["id", "note"], atomicKeys: ["id"] },
+      }),
+    }
+
+    const bound = services.capabilities.bind(colliding)
+    const catalog = Effect.runSync(services.capabilities.assemble([bound]))
+    const who = makeInvocation(services.callers, "operator")
+
+    const exit = runEffect(
+      services.capabilities.invoke(catalog, who, "write_file", { path: "/x", contents: "d" }),
+    )
+
+    const error = expectFailure(exit)
+
+    expect(performed).toBe(true)
+    expect(error).toBeInstanceOf(DeliveryUncertain)
+    expect(JSON.stringify(error)).not.toContain("tenant-7")
+  })
+
+  it("a contaminated conflict continuation is stripped instead of leaked or corrupted", () => {
+    const services = makeServices()
+
+    const conflicting: Definition<WriteInput, WriteOutput> = {
+      ...writeDefinition(() =>
+        Effect.fail(
+          new OperationConflict({
+            message: "write conflicted",
+            currentVersion: "tenant-7",
+            currentSequence: "42",
+          }),
+        ),
+      ),
+      sensitiveValues: () => Effect.succeed(["tenant-7"]),
+    }
+
+    const bound = services.capabilities.bind(conflicting)
+    const catalog = Effect.runSync(services.capabilities.assemble([bound]))
+    const who = makeInvocation(services.callers, "operator")
+
+    const exit = runEffect(
+      services.capabilities.invoke(catalog, who, "write_file", { path: "/x", contents: "d" }),
+    )
+
+    const error = expectFailure(exit)
+
+    expect(error).toBeInstanceOf(OperationConflict)
+
+    if (error instanceof OperationConflict) {
+      expect(error.message).toBe("operation failure")
+      expect(error.currentVersion).toBeUndefined()
+      expect(error.currentSequence).toBeUndefined()
+      expect(JSON.stringify(error)).not.toContain("tenant-7")
     }
   })
 

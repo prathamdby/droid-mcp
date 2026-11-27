@@ -368,6 +368,14 @@ describe("parseCliArgs", () => {
     })
   })
 
+  it("accepts a short Context header value as part of the string-value contract", () => {
+    expect(parseCliArgs([], { FACTORY_CONTEXT_HEADERS: '{"X-Org":"zz7"}' }).contextHeaders).toEqual(
+      {
+        "X-Org": "zz7",
+      },
+    )
+  })
+
   it("keeps empty Context header values empty after trimming", () => {
     expect(parseCliArgs([], { FACTORY_CONTEXT_HEADERS: '{"X-Org":""}' }).contextHeaders).toEqual({
       "X-Org": "",
@@ -410,7 +418,7 @@ describe("parseCliArgs", () => {
     const raw = JSON.stringify({ [name]: "v" })
 
     expect(() => parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })).toThrow(
-      "FACTORY_CONTEXT_HEADERS may not set " + name.toLowerCase(),
+      "FACTORY_CONTEXT_HEADERS may not set a transport-owned header",
     )
   })
 
@@ -445,6 +453,20 @@ describe("parseCliArgs", () => {
       expect(message).toContain("FACTORY_CONTEXT_HEADERS")
       expect(message).not.toContain(secret)
     }
+  })
+
+  it("does not echo a configured value when it collides with an offending header name", () => {
+    const raw = JSON.stringify({ "x-tenant": "cookie", cookie: "other" })
+    let message = ""
+
+    try {
+      parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })
+    } catch (failure) {
+      message = failure instanceof Error ? failure.message : ""
+    }
+
+    expect(message).toContain("FACTORY_CONTEXT_HEADERS")
+    expect(message).not.toContain("cookie")
   })
 
   it("passes workspace roots only when the operator names them", () => {

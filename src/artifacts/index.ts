@@ -14,7 +14,9 @@
  * it gets the same `ArtifactUnavailable` as a missing or expired ref. On
  * every read the retained value is revalidated against the current
  * disclosure policy; a tightened policy re-scrubs the bytes before they are
- * paged, so a retained ref can never bypass it. Pages slice the stored
+ * paged, so a retained ref can never bypass it. Pointer selection re-scopes
+ * disclosure protection to the selected subtree, so later revalidation never
+ * applies the root shape at the wrong position. Pages slice the stored
  * encoded buffer directly, end on UTF-8 character boundaries, and
  * concatenating consecutive pages reproduces the exact original bytes.
  */
@@ -30,14 +32,8 @@ import * as Predicate from "effect/Predicate"
 import * as Schema from "effect/Schema"
 
 import { type Caller, sameCaller } from "../caller/index.ts"
-import {
-  Disclosure,
-  type DisclosureApi,
-  type Released,
-  ReleasePayload,
-  releasedJson,
-} from "../disclosure/index.ts"
-import { pointerGet } from "./private/pointer.ts"
+import { Disclosure, type DisclosureApi, type Released, releasedJson } from "../disclosure/index.ts"
+import { pointerTokens } from "./private/pointer.ts"
 import { type ArtifactStoreApi, openArtifactStore, type StoredEntry } from "./private/store.ts"
 import { cleanEnd, decodeRange, isContinuationByte, pageEnd } from "./private/utf8.ts"
 
@@ -239,12 +235,6 @@ const serializePayload = (released: Released<"client">): Option.Option<string> =
   return Option.none()
 }
 
-/** Rebuilds the `JsonValue` payload after pointer selection. */
-const rewrapJson = (released: Released<"client">, value: Schema.Json): Released<"client"> => ({
-  ...released,
-  payload: ReleasePayload.JsonValue({ value }),
-})
-
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -299,13 +289,12 @@ const resolveEntry = (
     return Effect.succeed(entry)
   })
 
-const selectJson = (
-  json: Schema.Json,
+const parseJsonPointer = (
   pointer: string,
-): Effect.Effect<Schema.Json, SelectionFailed> => {
-  const selected = pointerGet(json, pointer)
+): Effect.Effect<ReadonlyArray<string>, SelectionFailed> => {
+  const path = pointerTokens(pointer)
 
-  if (selected === undefined) {
+  if (path === undefined) {
     return Effect.fail(
       new SelectionFailed({
         message: "select " + JSON.stringify(pointer) + " does not name a part of the value",
@@ -314,8 +303,30 @@ const selectJson = (
     )
   }
 
-  return Effect.succeed(selected)
+  return Effect.succeed(path)
 }
+
+const revalidateReleased = (
+  disclosure: DisclosureApi,
+  ref: string,
+  released: Released<"client">,
+): Effect.Effect<Released<"client">, ArtifactUnavailable> =>
+  Effect.flatMap(
+    Effect.exit(
+      Effect.flatMap(disclosure.audience("client", released.recipientId), (audience) =>
+        disclosure.revalidate(released, audience),
+      ),
+    ),
+    (exit) => {
+      if (Exit.isFailure(exit)) {
+        // Disclosure refused revalidation: the retained bytes must never leak,
+        // and the refusal is indistinguishable from a missing ref.
+        return Effect.fail(unavailable(ref))
+      }
+
+      return Effect.succeed(exit.value)
+    },
+  )
 
 const revalidatedEntry = (
   disclosure: DisclosureApi,
@@ -324,29 +335,61 @@ const revalidatedEntry = (
   { readonly encoded: Uint8Array; readonly totalBytes: number },
   ArtifactUnavailable
 > =>
-  Effect.flatMap(
-    Effect.exit(
-      Effect.flatMap(disclosure.audience("client", entry.value.released.recipientId), (audience) =>
-        disclosure.revalidate(entry.value.released, audience),
-      ),
-    ),
-    (exit) => {
-      if (Exit.isFailure(exit)) {
-        // Disclosure refused revalidation: the retained bytes must never leak,
-        // and the refusal is indistinguishable from a missing ref.
-        return Effect.fail(unavailable(entry.ref))
-      }
+  Effect.map(revalidateReleased(disclosure, entry.ref, entry.value.released), (revalidated) => {
+    const encoded =
+      revalidated.policyRevision === entry.value.revision
+        ? entry.value.encoded
+        : resolveBytes(revalidated).encoded
 
-      const revalidated = exit.value
+    return { encoded, totalBytes: encoded.length }
+  })
 
-      const encoded =
-        revalidated.policyRevision === entry.value.revision
-          ? entry.value.encoded
-          : resolveBytes(revalidated).encoded
+/**
+ * Narrows before revalidating a selected read. Tightening policy must judge
+ * only the subtree being disclosed; an atomic collision in an unread sibling
+ * must not make a safe selection unavailable.
+ */
+const revalidatedSelection = (
+  disclosure: DisclosureApi,
+  entry: Entry,
+  pointer: string,
+): Effect.Effect<
+  { readonly encoded: Uint8Array; readonly totalBytes: number },
+  ArtifactUnavailable | SelectionFailed
+> =>
+  Effect.gen(function* () {
+    const json = releasedJson(entry.value.released)
 
-      return Effect.succeed({ encoded, totalBytes: encoded.length })
-    },
-  )
+    if (Option.isNone(json)) return yield* Effect.fail(unavailable(entry.ref))
+
+    const path = yield* parseJsonPointer(pointer)
+    const narrowed = disclosure.narrowJson(entry.value.released, path)
+
+    if (Option.isNone(narrowed)) {
+      return yield* Effect.fail(
+        new SelectionFailed({
+          message: "select " + JSON.stringify(pointer) + " does not name a part of the value",
+          pointer,
+        }),
+      )
+    }
+
+    const currentRevision = yield* disclosure.policyRevision()
+
+    if (narrowed.value.policyRevision === currentRevision) {
+      // At the stored revision the narrowed bytes are already the visible
+      // view. Rescrubbing them would treat inserted markers as original text
+      // and diverge from the whole artifact's stored bytes.
+      const encoded = resolveBytes(narrowed.value).encoded
+
+      return { encoded, totalBytes: encoded.length }
+    }
+
+    const revalidated = yield* revalidateReleased(disclosure, entry.ref, narrowed.value)
+    const encoded = resolveBytes(revalidated).encoded
+
+    return { encoded, totalBytes: encoded.length }
+  })
 
 export const artifactsLayer = (
   options?: ArtifactsOptions,
@@ -422,21 +465,38 @@ export const artifactsLayer = (
           let selected = value
 
           if (request.select !== undefined && request.select !== "") {
-            const part = yield* Effect.exit(selectJson(json.value, request.select))
+            const path = yield* Effect.exit(parseJsonPointer(request.select))
 
-            if (Exit.isFailure(part)) {
+            if (Exit.isFailure(path)) {
               return yield* Effect.fail(selectionFailure(caller, value, request.select))
             }
 
-            selected = rewrapJson(value, part.value)
+            const narrowed = disclosure.narrowJson(value, path.value)
+
+            if (Option.isNone(narrowed)) {
+              return yield* Effect.fail(selectionFailure(caller, value, request.select))
+            }
+
+            selected = narrowed.value
           }
 
-          const { encoded, bytes } = resolveBytes(selected)
+          const currentRevision = yield* disclosure.policyRevision()
+
+          // `present` is itself a disclosure boundary, not only a selector:
+          // a policy tightened since the original release must be enforced
+          // before either inline delivery or retention. At the unchanged
+          // revision the stored view is already the safe view.
+          const deliverable =
+            selected.policyRevision === currentRevision
+              ? selected
+              : yield* revalidateReleased(disclosure, "unretained", selected)
+
+          const { encoded, bytes } = resolveBytes(deliverable)
           const budget = clampInlineBudget(request.maxBytes)
 
-          if (bytes <= budget) return Delivery.Inline({ value: selected, bytes })
+          if (bytes <= budget) return Delivery.Inline({ value: deliverable, bytes })
 
-          const ref = retain(caller, selected, encoded)
+          const ref = retain(caller, deliverable, encoded)
 
           if (Option.isNone(ref)) {
             const limit = store.retentionByteLimit
@@ -463,26 +523,20 @@ export const artifactsLayer = (
       const read: ArtifactsApi["read"] = (caller, ref, range) =>
         Effect.gen(function* () {
           const entry = yield* resolveEntry(store, caller, ref, ttlMs)
-          const { encoded, totalBytes } = yield* revalidatedEntry(disclosure, entry)
+          const useSelection = range.select !== undefined && range.select !== ""
 
-          if (range.select !== undefined && range.select !== "") {
-            // Pointer selection within the stored document: decode the
-            // revalidated bytes once, then page the selected part's own
-            // exact encoding from the requested offset. Ownership and the
-            // current disclosure policy were both enforced above; the
-            // selected part is paged under the same bounds and character
-            // checks as the whole document.
-            const decoded = Schema.decodeUnknownOption(Schema.Json)(
-              JSON.parse(decodeRange(encoded, 0, encoded.length)),
-            )
+          const { encoded, totalBytes } = useSelection
+            ? yield* revalidatedSelection(disclosure, entry, range.select ?? "")
+            : yield* revalidatedEntry(disclosure, entry)
 
-            if (Option.isNone(decoded)) {
-              return yield* Effect.fail(unavailable(ref))
-            }
-
-            const selected = yield* selectJson(decoded.value, range.select)
-            const selectedBytes = encode(serializeJson(selected))
-            const selectedTotal = selectedBytes.length
+          if (useSelection) {
+            // The narrowed release is encoded under the current policy —
+            // either because it already stored that exact view or because it
+            // was revalidated above — so this selected part is paged under
+            // the same bounds and character checks as the whole document
+            // without revalidating unread siblings.
+            const selectedBytes = encoded
+            const selectedTotal = totalBytes
             const offset = range.offset ?? 0
 
             if (offset < 0 || offset > selectedTotal) {
@@ -586,9 +640,19 @@ export const artifactsLayer = (
 
           if (pointer === "") return value
 
-          const selected = yield* selectJson(json.value, pointer)
+          const path = yield* parseJsonPointer(pointer)
+          const narrowed = disclosure.narrowJson(value, path)
 
-          return rewrapJson(value, selected)
+          if (Option.isNone(narrowed)) {
+            return yield* Effect.fail(
+              new SelectionFailed({
+                message: "select " + JSON.stringify(pointer) + " does not name a part of the value",
+                pointer,
+              }),
+            )
+          }
+
+          return narrowed.value
         })
 
       return { present, read, part }

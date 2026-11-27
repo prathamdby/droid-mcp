@@ -13,6 +13,7 @@ import { Callers, callersLayer, trustedEvidence } from "../../src/caller/index.t
 import type { CallersApi } from "../../src/caller/index.ts"
 import { Capabilities, capabilitiesLayer, OperationConflict } from "../../src/capabilities/index.ts"
 import type { Catalog, Invocation, InvocationFailure } from "../../src/capabilities/index.ts"
+import { ContextHeadersInvalid } from "../../src/context-headers/index.ts"
 import { custodyLayer } from "../../src/custody/index.ts"
 import {
   Disclosure,
@@ -173,13 +174,14 @@ const makeHarness = async (
   options?: Parameters<typeof makeServices>[0] & {
     readonly timeoutMs?: number
     readonly headers?: Readonly<Record<string, string>>
+    readonly token?: () => Effect.Effect<string | undefined>
   },
 ): Promise<Harness> => {
   const services = makeServices(options)
 
   const installation = {
     origin: api.baseUrl,
-    token: () => Effect.succeed<string | undefined>(TOKEN),
+    token: options?.token ?? (() => Effect.succeed<string | undefined>(TOKEN)),
     headers: options?.headers ?? { "x-factory-organization": " \t" + TENANT + "\t " },
     timeoutMs: options?.timeoutMs,
   }
@@ -210,6 +212,10 @@ const Created = Schema.Struct({ id: Schema.String, version: Schema.String })
 const SpacePage = Schema.Struct({
   items: Schema.Array(Schema.Struct({ id: Schema.String })),
   nextCursor: Schema.optional(Schema.String),
+})
+
+const SpaceTimingPage = Schema.Struct({
+  items: Schema.Array(Schema.Struct({ createdAt: Schema.String })),
 })
 
 const NamedSpace = Schema.Struct({ id: Schema.String, name: Schema.String })
@@ -283,6 +289,66 @@ describe("prem-context", () => {
         const exit = await Effect.runPromiseExit(services.contextOperations.entries({ origin }))
 
         expect(expectFailure(exit)).toBeInstanceOf(ContextOriginMissing)
+      }
+    })
+
+    it("rejects invalid static header names, values and duplicates without echoing values", async () => {
+      const services = makeServices()
+      const secret = "tenant-secret-canary"
+
+      const invalidHeaders: ReadonlyArray<Readonly<Record<string, string>>> = [
+        { "bad name": secret },
+        { "x-tenant": secret + "\r\nX-Evil: 1" },
+        { "X-Tenant": secret, "x-tenant": secret },
+        Object.fromEntries([["__proto__", secret]]),
+      ]
+
+      for (const headers of invalidHeaders) {
+        const exit = await Effect.runPromiseExit(
+          services.contextOperations.entries({ origin: api.baseUrl, headers }),
+        )
+
+        const error = expectFailure(exit)
+
+        expect(error).toBeInstanceOf(ContextHeadersInvalid)
+        expect(JSON.stringify(error)).not.toContain(secret)
+      }
+    })
+
+    it("rejects a non-string direct embedding header value as a typed validation failure", async () => {
+      const services = makeServices()
+      // JSON.parse is the runtime embedding boundary here: its untyped result
+      // deliberately carries a non-string value into validation.
+      const headers = JSON.parse('{"x-tenant":42}')
+
+      const exit = await Effect.runPromiseExit(
+        services.contextOperations.entries({ origin: api.baseUrl, headers }),
+      )
+
+      const error = expectFailure(exit)
+
+      expect(error).toBeInstanceOf(ContextHeadersInvalid)
+
+      if (error instanceof ContextHeadersInvalid) {
+        expect(error.reason).toBe("invalid-value")
+      }
+    })
+
+    it("rejects direct embedding header input that is not a record", async () => {
+      const services = makeServices()
+
+      for (const headers of [JSON.parse('"tenant"'), JSON.parse('["tenant"]')]) {
+        const exit = await Effect.runPromiseExit(
+          services.contextOperations.entries({ origin: api.baseUrl, headers }),
+        )
+
+        const error = expectFailure(exit)
+
+        expect(error).toBeInstanceOf(ContextHeadersInvalid)
+
+        if (error instanceof ContextHeadersInvalid) {
+          expect(error.reason).toBe("invalid-shape")
+        }
       }
     })
 
@@ -374,10 +440,238 @@ describe("prem-context", () => {
       expect(read).toMatchObject({ id: second, name: "two" })
     })
 
+    it("preserves protocol member names when a header value overlaps one", async () => {
+      const harness = await makeHarness(api, {
+        headers: { "x-factory-organization": "createdAt" },
+      })
+
+      await createSpace(harness, "structural")
+
+      const page = decode(SpaceTimingPage, await invokeJson(harness, "context_list_spaces", {}))
+
+      expect(page.items.length).toBeGreaterThan(0)
+    })
+
+    it("carries a short header value without corrupting the protocol shape", async () => {
+      const harness = await makeHarness(api, {
+        headers: { "x-factory-organization": "t" },
+      })
+
+      await createSpace(harness, "one")
+
+      const page = decode(SpaceTimingPage, await invokeJson(harness, "context_list_spaces", {}))
+
+      const request = api.requests.find(
+        (recordedRequest) => recordedRequest.route === "POST /api/context/spaces",
+      )
+
+      expect(page.items.length).toBeGreaterThan(0)
+      expect(request?.headers["x-factory-organization"]).toBe("t")
+    })
+
+    it("scrubs extension member names while preserving fixed protocol members", async () => {
+      const extensionKey = "extension-" + TENANT
+
+      api.route("GET /api/context/spaces", () => ({
+        json: {
+          items: [
+            {
+              id: contextUuid(810),
+              name: "extension",
+              accessScope: "organization",
+              createdByPrincipalKind: "user",
+              createdByPrincipalId: "principal",
+              updatedByPrincipalKind: "user",
+              updatedByPrincipalId: "principal",
+              createdAt: "2026-11-27T00:00:00.000Z",
+              updatedAt: "2026-11-27T00:00:00.000Z",
+              [extensionKey]: "visible",
+            },
+          ],
+        },
+      }))
+
+      const harness = await makeHarness(api)
+
+      const page = Schema.decodeUnknownSync(Schema.Struct({ items: Schema.Array(Schema.Unknown) }))(
+        await invokeJson(harness, "context_list_spaces", {}),
+      )
+
+      const item = page.items[0]
+
+      expect(item).toMatchObject({ id: contextUuid(810), createdAt: "2026-11-27T00:00:00.000Z" })
+      expect(item).not.toHaveProperty(extensionKey)
+      expect(JSON.stringify(item)).not.toContain(TENANT)
+      expect(JSON.stringify(item)).toContain("[REDACTED]")
+    })
+
+    it("refuses a reply when a header value occupies an atomic identifier", async () => {
+      api.route("GET /api/context/spaces", () => ({
+        json: {
+          items: [
+            {
+              id: "space-" + TENANT,
+              name: "atomic",
+              accessScope: "organization",
+              createdByPrincipalKind: "user",
+              createdByPrincipalId: "principal",
+              updatedByPrincipalKind: "user",
+              updatedByPrincipalId: "principal",
+              createdAt: "2026-11-27T00:00:00.000Z",
+              updatedAt: "2026-11-27T00:00:00.000Z",
+            },
+          ],
+        },
+      }))
+
+      const harness = await makeHarness(api)
+      const exit = await invoke(harness, "context_list_spaces", {})
+      const error = expectFailure(exit)
+
+      expect(error._tag).toBe("DisclosureRefused")
+      expect(JSON.stringify(error)).not.toContain(TENANT)
+    })
+
+    it("protects each bearer actually sent when the credential getter rotates", async () => {
+      const oldToken = "old-token-canary"
+      const newToken = "new-token-canary"
+      let reads = 0
+
+      api.route("GET /api/context/spaces", (request) => ({
+        json: {
+          items: [
+            {
+              id: contextUuid(811),
+              name: request.headers.authorization ?? "",
+              accessScope: "organization",
+              createdByPrincipalKind: "user",
+              createdByPrincipalId: "principal",
+              updatedByPrincipalKind: "user",
+              updatedByPrincipalId: "principal",
+              createdAt: "2026-11-27T00:00:00.000Z",
+              updatedAt: "2026-11-27T00:00:00.000Z",
+            },
+          ],
+        },
+      }))
+
+      const harness = await makeHarness(api, {
+        token: () =>
+          Effect.sync(() => {
+            reads += 1
+
+            return reads === 1 ? oldToken : newToken
+          }),
+      })
+
+      const first = JSON.stringify(await invokeJson(harness, "context_list_spaces", {}))
+      const second = JSON.stringify(await invokeJson(harness, "context_list_spaces", {}))
+
+      expect(reads).toBe(2)
+
+      for (const serialized of [first, second]) {
+        expect(serialized).not.toContain(oldToken)
+        expect(serialized).not.toContain(newToken)
+        expect(serialized).toContain("Bearer [REDACTED]")
+      }
+    })
+
+    it("protects the normalized bearer fetch places on the wire", async () => {
+      const wireToken = "wire-token-canary"
+
+      api.route("GET /api/context/spaces", (request) => ({
+        json: {
+          items: [
+            {
+              id: contextUuid(812),
+              name: request.headers.authorization ?? "",
+              accessScope: "organization",
+              createdByPrincipalKind: "user",
+              createdByPrincipalId: "principal",
+              updatedByPrincipalKind: "user",
+              updatedByPrincipalId: "principal",
+              createdAt: "2026-11-27T00:00:00.000Z",
+              updatedAt: "2026-11-27T00:00:00.000Z",
+            },
+          ],
+        },
+      }))
+
+      const harness = await makeHarness(api, {
+        token: () => Effect.succeed<string | undefined>(" \t" + wireToken + "\t\r\n"),
+      })
+
+      const serialized = JSON.stringify(await invokeJson(harness, "context_list_spaces", {}))
+
+      const request = api.requests.find(
+        (recordedRequest) => recordedRequest.route === "GET /api/context/spaces",
+      )
+
+      expect(request?.headers.authorization).toBe("Bearer " + wireToken)
+      expect(serialized).not.toContain(wireToken)
+      expect(serialized).toContain("Bearer [REDACTED]")
+    })
+
+    it("scrubs the bearer from a peer failure after the request was sent", async () => {
+      const token = "failure-token-canary"
+
+      api.route("GET /api/context/spaces", () => contextError(400, "echo " + token))
+
+      const harness = await makeHarness(api, {
+        token: () => Effect.succeed<string | undefined>(token),
+      })
+
+      const exit = await invoke(harness, "context_list_spaces", {})
+      const error = expectFailure(exit)
+
+      expect(error._tag).toBe("PeerFailure")
+      expect(JSON.stringify(error)).not.toContain(token)
+      expect(JSON.stringify(error)).toContain("[REDACTED]")
+    })
+
+    it("omits oversized peer detail whole instead of publishing a clipped secret fragment", async () => {
+      const secret = ("oversized-secret-" + "0123456789").repeat(20)
+      const prefix = secret.slice(0, 64)
+
+      api.route("GET /api/context/spaces", () => contextError(400, secret))
+
+      const harness = await makeHarness(api, {
+        headers: { "x-factory-organization": secret },
+      })
+
+      const exit = await invoke(harness, "context_list_spaces", {})
+      const error = expectFailure(exit)
+      const serialized = JSON.stringify(error)
+
+      expect(error._tag).toBe("PeerFailure")
+      expect(serialized).not.toContain(prefix)
+      expect(serialized).not.toContain("[REDACTED]")
+    })
+
+    it("passes peer detail to disclosure without trimming HTTP-preserved whitespace", async () => {
+      const interior = "nbsp-tenant-secret-canary"
+      const secret = "\u00a0" + interior + "\u00a0"
+
+      api.route("GET /api/context/spaces", () => contextError(400, secret))
+
+      const harness = await makeHarness(api, {
+        headers: { "x-factory-organization": secret },
+      })
+
+      const exit = await invoke(harness, "context_list_spaces", {})
+      const error = expectFailure(exit)
+      const serialized = JSON.stringify(error)
+
+      expect(error._tag).toBe("PeerFailure")
+      expect(serialized).not.toContain(interior)
+      expect(serialized).toContain("[REDACTED]")
+    })
+
     it("normalizes operator headers and keeps transport-owned accept single", async () => {
       const harness = await makeHarness(api, {
         headers: {
           accept: "text/html",
+          authorization: "x",
           "x-factory-organization": " " + TENANT + " ",
         },
       })
@@ -389,6 +683,7 @@ describe("prem-context", () => {
       )
 
       expect(request?.headers.accept).toBe("application/json")
+      expect(request?.headers.authorization).toBe("Bearer " + TOKEN)
       expect(request?.headers["x-factory-organization"]).toBe(TENANT)
     })
 
@@ -705,6 +1000,51 @@ describe("prem-context", () => {
       expect(api.requests.length).toBe(before + 1)
     })
 
+    it("strips conflict continuations echoed as a configured header secret", async () => {
+      const harness = await makeHarness(api)
+
+      const space = decode(
+        IdOnly,
+        await invokeJson(harness, "context_create_space", {
+          name: "notes",
+          accessScope: "organization",
+        }),
+      )
+
+      const created = decode(
+        Created,
+        await invokeJson(harness, "context_create_document", {
+          spaceId: space.id,
+          path: "notes.md",
+          body: "v1",
+        }),
+      )
+
+      api.failNext(
+        "PUT /api/context/spaces/{spaceId}/documents/{documentId}",
+        contextError(409, "conflicted", { currentVersion: TENANT, currentSequence: "7" }),
+      )
+
+      const exit = await invoke(harness, "context_update_document", {
+        spaceId: space.id,
+        documentId: created.id,
+        expectedVersion: "99",
+        merge: "strict",
+        body: "stale",
+      })
+
+      const error = expectFailure(exit)
+
+      expect(error).toBeInstanceOf(OperationConflict)
+
+      if (error instanceof OperationConflict) {
+        expect(error.message).toBe("operation failure")
+        expect(error.currentVersion).toBeUndefined()
+        expect(error.currentSequence).toBeUndefined()
+        expect(JSON.stringify(error)).not.toContain(TENANT)
+      }
+    })
+
     it("a sequence gap conflict retains currentSequence", async () => {
       const harness = await makeHarness(api)
 
@@ -812,6 +1152,54 @@ describe("prem-context", () => {
       const error = expectFailure(exit)
 
       expect(error._tag).toBe("ProtectedBytes")
+    })
+
+    it("a file part containing Latin-1 header bytes triggers a ProtectedBytes refusal", async () => {
+      const secret = "latin-é-wire-secret"
+
+      const harness = await makeHarness(api, {
+        headers: { "x-factory-organization": secret },
+      })
+
+      const space = decode(
+        IdOnly,
+        await invokeJson(harness, "context_create_space", {
+          name: "notes",
+          accessScope: "organization",
+        }),
+      )
+
+      const bytes = Uint8Array.from([...secret].map((character) => character.charCodeAt(0)))
+
+      const upload = decode(
+        Upload,
+        await invokeJson(harness, "context_create_file", {
+          spaceId: space.id,
+          contentType: "application/pdf",
+          sizeBytes: bytes.byteLength,
+          sha256: sha256(bytes),
+        }),
+      )
+
+      await invokeJson(harness, "context_upload_file_part", {
+        spaceId: space.id,
+        fileId: upload.fileId,
+        partIndex: 0,
+        contentBase64: base64(bytes),
+      })
+      await invokeJson(harness, "context_create_document", {
+        spaceId: space.id,
+        path: "latin1.pdf",
+        fileId: upload.fileId,
+      })
+
+      const exit = await invoke(harness, "context_read_file_part", {
+        spaceId: space.id,
+        fileId: upload.fileId,
+        partIndex: 0,
+      })
+
+      expect(expectFailure(exit)._tag).toBe("ProtectedBytes")
     })
   })
 
@@ -928,8 +1316,44 @@ describe("prem-context", () => {
       expect(read).toMatchObject({ body: "tenant [REDACTED]" })
     })
 
+    it("still scrubs stored record member names containing a header value", async () => {
+      const secret = "record-key-secret"
+
+      const harness = await makeHarness(api, {
+        headers: { "x-factory-organization": secret },
+      })
+
+      const space = decode(
+        IdOnly,
+        await invokeJson(harness, "context_create_space", {
+          name: "records",
+          accessScope: "organization",
+        }),
+      )
+
+      const spaceId = space.id
+      const sessionId = contextUuid(930)
+
+      await invokeJson(harness, "context_register_session", { spaceId, sessionId })
+      await invokeJson(harness, "context_append_session", {
+        spaceId,
+        sessionId,
+        startSequence: "1",
+        contentJsonl: '{"field record-key-secret":1}\n',
+      })
+
+      const records = recordsOf(
+        await invoke(harness, "context_read_session_records", { spaceId, sessionId }),
+      )
+
+      expect(records).toEqual([{ "field [REDACTED]": 1 }])
+    })
+
     it("installation header values inside a peer rejection detail are scrubbed before surfacing", async () => {
-      api.failNext("GET /api/context/spaces", contextError(403, "denied for tenant " + TENANT))
+      api.failNext(
+        "GET /api/context/spaces",
+        contextError(403, "denied for tenant " + TENANT + " with token " + TOKEN),
+      )
 
       const harness = await makeHarness(api)
       const exit = await invoke(harness, "context_list_spaces", {})
@@ -937,6 +1361,7 @@ describe("prem-context", () => {
 
       expect(error._tag).toBe("PeerFailure")
       expect(JSON.stringify(error)).not.toContain(TENANT)
+      expect(JSON.stringify(error)).not.toContain(TOKEN)
     })
   })
 

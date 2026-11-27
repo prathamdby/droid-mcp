@@ -19,6 +19,11 @@ import { Authority } from "../authority/index.ts"
 import { Callers } from "../caller/index.ts"
 import { Capabilities } from "../capabilities/index.ts"
 import type { BoundOperation } from "../capabilities/index.ts"
+import {
+  ContextHeadersInvalid,
+  validateContextHeaders,
+  type ContextHeaderProblem,
+} from "../context-headers/index.ts"
 import { Custody } from "../custody/index.ts"
 import { Disclosure } from "../disclosure/index.ts"
 import { Guidance } from "../guidance/index.ts"
@@ -82,13 +87,17 @@ export class ContextConflict extends Schema.TaggedError<ContextConflict>()("Cont
  * explicit scheme and host. Nothing here ever falls back to a hosted origin,
  * and no operation accepts a caller-supplied URL.
  *
- * `token` is the scoped bearer getter; it is the only credential path, and
- * its value is scrubbed from anything that crosses a boundary. `headers` are
- * static operator-configured additions (such as a tenant marker); transport-owned
- * names are ignored, surrounding spaces and tabs are normalized away, and the
- * remaining values are scrubbed the same way. `fetch` and `timeoutMs` exist so
- * a test or embedding product can inject transport behavior; `maxFileBytes`
- * bounds file downloads and uploads.
+ * `token` is the scoped bearer getter; it is the only credential path.
+ * Surrounding HTTP whitespace cannot be credential text, and the normalized
+ * bearer actually placed on the wire is scrubbed from anything that crosses
+ * a boundary. `headers` are static operator-configured additions (such as a
+ * tenant marker); transport-owned names are ignored, surrounding spaces and
+ * tabs are normalized away, and the remaining values are scrubbed the same
+ * way. If a value appears inside a protocol continuation identifier or a
+ * non-string JSON scalar, disclosure refuses that reply instead of
+ * corrupting it; very short values can therefore make replies undeliverable.
+ * `fetch` and `timeoutMs` exist so a test or embedding product can inject
+ * transport behavior; `maxFileBytes` bounds file downloads and uploads.
  */
 export interface ContextInstallation {
   readonly origin?: string
@@ -106,7 +115,10 @@ export interface ContextInstallation {
 export interface ContextOperationsService {
   readonly entries: (
     site: ContextInstallation,
-  ) => Effect.Effect<ReadonlyArray<BoundOperation>, ContextOriginMissing | ContextBadReply>
+  ) => Effect.Effect<
+    ReadonlyArray<BoundOperation>,
+    ContextOriginMissing | ContextBadReply | ContextHeadersInvalid
+  >
 }
 
 export class ContextOperations extends Context.Service<
@@ -171,6 +183,29 @@ const validateOrigin = (raw: string | undefined): Effect.Effect<string, ContextO
 }
 
 // ---------------------------------------------------------------------------
+// Header validation messages
+// ---------------------------------------------------------------------------
+
+/** Human-readable validation failure text; neither names nor values cross the diagnostic boundary. */
+const contextHeaderProblemMessage = (problem: ContextHeaderProblem): string => {
+  if (problem.reason === "invalid-shape") {
+    return "Context headers must be a record of string values"
+  }
+
+  if (problem.reason === "invalid-name") return "a Context header name is not a valid HTTP token"
+
+  if (problem.reason === "reserved-name") {
+    return "a Context header is reserved for the transport"
+  }
+
+  if (problem.reason === "duplicate-name") {
+    return "a Context header is set twice"
+  }
+
+  return "a Context header value cannot be carried by HTTP"
+}
+
+// ---------------------------------------------------------------------------
 // Layer
 // ---------------------------------------------------------------------------
 
@@ -193,8 +228,8 @@ export const contextOperationsLayer: Layer.Layer<
     /*
      * Authority, disclosure, custody, guidance and callers are reached
      * through the capabilities pipeline rather than directly here; the layer
-     * dependency list keeps the module boundary explicit even though this
-     * service never invokes them itself.
+     * dependency list keeps that boundary explicit even though this service
+     * never invokes them itself.
      */
     yield* Authority
     yield* Disclosure
@@ -205,11 +240,23 @@ export const contextOperationsLayer: Layer.Layer<
     const entries: ContextOperationsService["entries"] = (site) =>
       Effect.gen(function* () {
         const origin = yield* validateOrigin(site.origin)
+        const validation = validateContextHeaders(site.headers ?? {}, { reserved: "ignore" })
+
+        if (!validation.ok) {
+          const problem = validation.problem
+
+          return yield* Effect.fail(
+            new ContextHeadersInvalid({
+              message: contextHeaderProblemMessage(problem),
+              reason: problem.reason,
+            }),
+          )
+        }
 
         const binders = contextDefinitions({
           origin,
           timeoutMs: site.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          headers: site.headers,
+          headers: validation.headers,
           token: site.token,
           fetch: site.fetch,
         })
