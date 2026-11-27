@@ -99,13 +99,16 @@ const nonEmpty = (raw: string | undefined): string | undefined =>
 /** Port the `droid daemon` websocket listener binds when a URL names none. */
 const DEFAULT_DAEMON_PORT = 7338
 
-const DAEMON_URL_SCHEMES: ReadonlyArray<string> = ["http:", "https:", "ws:", "wss:"]
+const DAEMON_ENDPOINT_FORMS = "unix:<path>, http://host:port, or ws://host:port"
+const PLAINTEXT_DAEMON_URL_SCHEMES: ReadonlyArray<string> = ["http:", "ws:"]
+const SECURE_DAEMON_URL_SCHEMES: ReadonlyArray<string> = ["https:", "wss:"]
 
 /**
  * Resolves a `--daemon-url` into an endpoint. `unix:<path>` names a socket;
- * `http(s)://` and `ws(s)://` URLs name a host and port (defaulting the port
- * to the daemon websocket default). Any other shape is rejected up front
- * instead of being silently ignored at dial time.
+ * plaintext `http://` and `ws://` URLs name a host and port (defaulting the
+ * port to the daemon websocket default). Secure schemes are rejected because
+ * the daemon transport does not implement TLS. Any other shape is rejected up
+ * front instead of being silently ignored at dial time.
  */
 const parseDaemonEndpoint = (
   raw: string,
@@ -125,11 +128,17 @@ const parseDaemonEndpoint = (
   try {
     url = new URL(raw)
   } catch {
-    throw error("--daemon-url must be unix:<path> or http(s)://host:port")
+    throw error("--daemon-url must be " + DAEMON_ENDPOINT_FORMS)
   }
 
-  if (!DAEMON_URL_SCHEMES.includes(url.protocol) || url.hostname.length === 0) {
-    throw error("--daemon-url must be unix:<path> or http(s)://host:port")
+  if (SECURE_DAEMON_URL_SCHEMES.includes(url.protocol)) {
+    throw error(
+      "--daemon-url scheme " + url.protocol + " is not supported; use " + DAEMON_ENDPOINT_FORMS,
+    )
+  }
+
+  if (!PLAINTEXT_DAEMON_URL_SCHEMES.includes(url.protocol) || url.hostname.length === 0) {
+    throw error("--daemon-url must be " + DAEMON_ENDPOINT_FORMS)
   }
 
   return url.port === ""
@@ -347,9 +356,9 @@ Flags:
   --shared-sessions                     Share the session directory across callers (opt-in)
   --allow-unverified-daemon-authority   Permit daemon authority passthrough (opt-in)
   --max-autonomy <off|low|medium|high>  Authority ceiling (default: medium)
-  --daemon-url <url>                    Use an existing daemon (unix:<path> or
-                                        http(s)://host:port); default: spawn one
-                                        on the runtime socket
+  --daemon-url <url>                    Use an existing daemon: unix:<path>,
+                                        http://host:port, or ws://host:port.
+                                        Default: spawn one on the runtime socket
   --no-daemon                           Omit the daemon provider entirely
   --no-guidance                         Disable the guidance receipt gate
   --factory-api-key <key>               Factory API key (FACTORY_API_KEY)
