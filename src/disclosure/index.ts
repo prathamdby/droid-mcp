@@ -6,6 +6,7 @@ import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
 import {
+  openScrubStream,
   mediaContainsProtectedBytes,
   mintedValuesInRecords,
   mintedValuesInValue,
@@ -51,6 +52,20 @@ export type ReleaseInput = {
 
 /** The redaction marker substituted for protected values. */
 export const REDACTED = "[REDACTED]"
+
+/**
+ * A stateful scrubber for text crossing the boundary in ordered fragments.
+ * `push` returns the newly final scrubbed text, which may be empty while a
+ * possible protected prefix is withheld and may cover text from earlier
+ * pushes once that prefix resolves. `flush` ends the stream and releases
+ * the scrubbed remainder. Concatenating every output in order yields
+ * exactly the scrubbed stream: no complete protected value can be
+ * reassembled from the fragments, even one split across pushes.
+ */
+export interface TextScrubStream {
+  readonly push: (text: string) => string
+  readonly flush: () => string
+}
 
 /**
  * Brand key for the opaque `Released` handle. The symbol itself is
@@ -247,7 +262,11 @@ const makeDisclosure = (options: DisclosureOptions): DisclosureApi => {
         ),
     })
 
+  const scrubStream = (): TextScrubStream => openScrubStream(() => state.protectedValues, REDACTED)
+
   return {
+    scrubStream,
+
     release: (input, to) =>
       scrubPayload(input.payload, to, input.sensitiveValues ?? [], input.sensitiveKeys ?? []),
 
@@ -303,6 +322,8 @@ const makeDisclosure = (options: DisclosureOptions): DisclosureApi => {
 // ---------------------------------------------------------------------------
 
 export interface DisclosureApi {
+  scrubStream(): TextScrubStream
+
   release<S extends Sink>(
     input: ReleaseInput,
     to: Audience<S>,

@@ -413,6 +413,63 @@ describe("embedded", () => {
     })
   })
 
+  it("prefers the configured Factory key over a conflicting droidEnv entry", async () => {
+    const runtime = await embedded({
+      ...localOptions(),
+      principal: "operator",
+      includeDaemon: false,
+      factoryApiKey: "configured-key",
+      droidEnv: { FACTORY_API_KEY: "override-loses" },
+    })
+
+    try {
+      const created = await runtime.invoke("session_create", { cwd: sandbox, autonomyLevel: "low" })
+      const sessionId = text(record(embeddedValue(created)).sessionId)
+
+      const turn = await runtime.invoke("session_stream", {
+        sessionId,
+        prompt: "env-echo",
+        waitMs: 5_000,
+      })
+
+      expect(embeddedValue(turn)).toMatchObject({
+        status: "completed",
+        result: { structuredOutput: { echo: "[REDACTED]" } },
+      })
+      expect(JSON.stringify(embeddedValue(turn))).not.toContain("override-loses")
+      expect(JSON.stringify(embeddedValue(turn))).not.toContain("configured-key")
+    } finally {
+      await runtime.close()
+    }
+
+    const blank = await embedded({
+      ...localOptions(),
+      principal: "operator",
+      includeDaemon: false,
+      factoryApiKey: "   ",
+      droidEnv: { FACTORY_API_KEY: "kept-key" },
+    })
+
+    try {
+      const created = await blank.invoke("session_create", { cwd: sandbox, autonomyLevel: "low" })
+      const sessionId = text(record(embeddedValue(created)).sessionId)
+
+      const turn = await blank.invoke("session_stream", {
+        sessionId,
+        prompt: "env-echo",
+        waitMs: 5_000,
+      })
+
+      expect(embeddedValue(turn)).toMatchObject({
+        status: "completed",
+        result: { structuredOutput: { echo: "[REDACTED]" } },
+      })
+      expect(JSON.stringify(embeddedValue(turn))).not.toContain("kept-key")
+    } finally {
+      await blank.close()
+    }
+  })
+
   it("admits the process working directory when no roots are configured", async () => {
     const runtime = await embedded({
       droidPath: process.execPath,
@@ -1575,6 +1632,29 @@ describe("cli entry point", () => {
         ]),
       })
       expect(JSON.stringify(events)).not.toContain(expectedKey)
+
+      const streamed = toolValue(
+        await call(request, "session_stream", { sessionId, prompt: "env-stream", waitMs: 5_000 }),
+      )
+
+      expect(streamed).toMatchObject({ status: "completed" })
+      expect(JSON.stringify(streamed)).not.toContain(expectedKey)
+
+      const streamEvents = toolValue(
+        await call(request, "session_events", { sessionId, cursor: 0, waitMs: 0 }),
+      )
+
+      // The key arrives split across two deltas, so plain containment is
+      // toothless: the security property is that reassembling every released
+      // fragment in order never yields the key.
+      const deltas = records(record(streamEvents).events)
+        .filter((event) => event.kind === "delta")
+        .map((event) => text(record(record(event).payload).textDelta))
+        .join("")
+
+      expect(deltas).not.toContain(expectedKey)
+      expect(deltas).toContain("echo [REDACTED] done")
+      expect(JSON.stringify(streamEvents)).not.toContain(expectedKey)
 
       const crashed = toolValue(
         await call(request, "session_stream", { sessionId, prompt: "env-crash", waitMs: 5_000 }),

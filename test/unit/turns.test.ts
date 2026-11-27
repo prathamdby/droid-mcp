@@ -757,6 +757,84 @@ describe("wait semantics", () => {
       await services.close()
     }
   })
+
+  it("never releases a protected value split across text deltas", async () => {
+    const secret = "split-secret-99"
+    const services = makeServices({ protectedValues: [secret] })
+    const caller = admitCaller(services, "split-delta")
+    const scope = await Effect.runPromise(Scope.make())
+
+    try {
+      const { rig, grant } = await openSyntheticLease(services, caller, scope)
+
+      const turn = await Effect.runPromise(
+        services.turns.start(rig.lease, { text: "stream" }, grant),
+      )
+
+      const cut = Math.floor(secret.length / 2)
+
+      rig.emit(
+        PlacementNotice.SessionDelta({
+          leaseId: rig.lease.leaseId,
+          workRef: rig.workRef(1),
+          kind: "assistant_text_delta",
+          payload: { textDelta: "echo " + secret.slice(0, cut) },
+        }),
+      )
+
+      rig.emit(
+        PlacementNotice.SessionDelta({
+          leaseId: rig.lease.leaseId,
+          workRef: rig.workRef(1),
+          kind: "assistant_text_delta",
+          payload: { textDelta: secret.slice(cut) + " done" },
+        }),
+      )
+
+      rig.emit(
+        PlacementNotice.TurnCompleted({
+          leaseId: rig.lease.leaseId,
+          workRef: rig.workRef(1),
+          summary: { ok: true },
+        }),
+      )
+
+      const completed = await Effect.runPromise(services.turns.wait(turn, "terminal", 2000))
+
+      expect(completed.status).toBe("completed")
+      expect(completed.lastText).toBe("echo [REDACTED] done")
+
+      const page = await Effect.runPromise(services.turns.observeLease(rig.lease, null, 0))
+
+      const released = page.items
+        .map((item) => {
+          const json = releasedJson(item)
+
+          if (Option.isNone(json) || !isRecord(json.value)) return ""
+
+          if (json.value["kind"] !== "delta") return ""
+
+          const payload = json.value["payload"]
+
+          if (!isRecord(payload)) return ""
+
+          const textDelta = payload["textDelta"]
+
+          return Schema.is(Schema.String)(textDelta) ? textDelta : ""
+        })
+        .join("")
+
+      // Reassembling the released stream in order never yields the secret.
+      expect(released).not.toContain(secret)
+      expect(released).toContain("echo [REDACTED] done")
+      expect(JSON.stringify(page.items)).not.toContain(secret)
+
+      await Effect.runPromise(services.turns.retireLease(rig.lease))
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void))
+      await services.close()
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------

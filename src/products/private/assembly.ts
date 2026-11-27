@@ -66,14 +66,25 @@ export const assemblePipeline = async (options: AssemblyOptions): Promise<Assemb
   const guidanceRequired = options.guidanceRequired ?? true
   const maxAutonomy = options.maxAutonomy ?? "medium"
 
-  const disclosureLive = disclosureLayer({
-    protectedValues: options.factoryApiKey === undefined ? [] : [options.factoryApiKey],
-  })
+  // `FACTORY_API_KEY` has exactly one owner: a nonblank configured key merged
+  // last over `droidEnv`. Whitespace-only keys count as unset, matching the
+  // CLI's `nonEmpty` treatment, and whatever value the child receives under
+  // that name is protected everywhere it can echo back.
+  const factoryApiKey =
+    options.factoryApiKey === undefined || options.factoryApiKey.trim().length === 0
+      ? undefined
+      : options.factoryApiKey
 
-  const droidEnv =
-    options.factoryApiKey === undefined
+  const mergedEnv =
+    factoryApiKey === undefined
       ? options.droidEnv
-      : { ...options.droidEnv, FACTORY_API_KEY: options.factoryApiKey }
+      : { ...options.droidEnv, FACTORY_API_KEY: factoryApiKey }
+
+  const childKey = mergedEnv?.["FACTORY_API_KEY"]
+
+  const disclosureLive = disclosureLayer({
+    protectedValues: childKey === undefined || childKey.length === 0 ? [] : [childKey],
+  })
 
   const authorityLive = authorityLayer({
     maxAutonomy,
@@ -115,7 +126,7 @@ export const assemblePipeline = async (options: AssemblyOptions): Promise<Assemb
         LANG: process.env["LANG"],
         TERM: process.env["TERM"],
       },
-      env: droidEnv,
+      env: mergedEnv,
     }),
     baseDeps,
   )
