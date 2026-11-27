@@ -48,9 +48,12 @@ export type FetchLike = (
 ) => Promise<Response>
 
 export interface ContextTransport {
+  /** Static header values disclosure must never publish. */
+  readonly staticSecretValues: () => Effect.Effect<ReadonlyArray<string>>
   readonly send: (
     request: ContextHttpRequest,
     maxBytes: number,
+    protect?: (values: ReadonlyArray<string>) => Effect.Effect<void>,
   ) => Effect.Effect<Received, SendFailure>
 }
 
@@ -138,62 +141,86 @@ interface RequestHeaders {
   [name: string]: string
 }
 
+/**
+ * Bearer credentials cannot carry surrounding HTTP whitespace as credential
+ * text. Fetch also strips trailing CR and LF before writing a header value,
+ * so the normalized credential must follow the same wire rule exactly.
+ */
+const BEARER_WHITESPACE = /^[ \t]+|[ \t\r\n]+$/g
+
 /** Builds the transport for one validated origin; the origin is fixed at construction. */
-export const openTransport = (origin: string, options: TransportOptions): ContextTransport => ({
-  send: (request, maxBytes) =>
-    Effect.gen(function* () {
-      const url = urlFor(origin, request.path, request.query)
+export const openTransport = (origin: string, options: TransportOptions): ContextTransport => {
+  const staticHeaders: Record<string, string> = {}
 
-      if (url === undefined) {
-        // Unreachable in practice: paths are constants built inside this module.
-        return yield* Effect.fail<SendFailure>({ kind: "unreachable" })
-      }
+  for (const [name, value] of Object.entries(options.headers ?? {})) {
+    staticHeaders[name] = value
+  }
 
-      const token = options.token === undefined ? undefined : yield* options.token()
+  const staticSensitiveValues = Object.values(staticHeaders).filter((value) => value.length > 0)
 
-      const headers: RequestHeaders = { ...options.headers, accept: "application/json" }
+  return {
+    staticSecretValues: () => Effect.succeed([...staticSensitiveValues]),
 
-      if (token !== undefined && token.length > 0) headers.authorization = "Bearer " + token
+    send: (request, maxBytes, protect) =>
+      Effect.gen(function* () {
+        const url = urlFor(origin, request.path, request.query)
 
-      let body: string | Uint8Array | undefined
+        if (url === undefined) {
+          // Unreachable in practice: paths are constants built inside this module.
+          return yield* Effect.fail<SendFailure>({ kind: "unreachable" })
+        }
 
-      if (request.body instanceof Uint8Array) {
-        headers["content-type"] = "application/octet-stream"
-        body = request.body
-      } else if (request.body !== undefined) {
-        headers["content-type"] = "application/json"
-        body = JSON.stringify(request.body)
-      }
+        const token = options.token === undefined ? undefined : yield* options.token()
+        const bearer = token?.replace(BEARER_WHITESPACE, "")
 
-      const timeout = AbortSignal.timeout(options.timeoutMs)
+        const headers: RequestHeaders = { ...staticHeaders, accept: "application/json" }
 
-      /*
-       * A DNS or connection refusal can happen either before or after the
-       * peer received the request, so a network failure is uncertain
-       * delivery, never a silent retry.
-       */
-      const exchange = yield* Effect.tryPromise({
-        try: async (signal) => {
-          const response = await options.fetch(url, {
-            method: request.method,
-            headers,
-            body,
-            redirect: "manual",
-            signal: AbortSignal.any([signal, timeout]),
-          })
+        if (bearer !== undefined && bearer.length > 0) {
+          headers.authorization = "Bearer " + bearer
 
-          return { status: response.status, bytes: await readCapped(response, maxBytes) }
-        },
-        catch: (): SendFailure => ({ kind: "uncertain", timedOut: timeout.aborted }),
-      })
+          if (protect !== undefined) yield* protect([bearer])
+        }
 
-      if (exchange.bytes === undefined) {
-        return yield* Effect.fail<SendFailure>({ kind: "oversized", status: exchange.status })
-      }
+        let body: string | Uint8Array | undefined
 
-      return { status: exchange.status, bytes: exchange.bytes }
-    }),
-})
+        if (request.body instanceof Uint8Array) {
+          headers["content-type"] = "application/octet-stream"
+          body = request.body
+        } else if (request.body !== undefined) {
+          headers["content-type"] = "application/json"
+          body = JSON.stringify(request.body)
+        }
+
+        const timeout = AbortSignal.timeout(options.timeoutMs)
+
+        /*
+         * A DNS or connection refusal can happen either before or after the
+         * peer received the request, so a network failure is uncertain
+         * delivery, never a silent retry.
+         */
+        const exchange = yield* Effect.tryPromise({
+          try: async (signal) => {
+            const response = await options.fetch(url, {
+              method: request.method,
+              headers,
+              body,
+              redirect: "manual",
+              signal: AbortSignal.any([signal, timeout]),
+            })
+
+            return { status: response.status, bytes: await readCapped(response, maxBytes) }
+          },
+          catch: (): SendFailure => ({ kind: "uncertain", timedOut: timeout.aborted }),
+        })
+
+        if (exchange.bytes === undefined) {
+          return yield* Effect.fail<SendFailure>({ kind: "oversized", status: exchange.status })
+        }
+
+        return { status: exchange.status, bytes: exchange.bytes }
+      }),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Reply decoding helpers
@@ -241,7 +268,13 @@ export const conflictFieldsOf = (json: Schema.Json | undefined): ConflictFields 
 
 const DETAIL_MAX_LENGTH = 500
 
-/** The human-readable detail of an upstream error body, capped for a failure message. */
+/**
+ * The human-readable detail of an upstream error body, bounded for a failure
+ * message. The detail crosses byte-for-byte once accepted: JavaScript trims
+ * Latin-1 nonbreaking spaces that HTTP preserved, and even that small rewrite
+ * can turn a protected value into an unmatched fragment. Oversized detail is
+ * omitted whole for the same reason.
+ */
 const ErrorDetailFields = Schema.Struct({ detail: Schema.optional(Schema.String) })
 
 export const errorDetailOf = (json: Schema.Json | undefined): string | undefined => {
@@ -252,9 +285,5 @@ export const errorDetailOf = (json: Schema.Json | undefined): string | undefined
 
   if (detail === undefined || detail.trim().length === 0) return undefined
 
-  const trimmed = detail.trim()
-
-  return trimmed.length <= DETAIL_MAX_LENGTH
-    ? trimmed
-    : trimmed.slice(0, DETAIL_MAX_LENGTH - 1) + "…"
+  return detail.length <= DETAIL_MAX_LENGTH ? detail : undefined
 }

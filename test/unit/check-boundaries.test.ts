@@ -1451,8 +1451,8 @@ describe("parseArgs", () => {
 })
 
 describe("module graph invariants", () => {
-  it("declares exactly the 22-module architecture", () => {
-    expect(MODULES.size).toBe(22)
+  it("declares exactly the 23-module architecture", () => {
+    expect(MODULES.size).toBe(23)
   })
 
   it("documents a non-empty hidden design decision for every module", () => {
@@ -1505,6 +1505,6 @@ describe("module graph invariants", () => {
   it("passes the real src/ directory with no violations", () => {
     const result = checkBoundaries({ rootDir: join(import.meta.dirname, "../../src") })
 
-    expect(result).toMatchObject({ ok: true, checkedModules: 22, violations: [] })
+    expect(result).toMatchObject({ ok: true, checkedModules: 23, violations: [] })
   })
 })

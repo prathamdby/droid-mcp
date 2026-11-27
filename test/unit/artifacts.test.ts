@@ -20,8 +20,10 @@ import {
   Disclosure,
   type DisclosureApi,
   disclosureLayer,
+  type ReleaseInput,
   ReleasePayload,
   type Released,
+  REDACTED,
   releasedJson,
 } from "../../src/disclosure/index.ts"
 
@@ -69,10 +71,11 @@ const releaseJson = (
   disclosure: DisclosureApi,
   value: Schema.Json,
   recipientId = "client-1",
+  protection?: Pick<ReleaseInput, "sensitiveValues" | "sensitiveKeys" | "jsonProtection">,
 ): Promise<Released<"client">> =>
   Effect.runPromise(
     Effect.flatMap(disclosure.audience("client", recipientId), (audience) =>
-      disclosure.release({ payload: ReleasePayload.JsonValue({ value }) }, audience),
+      disclosure.release({ payload: ReleasePayload.JsonValue({ value }), ...protection }, audience),
     ),
   )
 
@@ -699,6 +702,211 @@ describe("policy tightening", () => {
 
     expect(after).not.toContain(secret)
     expect(after).toContain("[REDACTED]")
+  })
+
+  it("revalidates a retained selected subtree with its scoped protection", async () => {
+    const { artifacts, disclosure } = makeServices()
+    const caller = trustedCaller("policy-selected-user")
+    const secret = "fresh-atomic-secret"
+    const item = { id: "opaque-" + secret, note: "n".repeat(1_100) }
+
+    const released = await releaseJson(
+      disclosure,
+      { items: [item], nextCursor: "cursor-1" },
+      "client-1",
+      {
+        jsonProtection: {
+          fixedKeys: ["items", "nextCursor"],
+          atomicKeys: ["nextCursor"],
+          members: {
+            items: {
+              fixedKeys: [],
+              atomicKeys: [],
+              item: { fixedKeys: ["id", "note"], atomicKeys: ["id"] },
+            },
+          },
+        },
+      },
+    )
+
+    const delivery = await runEffect(
+      artifacts.present(caller, released, { maxBytes: 1_024, select: "/items/0" }),
+    )
+
+    const preview = expectPreview(delivery)
+
+    await Effect.runPromise(disclosure.tightenPolicy([secret]))
+
+    const exit = Effect.runSyncExit(artifacts.read(caller, preview.ref, { offset: 0 }))
+    const error = expectFailure(exit)
+
+    expect(Predicate.isTagged("ArtifactUnavailable")(error)).toBe(true)
+  })
+
+  it.each([
+    {
+      name: "nextCursor",
+      select: "/nextCursor",
+      secret: "cursor-secret",
+      payload: {
+        items: [{ id: "item-id", note: "" }],
+        nextCursor: "cursor-secret-" + "c".repeat(1_100),
+      },
+    },
+    {
+      name: "nested id",
+      select: "/items/0/id",
+      secret: "id-secret",
+      payload: {
+        items: [{ id: "id-secret-" + "i".repeat(1_100), note: "" }],
+        nextCursor: "cursor-1",
+      },
+    },
+  ])("refuses a retained selected $name after tightening", async (fixture) => {
+    const { artifacts, disclosure } = makeServices()
+    const caller = trustedCaller("policy-leaf-" + fixture.name)
+
+    const released = await releaseJson(disclosure, fixture.payload, "client-1", {
+      jsonProtection: {
+        fixedKeys: ["items", "nextCursor"],
+        atomicKeys: ["nextCursor"],
+        members: {
+          items: {
+            fixedKeys: [],
+            atomicKeys: [],
+            item: { fixedKeys: ["id", "note"], atomicKeys: ["id"] },
+          },
+        },
+      },
+    })
+
+    const delivery = await runEffect(
+      artifacts.present(caller, released, { maxBytes: 1_024, select: fixture.select }),
+    )
+
+    const preview = expectPreview(delivery)
+
+    await Effect.runPromise(disclosure.tightenPolicy([fixture.secret]))
+
+    const exit = Effect.runSyncExit(artifacts.read(caller, preview.ref, { offset: 0 }))
+    const error = expectFailure(exit)
+
+    expect(Predicate.isTagged("ArtifactUnavailable")(error)).toBe(true)
+  })
+
+  it("revalidates only the subtree selected at read time", async () => {
+    const { artifacts, disclosure } = makeServices()
+    const caller = trustedCaller("policy-read-select-user")
+    const secret = "read-select-secret"
+    const note = "n".repeat(1_100)
+
+    const released = await releaseJson(
+      disclosure,
+      {
+        items: [{ id: "opaque-" + secret, note }],
+        nextCursor: "cursor-1",
+      },
+      "client-1",
+      {
+        jsonProtection: {
+          fixedKeys: ["items", "nextCursor"],
+          atomicKeys: ["nextCursor"],
+          members: {
+            items: {
+              fixedKeys: [],
+              atomicKeys: [],
+              item: { fixedKeys: ["id", "note"], atomicKeys: ["id"] },
+            },
+          },
+        },
+      },
+    )
+
+    const delivery = await runEffect(artifacts.present(caller, released, { maxBytes: 1_024 }))
+    const preview = expectPreview(delivery)
+
+    await Effect.runPromise(disclosure.tightenPolicy([secret]))
+
+    const safe = await runEffect(
+      artifacts.read(caller, preview.ref, { select: "/items/0/note", offset: 0, length: 2_000 }),
+    )
+
+    expect(safe.chunk).toBe(JSON.stringify(note))
+    expect(safe.done).toBe(true)
+
+    const colliding = Effect.runSyncExit(
+      artifacts.read(caller, preview.ref, { select: "/items/0/id", offset: 0, length: 1_024 }),
+    )
+
+    expect(Predicate.isTagged("ArtifactUnavailable")(expectFailure(colliding))).toBe(true)
+  })
+
+  it("resolves retained object selections by the member names visible after tightening", async () => {
+    const { artifacts, disclosure } = makeServices()
+    const caller = trustedCaller("policy-visible-key-user")
+    const hiddenKey = "tenant-member-name-secret"
+    const note = "v".repeat(1_100)
+
+    const released = await releaseJson(disclosure, { [hiddenKey]: note, visible: note })
+
+    const delivery = await runEffect(artifacts.present(caller, released, { maxBytes: 1_024 }))
+    const preview = expectPreview(delivery)
+
+    await Effect.runPromise(disclosure.tightenPolicy([hiddenKey]))
+
+    const selected = await runEffect(
+      artifacts.read(caller, preview.ref, { select: "/[REDACTED]", offset: 0, length: 2_000 }),
+    )
+
+    expect(selected.chunk).toBe(JSON.stringify(note))
+    expect(selected.done).toBe(true)
+
+    const staleName = Effect.runSyncExit(
+      artifacts.read(caller, preview.ref, { select: "/" + hiddenKey, offset: 0, length: 1_024 }),
+    )
+
+    expect(Predicate.isTagged("SelectionFailed")(expectFailure(staleName))).toBe(true)
+  })
+
+  it("resolves the stored visible member name at an unchanged policy revision", async () => {
+    const { artifacts, disclosure } = makeServices({ protectedValues: ["RED"] })
+    const caller = trustedCaller("policy-stored-key-user")
+    const note = "n".repeat(1_100)
+
+    const released = await releaseJson(disclosure, { RED: note })
+
+    const delivery = await runEffect(artifacts.present(caller, released, { maxBytes: 1_024 }))
+    const preview = expectPreview(delivery)
+    const whole = await readAll(artifacts, caller, preview.ref, 16_384)
+
+    expect(whole).toBe(JSON.stringify({ [REDACTED]: note }))
+
+    const selected = await runEffect(
+      artifacts.read(caller, preview.ref, { select: "/" + REDACTED, offset: 0, length: 2_000 }),
+    )
+
+    expect(selected.chunk).toBe(JSON.stringify(note))
+    expect(selected.done).toBe(true)
+  })
+
+  it("revalidates an inline selection tightened after the original release", async () => {
+    const { artifacts, disclosure } = makeServices()
+    const caller = trustedCaller("policy-inline-select-user")
+    const secret = "tenant-member-and-value-secret"
+
+    const released = await releaseJson(disclosure, { [secret]: secret })
+
+    await Effect.runPromise(disclosure.tightenPolicy([secret]))
+
+    const delivery = await runEffect(
+      artifacts.present(caller, released, { maxBytes: 1_024, select: "/" + REDACTED }),
+    )
+
+    expect(isInline(delivery)).toBe(true)
+
+    if (isInline(delivery)) {
+      expect(Option.getOrThrow(releasedJson(delivery.value))).toBe(REDACTED)
+    }
   })
 })
 

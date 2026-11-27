@@ -24,6 +24,7 @@ import {
   stdioServer,
 } from "../../src/products/index.ts"
 import type { EmbeddedResult, HttpServerHandle } from "../../src/products/index.ts"
+import { startFakeContextApi } from "../support/fake-context-api.ts"
 import { startFakeDaemon, startFakeTcpDaemon } from "../support/fake-daemon.ts"
 import type {
   FakeDaemon,
@@ -352,6 +353,120 @@ describe("parseCliArgs", () => {
       apiKey: "env-key",
     })
     expect(parseCliArgs([], {}).daemonAuth).toBeUndefined()
+  })
+
+  it("parses FACTORY_CONTEXT_HEADERS as a JSON object of string values", () => {
+    expect(parseCliArgs([], {}).contextHeaders).toBeUndefined()
+    expect(parseCliArgs([], { FACTORY_CONTEXT_HEADERS: "  " }).contextHeaders).toBeUndefined()
+    expect(
+      parseCliArgs([], {
+        FACTORY_CONTEXT_HEADERS: '{"X-Factory-Org":" \\t tenant canary \\t","x-tenant":"t"}',
+      }).contextHeaders,
+    ).toEqual({
+      "X-Factory-Org": "tenant canary",
+      "x-tenant": "t",
+    })
+  })
+
+  it("accepts a short Context header value as part of the string-value contract", () => {
+    expect(parseCliArgs([], { FACTORY_CONTEXT_HEADERS: '{"X-Org":"zz7"}' }).contextHeaders).toEqual(
+      {
+        "X-Org": "zz7",
+      },
+    )
+  })
+
+  it("keeps empty Context header values empty after trimming", () => {
+    expect(parseCliArgs([], { FACTORY_CONTEXT_HEADERS: '{"X-Org":""}' }).contextHeaders).toEqual({
+      "X-Org": "",
+    })
+    expect(parseCliArgs([], { FACTORY_CONTEXT_HEADERS: '{"X-Org":"   "}' }).contextHeaders).toEqual(
+      {
+        "X-Org": "",
+      },
+    )
+  })
+
+  it.each(["not json", "[]", '["a"]', '"text"', "3", '{"X-Org":3}', '{"X-Org":null}'])(
+    "rejects invalid FACTORY_CONTEXT_HEADERS input %s",
+    (raw) => {
+      expect(() => parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })).toThrow(CliParseError)
+      expect(() => parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })).toThrow(
+        "FACTORY_CONTEXT_HEADERS must be a JSON object of string values",
+      )
+    },
+  )
+
+  it.each([
+    "accept",
+    "Accept",
+    "authorization",
+    "Authorization",
+    "COOKIE",
+    "host",
+    "proxy-authorization",
+    "connection",
+    "content-length",
+    "content-type",
+    "transfer-encoding",
+    "te",
+    "upgrade",
+    "keep-alive",
+    "expect",
+    "trailer",
+  ])("rejects the reserved Context header %s", (name) => {
+    const raw = JSON.stringify({ [name]: "v" })
+
+    expect(() => parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })).toThrow(
+      "FACTORY_CONTEXT_HEADERS may not set a transport-owned header",
+    )
+  })
+
+  it("rejects invalid Context header names, values, and case-insensitive duplicates", () => {
+    for (const raw of [
+      '{"bad name":"v"}',
+      '{"X-Org":"a\\r\\nX-Evil: 1"}',
+      '{"X-Org":"a\\u0001b"}',
+      '{"X-Org":"a\\u007fb"}',
+      '{"X-Org":"secret-\\u0100"}',
+      '{"X-Org":"a","x-org":"b"}',
+    ]) {
+      expect(() => parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })).toThrow(CliParseError)
+    }
+  })
+
+  it("rejects invalid Context headers without echoing their values", () => {
+    const secret = "tenant-secret-canary"
+
+    for (const raw of [
+      JSON.stringify({ cookie: secret }),
+      JSON.stringify({ "X-Org": secret + "\r\nX-Evil: 1" }),
+    ]) {
+      let message = ""
+
+      try {
+        parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })
+      } catch (failure) {
+        message = failure instanceof Error ? failure.message : ""
+      }
+
+      expect(message).toContain("FACTORY_CONTEXT_HEADERS")
+      expect(message).not.toContain(secret)
+    }
+  })
+
+  it("does not echo a configured value when it collides with an offending header name", () => {
+    const raw = JSON.stringify({ "x-tenant": "cookie", cookie: "other" })
+    let message = ""
+
+    try {
+      parseCliArgs([], { FACTORY_CONTEXT_HEADERS: raw })
+    } catch (failure) {
+      message = failure instanceof Error ? failure.message : ""
+    }
+
+    expect(message).toContain("FACTORY_CONTEXT_HEADERS")
+    expect(message).not.toContain("cookie")
   })
 
   it("passes workspace roots only when the operator names them", () => {
@@ -1351,6 +1466,43 @@ describe("cli entry point", () => {
     return startFakeTcpDaemon(cliDaemonHandler(apiKey, version))
   }
 
+  const startCliHttp = async (args: ReadonlyArray<string>, env: NodeJS.ProcessEnv) => {
+    const child = spawn(
+      process.execPath,
+      [...CLI_ARGS, "serve", "--http", "--auth-token", ALICE, ...args],
+      {
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 6_000,
+        killSignal: "SIGKILL",
+      },
+    )
+
+    const closed = once(child, "close")
+    const lines = createInterface({ input: child.stdout, terminal: false })
+    let stderr = ""
+
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk
+    })
+
+    const close = async (): Promise<void> => {
+      lines.close()
+      child.kill()
+      await closed
+    }
+
+    const line = await lines[Symbol.asyncIterator]().next()
+    const prefix = "listening on "
+
+    if (line.done || !line.value.startsWith(prefix)) {
+      await close()
+      throw new Error("CLI did not announce its HTTP endpoint: " + stderr)
+    }
+
+    return { endpoint: new URL(line.value.slice(prefix.length)), close }
+  }
+
   it("prints version and usage from the executable CLI entry point", async () => {
     await expect(cliVersion()).resolves.toBe("0.1.0")
 
@@ -1520,6 +1672,63 @@ describe("cli entry point", () => {
     },
     8_000,
   )
+
+  it("exits 2 on invalid FACTORY_CONTEXT_HEADERS without echoing its value", async () => {
+    const secret = "cli-tenant-secret"
+
+    interface CliFailure {
+      readonly code?: number
+      readonly stderr?: string
+    }
+
+    const failure = await cli([], {
+      FACTORY_CONTEXT_HEADERS: JSON.stringify({ cookie: secret }),
+    }).then(
+      () => {
+        throw new Error("CLI unexpectedly accepted invalid Context headers")
+      },
+      (error: CliFailure) => error,
+    )
+
+    expect(failure).toMatchObject({ code: 2 })
+    expect(failure.stderr).toContain("FACTORY_CONTEXT_HEADERS")
+    expect(failure.stderr).not.toContain(secret)
+  })
+
+  it("forwards CLI Context headers and bearer authentication through MCP", async () => {
+    const api = await startFakeContextApi()
+    const tenant = "toolCount"
+
+    const server = await startCliHttp(["--no-daemon"], {
+      FACTORY_API_KEY: "env-key",
+      FACTORY_CONTEXT_BASE_URL: api.baseUrl,
+      FACTORY_CONTEXT_HEADERS: JSON.stringify({ "X-Factory-Organization": tenant }),
+    })
+
+    try {
+      const request = httpClient(
+        { url: server.endpoint.origin, path: server.endpoint.pathname },
+        ALICE,
+      )
+
+      expect(
+        toolValue(await call(request, "tool_call", { name: "context_list_spaces", arguments: {} })),
+      ).toEqual({ items: [] })
+      expect(toolValue(await call(request, "server_info"))).toMatchObject({
+        toolCount: expect.any(Number),
+      })
+
+      const recorded = api.requests.find(
+        (recordedRequest) => recordedRequest.route === "GET /api/context/spaces",
+      )
+
+      expect(recorded?.headers.authorization).toBe("Bearer env-key")
+      expect(recorded?.headers["x-factory-organization"]).toBe(tenant)
+    } finally {
+      await server.close()
+      await api.close()
+    }
+  }, 8_000)
 
   it("passes the CLI Factory key to local sessions without widening the child environment", async () => {
     const expectedKey = "env-key"

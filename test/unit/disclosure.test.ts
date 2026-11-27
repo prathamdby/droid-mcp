@@ -355,6 +355,412 @@ describe("disclosure", () => {
         Option.some([{ [`field with ${REDACTED}`]: 1, plain: 2 }]),
       )
     })
+
+    it("preserves fixed protocol keys while scrubbing extension member names", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({
+                  value: {
+                    items: [],
+                    note: "echo seed-value-xyz",
+                    "extension seed-value-xyz": "visible",
+                    token: "drop-me",
+                  },
+                }),
+                sensitiveValues: ["seed-value-xyz"],
+                jsonProtection: { fixedKeys: ["items", "note"] },
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(releasedJson(released)).toEqual(
+        Option.some({
+          items: [],
+          note: `echo ${REDACTED}`,
+          [`extension ${REDACTED}`]: "visible",
+        }),
+      )
+    })
+
+    it("keeps atomic protocol scalars unchanged while scrubbing free text", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({
+                  value: {
+                    id: "opaque-identifier",
+                    createdAt: "2026-11-27T00:00:00.000Z",
+                    name: "tenant seed-value-xyz",
+                  },
+                }),
+                sensitiveValues: ["seed-value-xyz"],
+                jsonProtection: {
+                  fixedKeys: ["id", "createdAt", "name"],
+                  atomicKeys: ["id", "createdAt"],
+                },
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(releasedJson(released)).toEqual(
+        Option.some({
+          id: "opaque-identifier",
+          createdAt: "2026-11-27T00:00:00.000Z",
+          name: `tenant ${REDACTED}`,
+        }),
+      )
+    })
+
+    it("scopes atomic treatment to the exact nested protocol position", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({
+                  value: {
+                    id: "root-identifier",
+                    file: { id: "seed-value-xyz", fileId: "file-identifier" },
+                  },
+                }),
+                sensitiveValues: ["seed-value-xyz"],
+                jsonProtection: {
+                  fixedKeys: ["id", "file"],
+                  atomicKeys: ["id"],
+                  members: {
+                    file: { fixedKeys: ["fileId"], atomicKeys: ["fileId"] },
+                  },
+                },
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(releasedJson(released)).toEqual(
+        Option.some({
+          id: "root-identifier",
+          file: { id: REDACTED, fileId: "file-identifier" },
+        }),
+      )
+    })
+
+    it("refuses release when a protected value occupies an atomic protocol field", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({
+                  value: { id: "opaque-seed-value-xyz", name: "visible" },
+                }),
+                sensitiveValues: ["seed-value-xyz"],
+                jsonProtection: { fixedKeys: ["id", "name"], atomicKeys: ["id"] },
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const error = expectFailure(exit)
+
+      expect(Predicate.isTagged("DisclosureRefused")(error)).toBe(true)
+
+      if (Predicate.isTagged("DisclosureRefused")(error)) {
+        expect(error.reason).toBe("protected-atomic-field")
+      }
+    })
+
+    it("refuses release when a protected value occupies a root atomic scalar", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({ value: "cursor-seed-value-xyz" }),
+                sensitiveValues: ["seed-value-xyz"],
+                jsonProtection: { atomic: true },
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const error = expectFailure(exit)
+
+      expect(Predicate.isTagged("DisclosureRefused")(error)).toBe(true)
+
+      if (Predicate.isTagged("DisclosureRefused")(error)) {
+        expect(error.reason).toBe("protected-atomic-field")
+      }
+    })
+
+    it("does not let extension members inherit atomic treatment by reusing a protocol key", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({
+                  value: { extension: { id: "seed-value-xyz", note: "visible" } },
+                }),
+                sensitiveValues: ["seed-value-xyz"],
+                jsonProtection: { fixedKeys: ["id"], atomicKeys: ["id"] },
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(releasedJson(released)).toEqual(
+        Option.some({ extension: { id: REDACTED, note: "visible" } }),
+      )
+    })
+
+    it("refuses revalidation when tightening later reaches an atomic protocol field", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            const released = yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({
+                  value: { id: "opaque-fresh-key-secret", note: "safe" },
+                }),
+                jsonProtection: { fixedKeys: ["id", "note"], atomicKeys: ["id"] },
+              },
+              audience,
+            )
+
+            yield* api.tightenPolicy(["fresh-key-secret"])
+            const current = yield* api.audience("client", "recipient-1")
+
+            return yield* api.revalidate(released, current)
+          }),
+        ),
+      )
+
+      const error = expectFailure(exit)
+
+      expect(error._tag).toBe("DisclosureRefused")
+    })
+  })
+
+  describe("unredactable scalars", () => {
+    it("refuses release when a protected value appears in a numeric scalar", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({ value: { count: 123456, note: "visible" } }),
+                sensitiveValues: ["123"],
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const error = expectFailure(exit)
+
+      expect(Predicate.isTagged("DisclosureRefused")(error)).toBe(true)
+
+      if (Predicate.isTagged("DisclosureRefused")(error)) {
+        expect(error.reason).toBe("protected-unredactable-scalar")
+      }
+    })
+
+    it("does not amplify redaction by rescanning inserted markers", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({ value: { note: "E" } }),
+                sensitiveValues: ["E", "R", "D", "A", "C", "T"],
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(releasedJson(released)).toEqual(Option.some({ note: REDACTED }))
+    })
+
+    it("merges overlapping protected ranges instead of exposing a suffix fragment", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({ value: { note: "abc" } }),
+                sensitiveValues: ["ab", "bc"],
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(releasedJson(released)).toEqual(Option.some({ note: REDACTED }))
+    })
+
+    it("merges dense adjacent matches without materializing every match range", () => {
+      const dense = "a".repeat(2 * 1024 * 1024)
+
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({ value: { note: dense } }),
+                sensitiveValues: ["a"],
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(releasedJson(released)).toEqual(Option.some({ note: REDACTED }))
+    })
+
+    it("scans long near-matches without retrying their prefix at every position", () => {
+      const needle = "a".repeat(4_096) + "b"
+      const dense = ("a".repeat(4_096) + "c").repeat(475)
+
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({ value: { note: dense } }),
+                sensitiveValues: [needle],
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(releasedJson(released)).toEqual(Option.some({ note: dense }))
+    })
+
+    it("uses one compiled matcher across many short leaves", () => {
+      const secret = "a".repeat(4_096) + "b"
+      const value: { [key: string]: string } = {}
+
+      for (let index = 0; index < 30_000; index += 1) {
+        value["key-" + String(index)] = "value-" + String(index)
+      }
+
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              {
+                payload: ReleasePayload.JsonValue({ value }),
+                sensitiveValues: [secret],
+              },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(Option.isSome(releasedJson(released))).toBe(true)
+    })
+
+    it("handles a large minted-value set as a typed release outcome", () => {
+      const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+
+      const token = (index: number): string =>
+        alphabet[Math.floor(index / 4_096) % 64] +
+        alphabet[Math.floor(index / 64) % 64] +
+        alphabet[index % 64]
+
+      const items = Array.from({ length: 140_000 }, (_, index) => ({
+        apiKey: { value: token(index) },
+      }))
+
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            return yield* api.release(
+              { payload: ReleasePayload.JsonValue({ value: items }) },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+      const json = Option.getOrThrow(releasedJson(released))
+
+      expect(Array.isArray(json) ? json.length : 0).toBe(140_000)
+    })
   })
 
   describe("media", () => {
@@ -550,6 +956,52 @@ describe("disclosure", () => {
       expect(releasedJson(revalidated)).toEqual(
         Option.some({ note: `remember ${REDACTED}`, other: 1 }),
       )
+    })
+
+    it("stamps the tightened revision actually enforced for a stale audience", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            yield* api.tightenPolicy(["late-secret"])
+
+            return yield* api.release(
+              { payload: ReleasePayload.JsonValue({ value: { note: "late-secret" } }) },
+              audience,
+            )
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(released.policyRevision).toBe(1)
+      expect(releasedJson(released)).toEqual(Option.some({ note: REDACTED }))
+    })
+
+    it("snapshots the policy when a delayed release effect runs", () => {
+      const exit = run(
+        withDisclosure((api) =>
+          Effect.gen(function* () {
+            const audience = yield* api.audience("client", "recipient-1")
+
+            const delayed = api.release(
+              { payload: ReleasePayload.JsonValue({ value: { note: "delayed-secret" } }) },
+              audience,
+            )
+
+            yield* api.tightenPolicy(["delayed-secret"])
+
+            return yield* delayed
+          }),
+        ),
+      )
+
+      const released = expectSuccess(exit)
+
+      expect(released.policyRevision).toBe(1)
+      expect(releasedJson(released)).toEqual(Option.some({ note: REDACTED }))
     })
 
     it("refuses previously released media that matches a tightened policy", () => {
@@ -750,7 +1202,7 @@ describe("scrubStream", () => {
     const joined = emitted.join("")
 
     expect(joined).not.toContain("aa")
-    expect(joined).toBe("[REDACTED]a")
+    expect(joined).toBe("[REDACTED]")
   })
 
   it("releases an innocent partial prefix at flush", () => {
@@ -773,7 +1225,15 @@ describe("scrubStream", () => {
     const joined = emitted.join("")
 
     expect(joined).not.toContain("aa")
-    expect(joined).toBe("[REDACTED]a")
+    expect(joined).toBe("[REDACTED]")
+  })
+
+  it("merges adjacent matches across push boundaries exactly", () => {
+    const stream = streamOf(["ab", "cd"])
+
+    expect(stream.push("ab")).toBe("")
+    expect(stream.push("cd")).toBe("")
+    expect(stream.flush()).toBe("[REDACTED]")
   })
 
   it("tracks values protected after the stream was created", () => {

@@ -70,6 +70,14 @@ const MODULE_SPECS: ReadonlyArray<readonly [string, ModuleSpec]> = [
     ),
   ],
   [
+    "context-headers",
+    spec(
+      0,
+      "how operator-supplied Context header names and values are validated, normalized and reserved before transport binding",
+      [],
+    ),
+  ],
+  [
     "workspace",
     spec(
       1,
@@ -168,7 +176,15 @@ const MODULE_SPECS: ReadonlyArray<readonly [string, ModuleSpec]> = [
     spec(
       3,
       "which Context operations exist at the configured origin and how spaces, documents and session records are bound",
-      ["capabilities", "authority", "caller", "disclosure", "custody", "guidance"],
+      [
+        "capabilities",
+        "authority",
+        "caller",
+        "disclosure",
+        "custody",
+        "guidance",
+        "context-headers",
+      ],
     ),
   ],
   [
