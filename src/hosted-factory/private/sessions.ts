@@ -18,6 +18,7 @@ import {
   hostedTransport,
   readOnlyAnnotations,
   schemaOf,
+  join,
   segment,
   writeAnnotations,
 } from "./kit.ts"
@@ -38,7 +39,11 @@ const HOSTED =
 
 const SESSIONS = "/api/v0/sessions"
 
-const sessionPath = (sessionId: string): string => SESSIONS + "/" + segment(sessionId)
+const sessionPath = (sessionId: string): string | undefined => {
+  const encoded = segment(sessionId)
+
+  return encoded === undefined ? undefined : SESSIONS + "/" + encoded
+}
 
 const sessionsTarget: TargetRef = { kind: "hosted", id: "remote-sessions" }
 
@@ -435,7 +440,7 @@ export const remoteSessionBinders = (ctx: OperationContext): ReadonlyArray<BindO
     perform: (input) =>
       jsonOutcome(transport, "rest_get_remote_session_message", {
         method: "GET",
-        path: sessionPath(input.sessionId) + "/messages/" + segment(input.messageId),
+        path: join(sessionPath(input.sessionId), "/messages/", segment(input.messageId)),
         query: queryEntries([["computerId", input.computerId]]),
       }),
   })

@@ -50,16 +50,15 @@ const EnvelopeFrameSchema = Schema.Struct({
 export type EnvelopeFrame = typeof EnvelopeFrameSchema.Type
 
 export const decodeFrame = (line: string): EnvelopeFrame | undefined => {
-  let parsed: Schema.Json
+  let parsed: Schema.Json | undefined
 
   try {
-    // SAFETY: `JSON.parse` of a wire line produces exactly the JSON value
-    // domain — null, booleans, numbers, strings, arrays and plain objects —
-    // which is what `Schema.Json` denotes.
-    parsed = JSON.parse(line) as Schema.Json
+    parsed = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Json)(JSON.parse(line)))
   } catch {
     return undefined
   }
+
+  if (parsed === undefined) return undefined
 
   return Option.getOrUndefined(Schema.decodeUnknownOption(EnvelopeFrameSchema)(parsed))
 }

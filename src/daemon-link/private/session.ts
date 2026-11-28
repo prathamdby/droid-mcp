@@ -12,12 +12,10 @@ import * as Exit from "effect/Exit"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
+import { JSONRPC_VERSION, LEGACY_FACTORY_API_VERSION } from "../../factory-dialect/index.ts"
 import type { DaemonEndpoint } from "./host.ts"
 import { connect } from "./ws.ts"
 import type { WsConnection } from "./ws.ts"
-
-export const JSONRPC_VERSION = "2.0"
-export const LEGACY_FACTORY_API_VERSION = "1.0.0"
 
 export type ConnectErrorKind =
   | "dial_failed"
@@ -118,16 +116,15 @@ export const protocolMismatchOf = (
 }
 
 const parseFrame = (text: string) => {
-  let parsed: Schema.Json
+  let parsed: Schema.Json | undefined
 
   try {
-    // SAFETY: `JSON.parse` of a wire frame produces exactly the JSON value
-    // domain — null, booleans, numbers, strings, arrays and plain objects;
-    // anything outside that fails the envelope decode below.
-    parsed = JSON.parse(text) as Schema.Json
+    parsed = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Json)(JSON.parse(text)))
   } catch {
     return undefined
   }
+
+  if (parsed === undefined) return undefined
 
   return Option.getOrUndefined(Schema.decodeUnknownOption(ResponseEnvelopeSchema)(parsed))
 }

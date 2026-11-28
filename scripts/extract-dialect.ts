@@ -744,8 +744,6 @@ for (const [method, entry] of wanted) {
   }
 
   if (entry.direction === "notification" || entry.direction === "server_request") {
-    // Inbound bindings carry no result codec; validation is hand-written in
-    // the dialect runtime because the notification shapes are open unions.
     extracted.set(method, { params: EMPTY_OBJECT, result: EMPTY_RESULT })
 
     continue

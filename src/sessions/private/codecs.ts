@@ -4,7 +4,6 @@
  * emitted as null.
  */
 import * as Effect from "effect/Effect"
-import * as Match from "effect/Match"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
@@ -12,7 +11,7 @@ import type { AutonomyLevel } from "../../authority/index.ts"
 import { InvalidInput } from "../../capabilities/index.ts"
 import type { JsonSchemaObject } from "../../capabilities/index.ts"
 import { decisionRefLabel, PERMISSION_OUTCOMES } from "../../decisions/index.ts"
-import type { DecisionView, PermissionOutcome } from "../../decisions/index.ts"
+import type { DecisionView } from "../../decisions/index.ts"
 import { releasedJson } from "../../disclosure/index.ts"
 import type { Released } from "../../disclosure/index.ts"
 import type {
@@ -75,28 +74,6 @@ const WorktreeBranchModeSchema = Schema.Literals(["copy", "existing"])
 // ---------------------------------------------------------------------------
 // Permission outcome autonomy requirement
 // ---------------------------------------------------------------------------
-
-/**
- * The autonomy level a permission outcome would establish. Matches
- * `decisions`'s enforcement table so the capabilities authority gate denies
- * excess outcomes before `perform` executes.
- */
-export const permissionOutcomeRequirement = (outcome: PermissionOutcome): AutonomyLevel =>
-  Match.value(outcome).pipe(
-    Match.when("proceed_once", () => "off" as const),
-    Match.when("proceed_always", () => "off" as const),
-    Match.when("proceed_edit", () => "off" as const),
-    Match.when("cancel", () => "off" as const),
-    Match.when("proceed_auto_run_low", () => "low" as const),
-    Match.when("proceed_new_session_low", () => "low" as const),
-    Match.when("proceed_auto_run_medium", () => "medium" as const),
-    Match.when("proceed_new_session_medium", () => "medium" as const),
-    Match.when("proceed_auto_run", () => "high" as const),
-    Match.when("proceed_auto_run_high", () => "high" as const),
-    Match.when("proceed_new_session", () => "high" as const),
-    Match.when("proceed_new_session_high", () => "high" as const),
-    Match.exhaustive,
-  )
 
 // ---------------------------------------------------------------------------
 // Generic decoder helper

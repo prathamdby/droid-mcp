@@ -126,7 +126,7 @@ export const Kinds = Schema.NonEmptyArray(Schema.Literals(["text", "binary"]))
 export const MaxBytes = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: BATCH_MAX_BYTES }))
 
 // ---------------------------------------------------------------------------
-// Input cross-field checks (exactly the legacy preflight refusals)
+// Input cross-field checks
 // ---------------------------------------------------------------------------
 
 export const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf8")

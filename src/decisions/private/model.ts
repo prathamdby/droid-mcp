@@ -10,46 +10,26 @@ import type * as Effect from "effect/Effect"
 import type * as Schema from "effect/Schema"
 
 import type { AutonomyLevel } from "../../authority/index.ts"
+import { PERMISSION_OUTCOMES as protocolOutcomes } from "../../factory-dialect/index.ts"
+import type { PermissionOutcome as ProtocolPermissionOutcome } from "../../factory-dialect/index.ts"
 
-// ---------------------------------------------------------------------------
-// Permission outcomes
-// ---------------------------------------------------------------------------
+export type PermissionOutcome = ProtocolPermissionOutcome
 
-/**
- * Permission outcomes a permission challenge can offer. The list mirrors the
- * interactive permission contract: one-shot outcomes, persistent leveled
- * aliases and a cancel.
- */
-export const PERMISSION_OUTCOMES = [
-  "proceed_once",
-  "proceed_always",
-  "proceed_auto_run",
-  "proceed_auto_run_low",
-  "proceed_auto_run_medium",
-  "proceed_auto_run_high",
-  "proceed_new_session",
-  "proceed_new_session_low",
-  "proceed_new_session_medium",
-  "proceed_new_session_high",
-  "proceed_edit",
-  "cancel",
-] as const
-
-export type PermissionOutcome = (typeof PERMISSION_OUTCOMES)[number]
+export const PERMISSION_OUTCOMES: ReadonlyArray<PermissionOutcome> = protocolOutcomes
 
 /**
  * The autonomy an outcome would establish, where the outcome itself names
- * one. One-shot outcomes (`proceed_once`, `proceed_always`, `proceed_edit`,
- * `cancel`) establish nothing beyond the answer, so they require no raised
- * autonomy. The unlevelled persistent outcomes (`proceed_auto_run`,
- * `proceed_new_session`) state no level, so nothing below `high` can prove
- * they stay bounded.
+ * one. One-shot outcomes establish nothing beyond the answer. Unlevelled
+ * persistent outcomes state no level, so nothing below `high` can prove they
+ * stay bounded.
  */
 export const outcomeRequirement = (outcome: PermissionOutcome): AutonomyLevel => {
   switch (outcome) {
     case "proceed_once":
     case "proceed_always":
+    case "proceed_always_file":
     case "proceed_edit":
+    case "proceed_report_false_positive":
     case "cancel":
       return "off"
     case "proceed_auto_run_low":
@@ -62,6 +42,8 @@ export const outcomeRequirement = (outcome: PermissionOutcome): AutonomyLevel =>
     case "proceed_auto_run_high":
     case "proceed_new_session":
     case "proceed_new_session_high":
+    case "proceed_always_tools":
+    case "proceed_always_server":
       return "high"
   }
 }

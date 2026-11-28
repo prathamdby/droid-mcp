@@ -79,6 +79,23 @@ describe("factory-dialect", () => {
   })
 
   describe("protocol constants", () => {
+    it("decodes a fork result only when it carries newSessionId", () => {
+      const exit = run(
+        withDialect((api) =>
+          Effect.gen(function* () {
+            const binding = yield* api.reviewedBinding("droid.fork_session")
+
+            return {
+              reviewed: Option.isSome(binding.decodeResult({ newSessionId: "forked-session" })),
+              legacy: Option.isSome(binding.decodeResult({ sessionId: "forked-session" })),
+            }
+          }),
+        ),
+      )
+
+      expect(expectSuccess(exit)).toEqual({ reviewed: true, legacy: false })
+    })
+
     it("exposes the wire constants", () => {
       expect(JSONRPC_VERSION).toBe("2.0")
       expect(LEGACY_FACTORY_API_VERSION).toBe("1.0.0")

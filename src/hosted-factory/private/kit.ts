@@ -42,7 +42,7 @@ import {
   scrubText,
 } from "./http.ts"
 import type { FetchLike, HostedHttpRequest, HostedTransport, SendFailure } from "./http.ts"
-import { isJsonObject, JsonBody, unicodeProblem } from "./wire.ts"
+import { encodePathSegment, isJsonObject, JsonBody, unicodeProblem } from "./wire.ts"
 
 // ---------------------------------------------------------------------------
 // Installation view the operations close over
@@ -186,15 +186,28 @@ interface ExchangeReceived {
   readonly contentType: string | null
 }
 
+type HostedRequest = Omit<HostedHttpRequest, "acceptBinary" | "path"> & {
+  readonly path: string | undefined
+  readonly acceptBinary?: boolean
+}
+
 /** One round trip, mapping transport and status onto the typed failure vocabulary. */
 export const exchange = (
   transport: HostedTransport,
   operation: string,
-  request: Omit<HostedHttpRequest, "acceptBinary"> & { readonly acceptBinary?: boolean },
-): Effect.Effect<ExchangeReceived, Failure> =>
-  transport.secretValues().pipe(
+  request: HostedRequest,
+): Effect.Effect<ExchangeReceived, Failure> => {
+  if (request.path === undefined) {
+    return Effect.fail(
+      new InvalidInput({ message: operation + " refused an unencodable path segment" }),
+    )
+  }
+
+  const path = request.path
+
+  return transport.secretValues().pipe(
     Effect.flatMap((secrets) =>
-      transport.send(request, RESPONSE_MAX_BYTES).pipe(
+      transport.send({ ...request, path }, RESPONSE_MAX_BYTES).pipe(
         Effect.mapError((failure) => sendFailure(operation, failure)),
         Effect.flatMap((received) =>
           received.status >= 200 && received.status < 300
@@ -204,6 +217,7 @@ export const exchange = (
       ),
     ),
   )
+}
 
 /**
  * Reads one successful JSON exchange into the result vocabulary. A `204` or
@@ -213,7 +227,7 @@ export const exchange = (
 export const jsonOutcome = (
   transport: HostedTransport,
   operation: string,
-  request: Omit<HostedHttpRequest, "acceptBinary">,
+  request: HostedRequest,
   options?: { readonly emptyResponse?: boolean },
 ): Effect.Effect<HostedOutcome, Failure> =>
   Effect.flatMap(
@@ -254,7 +268,7 @@ const isJsonContentType = (contentType: string | null): boolean => {
 export const jsonOrBinaryOutcome = (
   transport: HostedTransport,
   operation: string,
-  request: Omit<HostedHttpRequest, "acceptBinary">,
+  request: HostedRequest,
 ): Effect.Effect<HostedOutcome, Failure> =>
   Effect.flatMap(
     exchange(transport, operation, { ...request, acceptBinary: true }),
@@ -378,8 +392,10 @@ export const discoverySchema = (codec: Schema.Constraint): JsonSchemaObject => {
   )
 }
 
-/** A segment already validated as one nested id, encoded for the path. */
-export const segment = (value: string): string => encodeURIComponent(value)
+export const segment = (value: string): string | undefined => encodePathSegment(value)
+
+export const join = (...parts: ReadonlyArray<string | undefined>): string | undefined =>
+  parts.every((part) => part !== undefined) ? parts.join("") : undefined
 
 // ---------------------------------------------------------------------------
 // Definition assembly helper

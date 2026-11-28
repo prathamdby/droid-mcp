@@ -147,7 +147,7 @@ export type PeerNotice = Data.TaggedEnum<{
   readonly PermissionChallenge: {
     readonly peerRequestId: string
     readonly toolUses: Schema.Json
-    readonly options: Schema.Json
+    readonly options: Schema.Json | undefined
     readonly endpoint: ChallengeEndpoint
   }
   readonly QuestionChallenge: {
@@ -387,10 +387,7 @@ const ResponseFrameSchema = Schema.Struct({
 
 const parseBytes = (bytes: Uint8Array): Option.Option<Schema.Json> => {
   try {
-    // SAFETY: `JSON.parse` of a wire frame produces exactly the JSON value
-    // domain — null, booleans, numbers, strings, arrays and plain objects —
-    // which is what `Schema.Json` denotes.
-    return Option.some(JSON.parse(decoder.decode(bytes)) as Schema.Json)
+    return Schema.decodeUnknownOption(Schema.Json)(JSON.parse(decoder.decode(bytes)))
   } catch {
     return Option.none()
   }
@@ -535,9 +532,7 @@ const QuestionParamsSchema = Schema.Struct({
 const OptionsParamsSchema = Schema.Struct({
   title: Schema.optional(Schema.String),
   rows: Schema.optional(Schema.Json),
-  options: Schema.optional(Schema.Json),
   multi: Schema.optional(Schema.Boolean),
-  multiSelect: Schema.optional(Schema.Boolean),
 })
 
 const kindOfServerMethod = (method: string): ChallengeKind | undefined => {
@@ -628,18 +623,16 @@ const sessionDeltaOf = (
   }
 
   if (kind === "permission_resolved") {
+    const requestId = stringField(record, "requestId")
     const toolUses = record["toolUseIds"]
-    const singular = stringField(record, "toolUseId")
 
-    const toolUseIds = Array.isArray(toolUses)
-      ? toolUses.filter(isStringJson)
-      : singular === undefined
-        ? []
-        : [singular]
+    if (requestId === undefined || !Array.isArray(toolUses) || !toolUses.every(isStringJson)) {
+      return PeerNotice.SessionDelta({ sessionId, kind, payload: notification })
+    }
 
     return PeerNotice.ChallengeResolved({
-      peerRequestId: stringField(record, "requestId") ?? "",
-      toolUseIds,
+      peerRequestId: requestId,
+      toolUseIds: toolUses,
     })
   }
 
@@ -703,7 +696,7 @@ const noticeImpl = (
         return PeerNotice.PermissionChallenge({
           peerRequestId,
           toolUses: params?.toolUses ?? [],
-          options: params?.options ?? [],
+          options: params?.options,
           endpoint,
         })
       }
@@ -727,8 +720,8 @@ const noticeImpl = (
       return PeerNotice.OptionsChallenge({
         peerRequestId,
         title: params?.title ?? "",
-        options: params?.rows ?? params?.options ?? [],
-        multiSelect: params?.multi === true || params?.multiSelect === true,
+        options: params?.rows ?? [],
+        multiSelect: params?.multi === true,
         endpoint,
       })
     }

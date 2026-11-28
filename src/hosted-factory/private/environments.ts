@@ -26,11 +26,20 @@ import { firstIdProblem, HostedId, JsonBody, queryEntries } from "./wire.ts"
 
 const ENVIRONMENTS = "/api/v0/environments"
 
-const environmentPath = (environmentId: string): string =>
-  ENVIRONMENTS + "/" + segment(environmentId)
+const environmentPath = (environmentId: string): string | undefined => {
+  const encoded = segment(environmentId)
 
-const buildPath = (environmentId: string, buildId: string): string =>
-  environmentPath(environmentId) + "/builds/" + segment(buildId)
+  return encoded === undefined ? undefined : ENVIRONMENTS + "/" + encoded
+}
+
+const buildPath = (environmentId: string, buildId: string): string | undefined => {
+  const environment = environmentPath(environmentId)
+  const encoded = segment(buildId)
+
+  return environment === undefined || encoded === undefined
+    ? undefined
+    : environment + "/builds/" + encoded
+}
 
 const environmentsTarget: TargetRef = { kind: "hosted", id: "environments" }
 

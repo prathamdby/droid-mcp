@@ -592,10 +592,7 @@ describe("fork", () => {
     expect(outcome.kind).toBe("external")
 
     if (outcome.kind === "external") {
-      // The fake answers fork with `sessionId`, not `newSessionId`, so the
-      // module must not invent one. Either a rejected outcome or an honest
-      // external id is acceptable — but never a runnable claim.
-      expect(outcome.externalSessionId.length).toBeGreaterThan(0)
+      expect(outcome.externalSessionId).toBe("forked-session")
     }
 
     await Effect.runPromise(services.localExec.release(lease))

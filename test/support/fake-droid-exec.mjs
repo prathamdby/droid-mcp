@@ -14,9 +14,9 @@
  *   "permission:flood" asks, then emits enough tool results to evict that event
  *   "permission:flood-drop" evicts that prompt, then reuses its CLI id
  *   "permission:late" reuses one CLI id and delays the first resolution
- *   "permission:toolid" resolves with toolUseId tool-1 and no request id
- *   "permission:opaque" resolves with requestId hub-99, which is not a public id
- *   "permission:batch-ids" resolves a two-tool prompt with toolUseIds only
+ *   "permission:toolid" emits permission_resolved without requestId or toolUseIds
+ *   "permission:opaque" emits permission_resolved with an unrelated requestId and no toolUseIds
+ *   "permission:batch-ids" emits toolUseIds without a requestId
  *   "permission:queue:<n>" holds n distinct resolutions until every one is answered
  *   "permission:stale:<cap>" answers one id, fills the cap, then reuses that id
  *   "permission:ambiguous" answers two prompts that share a CLI id and tool id
@@ -560,8 +560,8 @@ const handleMessage = (text, id) => {
 
   if (text === "hello") {
     notify({ type: "create_message", message: { id: "m1", role: "assistant", content: [] } })
-    notify({ type: "tool_call", toolUseId: "tool-1", name: "Read", input: { path: "a.txt" } })
-    notify({ type: "tool_result", toolUseId: "tool-1", isError: false, result: "contents" })
+    notify({ type: "tool_call", toolUseIds: ["tool-1"], name: "Read", input: { path: "a.txt" } })
+    notify({ type: "tool_result", toolUseIds: ["tool-1"], isError: false, result: "contents" })
     notify({ type: "assistant_text_delta", messageId: "m1", blockIndex: 0, textDelta: "hi" })
     notify({ type: "assistant_text_complete", messageId: "m1", blockIndex: 0 })
     complete("completed")
@@ -682,7 +682,7 @@ const finishPrompt = (id, result) => {
         notify({
           type: "permission_resolved",
           requestId: id,
-          toolUseId: "tool-1",
+          toolUseIds: ["tool-1"],
           selectedOption: selected,
         })
       }, 350)
@@ -711,13 +711,13 @@ const finishPrompt = (id, result) => {
       notify({
         type: "permission_resolved",
         requestId: id,
-        toolUseId: "tool-1",
+        toolUseIds: ["tool-1"],
         selectedOption: selected,
       })
       notify({
         type: "permission_resolved",
         requestId: id,
-        toolUseId: "tool-1",
+        toolUseIds: ["tool-1"],
         selectedOption: selected,
       })
     } else if (resolveMode === "triple") {
@@ -731,7 +731,7 @@ const finishPrompt = (id, result) => {
       notify({
         type: "permission_resolved",
         requestId: id,
-        toolUseId: "tool-1",
+        toolUseIds: ["tool-1"],
         selectedOption: selected,
       })
     } else if (resolveMode === "evicted") {
@@ -763,14 +763,14 @@ const finishPrompt = (id, result) => {
       notify({
         type: "permission_resolved",
         requestId: "prompt-same",
-        toolUseId: "tool-1",
+        toolUseIds: ["tool-1"],
         selectedOption: selected,
       })
     } else if (resolveMode === "after-timeout" || resolveMode === "after-cancel") {
       notify({
         type: "permission_resolved",
         requestId: "prompt-same",
-        toolUseId: "tool-1",
+        toolUseIds: ["tool-1"],
         selectedOption: selected,
       })
     } else if (resolveMode === "hold") {
@@ -791,7 +791,7 @@ const finishPrompt = (id, result) => {
       heldResolutions.push({
         type: "permission_resolved",
         requestId: id,
-        toolUseId: toolByCli.get(id) ?? "tool-1",
+        toolUseIds: [toolByCli.get(id) ?? "tool-1"],
         selectedOption: selected,
       })
 
@@ -809,7 +809,7 @@ const finishPrompt = (id, result) => {
       notify({
         type: "permission_resolved",
         requestId: id,
-        toolUseId: "tool-1",
+        toolUseIds: ["tool-1"],
         selectedOption: selected,
       })
     }
@@ -825,7 +825,7 @@ const finishPrompt = (id, result) => {
       notify({
         type: "permission_resolved",
         requestId: id,
-        toolUseId: "tool-1",
+        toolUseIds: ["tool-1"],
         selectedOption: "proceed_once",
       })
     }
@@ -877,9 +877,7 @@ const router = (message) => {
 
   if (message.method === "droid.fork_session") {
     respond(message.id, {
-      sessionId: "forked-session",
-      method: message.method,
-      params: message.params ?? null,
+      newSessionId: "forked-session",
     })
 
     return
