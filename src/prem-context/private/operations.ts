@@ -230,24 +230,26 @@ const statusFailure = (operation: string, status: number, bytes: Uint8Array): Fa
 const exchange = (
   transport: ContextTransport,
   operation: string,
-  request: Omit<ContextHttpRequest, "operation">,
+  request: Omit<ContextHttpRequest, "operation" | "path"> & { readonly path: string | undefined },
   maxBytes: number,
 ): Effect.Effect<{ readonly status: number; readonly bytes: Uint8Array }, Failure> =>
-  transport.send({ operation, ...request }, maxBytes).pipe(
-    Effect.mapError((failure) => sendFailure(operation, failure)),
-    Effect.flatMap((received) =>
-      received.status >= 200 && received.status < 300
-        ? Effect.succeed(received)
-        : Effect.fail(statusFailure(operation, received.status, received.bytes)),
-    ),
-  )
+  request.path === undefined
+    ? Effect.fail(new InvalidInput({ message: operation + " refused an unencodable path segment" }))
+    : transport.send({ operation, ...request, path: request.path }, maxBytes).pipe(
+        Effect.mapError((failure) => sendFailure(operation, failure)),
+        Effect.flatMap((received) =>
+          received.status >= 200 && received.status < 300
+            ? Effect.succeed(received)
+            : Effect.fail(statusFailure(operation, received.status, received.bytes)),
+        ),
+      )
 
 /** A JSON exchange whose success body is decoded against `schema`. */
 const jsonCall = (
   transport: ContextTransport,
   operation: string,
   method: ContextHttpRequest["method"],
-  path: string,
+  path: string | undefined,
   body: Schema.Json | undefined,
   schema: Schema.Top,
   query: ReadonlyArray<readonly [string, string]> = [],
@@ -442,24 +444,40 @@ const schemaOf = (properties: { readonly [key: string]: Schema.Json }): JsonSche
 })
 
 // ---------------------------------------------------------------------------
-// Path builders (exactly the wire shape the legacy surface uses)
+// Path builders
 // ---------------------------------------------------------------------------
 
-const segment = (value: string): string => encodePathSegment(value) ?? ""
+const segment = (value: string): string | undefined => encodePathSegment(value)
 
-const spacePath = (spaceId: string): string => CONTEXT_API_PATH + "/spaces/" + segment(spaceId)
+const append = (path: string | undefined, suffix: string): string | undefined =>
+  path === undefined ? undefined : path + suffix
 
-const documentPath = (spaceId: string, documentId: string): string =>
-  spacePath(spaceId) + "/documents/" + segment(documentId)
+const spacePath = (spaceId: string): string | undefined => {
+  const encoded = segment(spaceId)
 
-const sessionPath = (spaceId: string, sessionId: string): string =>
-  spacePath(spaceId) + "/sessions/" + segment(sessionId)
+  return encoded === undefined ? undefined : CONTEXT_API_PATH + "/spaces/" + encoded
+}
 
-const filePath = (spaceId: string, fileId: string): string =>
-  spacePath(spaceId) + "/files/" + segment(fileId)
+const documentPath = (spaceId: string, documentId: string): string | undefined => {
+  const encoded = segment(documentId)
 
-const partPath = (spaceId: string, fileId: string, partIndex: number): string =>
-  filePath(spaceId, fileId) + "/parts/" + String(partIndex)
+  return encoded === undefined ? undefined : append(spacePath(spaceId), "/documents/" + encoded)
+}
+
+const sessionPath = (spaceId: string, sessionId: string): string | undefined => {
+  const encoded = segment(sessionId)
+
+  return encoded === undefined ? undefined : append(spacePath(spaceId), "/sessions/" + encoded)
+}
+
+const filePath = (spaceId: string, fileId: string): string | undefined => {
+  const encoded = segment(fileId)
+
+  return encoded === undefined ? undefined : append(spacePath(spaceId), "/files/" + encoded)
+}
+
+const partPath = (spaceId: string, fileId: string, partIndex: number): string | undefined =>
+  append(filePath(spaceId, fileId), "/parts/" + String(partIndex))
 
 // ---------------------------------------------------------------------------
 // Definition assembly helper
@@ -711,7 +729,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
         transport,
         "context_create_document",
         "POST",
-        spacePath(input.spaceId) + "/documents",
+        append(spacePath(input.spaceId), "/documents"),
         input.fileId === undefined
           ? { path: input.path, body: input.body ?? "" }
           : { path: input.path, fileId: input.fileId },
@@ -759,7 +777,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
         transport,
         "context_list_documents",
         "GET",
-        spacePath(input.spaceId) + "/documents",
+        append(spacePath(input.spaceId), "/documents"),
         undefined,
         pageOf(MetadataReply),
         queryOf([
@@ -831,7 +849,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
         transport,
         "context_get_document_by_path",
         "GET",
-        spacePath(input.spaceId) + "/documents/by-path",
+        append(spacePath(input.spaceId), "/documents/by-path"),
         undefined,
         DocumentReply,
         [["path", input.path]],
@@ -1018,7 +1036,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
         transport,
         "context_create_file",
         "POST",
-        spacePath(input.spaceId) + "/files",
+        append(spacePath(input.spaceId), "/files"),
         { contentType: input.contentType, sizeBytes: input.sizeBytes, sha256: input.sha256 },
         UploadReply,
       ),
@@ -1067,7 +1085,11 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
     target: (input) => spaceTarget(input.spaceId),
     demand: writeDemand,
     perform: (input, transport) => {
-      const content = decodePart(input.contentBase64) ?? new Uint8Array()
+      const content = decodePart(input.contentBase64)
+
+      if (content === undefined) {
+        return Effect.fail(new InvalidInput({ message: "contentBase64 is not canonical base64" }))
+      }
 
       return exchange(
         transport,
@@ -1285,7 +1307,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
         transport,
         "context_list_sessions",
         "GET",
-        spacePath(input.spaceId) + "/sessions",
+        append(spacePath(input.spaceId), "/sessions"),
         undefined,
         pageOf(SessionReply),
         queryOf([
@@ -1342,7 +1364,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
         transport,
         "context_append_session",
         "POST",
-        sessionPath(input.spaceId, input.sessionId) + "/append",
+        append(sessionPath(input.spaceId, input.sessionId), "/append"),
         { startSequence: input.startSequence, contentJsonl: input.contentJsonl },
         AppendReply,
       ),
@@ -1400,7 +1422,7 @@ export const contextDefinitions = (ctx: OperationContext): ReadonlyArray<BindOpe
           "context_read_session_records",
           {
             method: "GET",
-            path: sessionPath(input.spaceId, input.sessionId) + "/records",
+            path: append(sessionPath(input.spaceId, input.sessionId), "/records"),
             query: queryOf([
               ["afterSequence", input.afterSequence],
               ["limit", input.limit],

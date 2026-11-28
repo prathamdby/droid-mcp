@@ -1928,14 +1928,20 @@ describe("additional contract edge cases", () => {
 
   it.each<{
     label: string
-    options: Schema.Json
+    options: Schema.Json | undefined
     expected: ReadonlyArray<string>
   }>([
     { label: "a non-array", options: "proceed_once", expected: [] },
     { label: "a malformed entry", options: ["cancel", { value: 1 }], expected: [] },
     { label: "only unknown outcomes", options: ["unknown"], expected: [] },
     { label: "mixed known and unknown outcomes", options: ["cancel", "unknown"], expected: [] },
-    { label: "the omitted-options default", options: [], expected: PERMISSION_OUTCOMES },
+    {
+      label: "a reviewed file-scoped outcome",
+      options: ["proceed_always_file"],
+      expected: ["proceed_always_file"],
+    },
+    { label: "omitted options", options: undefined, expected: PERMISSION_OUTCOMES },
+    { label: "an explicit empty list", options: [], expected: [] },
   ])("offers only the expected permission outcomes for $label", async ({ options, expected }) => {
     const services = makeServices()
     const caller = admitCaller(services, "malformed-permission-options")

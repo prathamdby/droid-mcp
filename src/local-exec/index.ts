@@ -48,6 +48,7 @@ import {
   EXEC_ARGS,
   EXEC_METHOD,
   PeerNotice,
+  LEGACY_FACTORY_API_VERSION,
   SDK_PROTOCOL_VERSION,
 } from "../factory-dialect/index.ts"
 import { Workspaces } from "../workspace/index.ts"
@@ -236,7 +237,7 @@ export type LocalNotice = Data.TaggedEnum<{
     readonly workRef: LocalWorkRef | undefined
     readonly peerRequestId: string
     readonly toolUses: Schema.Json
-    readonly options: Schema.Json
+    readonly options: Schema.Json | undefined
     readonly reply: (payload: Schema.Json) => Effect.Effect<void, ExecRejected>
   }
   /** The peer asks free-form questions. */
@@ -760,7 +761,9 @@ export const localExecLayer = (
             PermissionChallenge: (variant) =>
               Effect.gen(function* () {
                 const toolUses = yield* scrubbed(variant.toolUses)
-                const challengeOptions = yield* scrubbed(variant.options)
+
+                const challengeOptions =
+                  variant.options === undefined ? undefined : yield* scrubbed(variant.options)
 
                 return LocalNotice.PermissionChallenge({
                   leaseId: state.leaseId,
@@ -1079,7 +1082,10 @@ export const localExecLayer = (
 
           const core = openSessionCore({
             transport,
-            version: { protocolVersion: SDK_PROTOCOL_VERSION, legacyApiVersion: "1.0.0" },
+            version: {
+              protocolVersion: SDK_PROTOCOL_VERSION,
+              legacyApiVersion: LEGACY_FACTORY_API_VERSION,
+            },
             dialect,
             emit: (notice) => {
               const state = stateSlot.current
@@ -1420,45 +1426,44 @@ export const localExecLayer = (
 
           if (request.title !== undefined) params.title = request.title
 
+          const bound = yield* dialect.reviewedBinding("droid.fork_session").pipe(
+            Effect.mapError(
+              () =>
+                new ExecFacetUnsupported({
+                  message: "the dialect has no reviewed binding for a required method",
+                  facet: "fork",
+                }),
+            ),
+          )
+
           return yield* roundTrip(
             state,
             "droid.fork_session",
             params,
             nextCorrelationId(state.leaseId),
-            (result) =>
-              Effect.gen(function* () {
-                if (!isRecordJson(result)) {
-                  return yield* Effect.fail(
-                    new ExecRejected({
-                      message: "the fork reply was malformed",
-                      operation: "droid.fork_session",
-                    }),
-                  )
-                }
+            (result) => {
+              const decoded = Option.getOrUndefined(bound.decodeResult(result))
 
-                const reviewed = result["newSessionId"]
-                const legacy = result["sessionId"]
+              const newSessionId =
+                decoded !== undefined && isRecordJson(decoded) ? decoded["newSessionId"] : undefined
 
-                const newSessionId = isStringJson(reviewed)
-                  ? reviewed
-                  : isStringJson(legacy)
-                    ? legacy
-                    : undefined
+              if (!isStringJson(newSessionId)) {
+                return Effect.fail(
+                  new ExecRejected({
+                    message: "the fork reply does not match the reviewed result schema",
+                    operation: "droid.fork_session",
+                  }),
+                )
+              }
 
-                if (newSessionId === undefined) {
-                  return yield* Effect.fail(
-                    new ExecRejected({
-                      message: "the fork reply carried no session id",
-                      operation: "droid.fork_session",
-                    }),
-                  )
-                }
-
-                // The fork creates a distinct session. This lease is bound to
-                // the original session id and never becomes the fork, so the
-                // forked session is never claimed runnable: it is external.
-                return { kind: "external" as const, externalSessionId: newSessionId }
-              }),
+              // The fork creates a distinct session. This lease is bound to
+              // the original session id and never becomes the fork, so the
+              // forked session is never claimed runnable: it is external.
+              return Effect.succeed({
+                kind: "external" as const,
+                externalSessionId: newSessionId,
+              })
+            },
           )
         })
 

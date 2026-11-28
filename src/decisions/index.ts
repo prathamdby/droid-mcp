@@ -43,7 +43,7 @@ import {
   type PermissionOutcome,
 } from "./private/model.ts"
 
-export { PERMISSION_OUTCOMES }
+export { outcomeRequirement, PERMISSION_OUTCOMES }
 
 export type {
   ChallengeInput,

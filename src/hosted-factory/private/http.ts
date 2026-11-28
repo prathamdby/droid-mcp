@@ -11,6 +11,7 @@
 import { Buffer } from "node:buffer"
 
 import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
 import * as Predicate from "effect/Predicate"
 import * as Schema from "effect/Schema"
 
@@ -256,14 +257,12 @@ export const buildTransport = (origin: string, options: TransportOptions): Hoste
 // Reply decoding helpers
 // ---------------------------------------------------------------------------
 
-/** Parses bytes as JSON without exception-driven control flow. */
+/** Parses bytes as checked JSON without exception-driven control flow. */
 export const decodeReplyJson = (bytes: Uint8Array): Schema.Json | undefined => {
   try {
-    // SAFETY: JSON.parse returns an unchecked value; the cast only re-labels
-    // it as Schema.Json, which by definition spans every JSON value, so no
-    // invariant is violated — the value is re-checked structurally wherever
-    // members are read.
-    return JSON.parse(new TextDecoder().decode(bytes)) as Schema.Json
+    return Option.getOrUndefined(
+      Schema.decodeUnknownOption(Schema.Json)(JSON.parse(new TextDecoder().decode(bytes))),
+    )
   } catch {
     return undefined
   }

@@ -18,6 +18,7 @@ import {
   hostedTransport,
   readOnlyAnnotations,
   schemaOf,
+  join,
   segment,
   writeAnnotations,
 } from "./kit.ts"
@@ -38,7 +39,11 @@ const UNVERIFIED =
 
 const WIKI = "/api/v0/wiki"
 
-const wikiRunPath = (wikiRunId: string): string => WIKI + "/" + segment(wikiRunId)
+const wikiRunPath = (wikiRunId: string): string | undefined => {
+  const encoded = segment(wikiRunId)
+
+  return encoded === undefined ? undefined : WIKI + "/" + encoded
+}
 
 const wikiTarget: TargetRef = { kind: "hosted", id: "wiki" }
 
@@ -65,6 +70,8 @@ const repoUrlProblem = (name: string, value: string | undefined): string | undef
   if (value === undefined) return undefined
 
   if (value.length === 0) return name + " must not be empty"
+
+  if (value === "." || value === "..") return name + " must not be . or .."
 
   if (!isWellFormed(value)) return name + " is not well-formed Unicode"
 
@@ -246,7 +253,7 @@ export const wikiBinders = (ctx: OperationContext): ReadonlyArray<BindOperation>
     perform: (input) =>
       jsonOutcome(transport, "rest_get_wiki_page", {
         method: "GET",
-        path: wikiRunPath(input.wikiRunId) + "/pages/" + segment(input.pageId),
+        path: join(wikiRunPath(input.wikiRunId), "/pages/", segment(input.pageId)),
         query: [],
       }),
   })
@@ -340,7 +347,7 @@ export const wikiBinders = (ctx: OperationContext): ReadonlyArray<BindOperation>
     perform: (input) =>
       jsonOutcome(transport, "rest_list_wiki_history", {
         method: "GET",
-        path: WIKI + "/history/" + segment(input.repoUrl),
+        path: join(WIKI, "/history/", segment(input.repoUrl)),
         query: [],
       }),
   })

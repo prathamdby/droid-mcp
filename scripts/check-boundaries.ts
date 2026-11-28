@@ -136,7 +136,7 @@ const MODULE_SPECS: ReadonlyArray<readonly [string, ModuleSpec]> = [
     spec(
       2,
       "how outstanding offers are tracked, validated against the original choices and resolved with one-winner reply rights",
-      ["authority", "disclosure"],
+      ["factory-dialect", "authority", "disclosure"],
     ),
   ],
   [

@@ -51,7 +51,6 @@ const QuestionItemSchema = Schema.Struct({
   index: Schema.Number,
   topic: Schema.optional(Schema.String),
   question: Schema.optional(Schema.String),
-  text: Schema.optional(Schema.String),
   options: Schema.optional(Schema.Array(Schema.Json)),
   multiSelect: Schema.optional(Schema.Boolean),
 })
@@ -75,13 +74,14 @@ const knownOutcomeOf = (value: string): PermissionOutcome | undefined => {
   return undefined
 }
 
-const parsePermissionOutcomes = (raw: Schema.Json): ReadonlyArray<PermissionOutcome> => {
+const parsePermissionOutcomes = (
+  raw: Schema.Json | undefined,
+): ReadonlyArray<PermissionOutcome> => {
+  if (raw === undefined) return PERMISSION_OUTCOMES
+
   const decoded = Schema.decodeUnknownOption(Schema.Array(PermissionOptionItemSchema))(raw)
 
   if (Option.isNone(decoded)) return []
-
-  // Placement forwards the dialect's empty-array default for omitted choices.
-  if (decoded.value.length === 0) return PERMISSION_OUTCOMES
 
   const parsed: Array<PermissionOutcome> = []
 
@@ -127,7 +127,7 @@ const parseQuestions = (raw: Schema.Json): ReadonlyArray<ChallengeQuestion> => {
   const questions: Array<ChallengeQuestion> = []
 
   for (const item of decoded.value) {
-    const text = item.question ?? item.text ?? ""
+    const text = item.question ?? ""
     const multiSelect = item.multiSelect === true
 
     const base = {
@@ -257,7 +257,7 @@ const bridgeReplyEndpoint = (
 
 export const buildPermissionChallenge = (
   toolUses: Schema.Json,
-  options: Schema.Json,
+  options: Schema.Json | undefined,
   reply: (payload: Schema.Json) => Effect.Effect<void, PlacementRejected>,
   timeoutMs: number | undefined,
 ): ChallengeInput => {

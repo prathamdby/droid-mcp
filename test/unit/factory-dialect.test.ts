@@ -79,6 +79,23 @@ describe("factory-dialect", () => {
   })
 
   describe("protocol constants", () => {
+    it("decodes a fork result only when it carries newSessionId", () => {
+      const exit = run(
+        withDialect((api) =>
+          Effect.gen(function* () {
+            const binding = yield* api.reviewedBinding("droid.fork_session")
+
+            return {
+              reviewed: Option.isSome(binding.decodeResult({ newSessionId: "forked-session" })),
+              legacy: Option.isSome(binding.decodeResult({ sessionId: "forked-session" })),
+            }
+          }),
+        ),
+      )
+
+      expect(expectSuccess(exit)).toEqual({ reviewed: true, legacy: false })
+    })
+
     it("exposes the wire constants", () => {
       expect(JSONRPC_VERSION).toBe("2.0")
       expect(LEGACY_FACTORY_API_VERSION).toBe("1.0.0")
@@ -393,6 +410,59 @@ describe("factory-dialect", () => {
 
       expect(notice.code).toBe("model_error")
       expect(notice.message).toBe("boom")
+    })
+
+    it("keeps an incomplete permission_resolved notice as a session delta", () => {
+      const incomplete = [
+        { type: "permission_resolved", toolUseId: "tool-1", selectedOption: "proceed_once" },
+        { type: "permission_resolved", requestId: "req-1", selectedOption: "proceed_once" },
+        {
+          type: "permission_resolved",
+          requestId: "req-1",
+          toolUseIds: ["tool-1", 2],
+          selectedOption: "proceed_once",
+        },
+      ]
+
+      for (const notification of incomplete) {
+        const frame = JSON.stringify({
+          type: "notification",
+          method: "droid.session_notification",
+          params: { sessionId: "s-1", notification },
+        })
+
+        const notice = expectSuccess(run(withDialect((api) => api.notice(VERSION, bytes(frame)))))
+
+        expect(notice._tag).toBe("SessionDelta")
+        expect(PeerNotice.$is("ChallengeResolved")(notice)).toBe(false)
+      }
+    })
+
+    it("normalizes a reviewed permission_resolved notice into ChallengeResolved", () => {
+      const frame = JSON.stringify({
+        type: "notification",
+        method: "droid.session_notification",
+        params: {
+          sessionId: "s-1",
+          notification: {
+            type: "permission_resolved",
+            requestId: "req-1",
+            toolUseIds: ["tool-1"],
+            selectedOption: "proceed_once",
+          },
+        },
+      })
+
+      const notice = expectSuccess(run(withDialect((api) => api.notice(VERSION, bytes(frame)))))
+
+      expect(notice._tag).toBe("ChallengeResolved")
+
+      if (!PeerNotice.$is("ChallengeResolved")(notice)) {
+        throw new Error("expected ChallengeResolved")
+      }
+
+      expect(notice.peerRequestId).toBe("req-1")
+      expect(notice.toolUseIds).toEqual(["tool-1"])
     })
 
     it("normalizes a working-state idle notification into TurnCompleted", () => {

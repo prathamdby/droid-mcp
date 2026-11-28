@@ -30,7 +30,7 @@ import type {
   OperationFailure,
   ReplayPolicy,
 } from "../../capabilities/index.ts"
-import { HumanChoice } from "../../decisions/index.ts"
+import { HumanChoice, outcomeRequirement } from "../../decisions/index.ts"
 import { ReleasePayload } from "../../disclosure/index.ts"
 import { CURRENT_GUIDE_EDITION } from "../../guidance/index.ts"
 import type { Prerequisite } from "../../guidance/index.ts"
@@ -60,7 +60,6 @@ import {
   encodeSummary,
   encodeTurnPayload,
   MAX_WAIT_MS,
-  permissionOutcomeRequirement,
   sessionInputSchema,
 } from "./codecs.ts"
 import type { SessionOperationName } from "./codecs.ts"
@@ -517,7 +516,7 @@ export const buildSessionOperations = (
     target: (input) => sessionTarget(input.sessionId),
     demand: (input): Demand => ({
       effect: "write",
-      requestedLevel: permissionOutcomeRequirement(input.outcome),
+      requestedLevel: outcomeRequirement(input.outcome),
       operation: "session_respond_permission",
     }),
     perform: (grant, input, who) =>

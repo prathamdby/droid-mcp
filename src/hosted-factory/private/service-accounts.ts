@@ -19,6 +19,7 @@ import {
   hostedTransport,
   readOnlyAnnotations,
   schemaOf,
+  join,
   segment,
   writeAnnotations,
 } from "./kit.ts"
@@ -27,9 +28,17 @@ import { firstIdProblem, HostedId } from "./wire.ts"
 
 const ACCOUNTS = "/api/v0/service-accounts"
 
-const accountPath = (serviceAccountId: string): string => ACCOUNTS + "/" + segment(serviceAccountId)
+const accountPath = (serviceAccountId: string): string | undefined => {
+  const encoded = segment(serviceAccountId)
 
-const keysPath = (serviceAccountId: string): string => accountPath(serviceAccountId) + "/api-keys"
+  return encoded === undefined ? undefined : ACCOUNTS + "/" + encoded
+}
+
+const keysPath = (serviceAccountId: string): string | undefined => {
+  const account = accountPath(serviceAccountId)
+
+  return account === undefined ? undefined : account + "/api-keys"
+}
 
 const accountsTarget: TargetRef = { kind: "hosted", id: "service-accounts" }
 
@@ -341,7 +350,7 @@ export const serviceAccountBinders = (ctx: OperationContext): ReadonlyArray<Bind
 
         return jsonOutcome(transport, "rest_rotate_service_account_api_key", {
           method: "POST",
-          path: keysPath(input.serviceAccountId) + "/" + segment(input.keyId) + "/rotate",
+          path: join(keysPath(input.serviceAccountId), "/", segment(input.keyId), "/rotate"),
           query: [],
           body,
         })
@@ -380,7 +389,7 @@ export const serviceAccountBinders = (ctx: OperationContext): ReadonlyArray<Bind
           "rest_revoke_service_account_api_key",
           {
             method: "POST",
-            path: keysPath(input.serviceAccountId) + "/" + segment(input.keyId) + "/revoke",
+            path: join(keysPath(input.serviceAccountId), "/", segment(input.keyId), "/revoke"),
             query: [],
           },
           { emptyResponse: true },

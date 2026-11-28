@@ -19,6 +19,7 @@ import {
   hostedTransport,
   readOnlyAnnotations,
   schemaOf,
+  join,
   segment,
   writeAnnotations,
 } from "./kit.ts"
@@ -38,10 +39,20 @@ import {
 
 const COMPUTERS = "/api/v0/computers"
 
-const computerPath = (computerId: string): string => COMPUTERS + "/" + segment(computerId)
+const computerPath = (computerId: string): string | undefined => {
+  const encoded = segment(computerId)
 
-const filePath = (computerId: string, fileName: string): string =>
-  computerPath(computerId) + "/files/" + segment(fileName)
+  return encoded === undefined ? undefined : COMPUTERS + "/" + encoded
+}
+
+const filePath = (computerId: string, fileName: string): string | undefined => {
+  const computer = computerPath(computerId)
+  const encoded = segment(fileName)
+
+  return computer === undefined || encoded === undefined
+    ? undefined
+    : computer + "/files/" + encoded
+}
 
 const computersTarget: TargetRef = { kind: "hosted", id: "computers" }
 
@@ -405,7 +416,7 @@ export const computerBinders = (ctx: OperationContext): ReadonlyArray<BindOperat
     perform: (input) =>
       jsonOutcome(transport, "rest_get_machine_template", {
         method: "GET",
-        path: "/api/v0/machines/templates/" + segment(input.templateId),
+        path: join("/api/v0/machines/templates/", segment(input.templateId)),
         query: [],
       }),
   })
@@ -442,7 +453,7 @@ export const computerBinders = (ctx: OperationContext): ReadonlyArray<BindOperat
       perform: (input) =>
         jsonOutcome(transport, "rest_get_computer_by_name", {
           method: "GET",
-          path: COMPUTERS + "/name/" + segment(input.name),
+          path: join(COMPUTERS, "/name/", segment(input.name)),
           query: queryEntries([
             ["serviceAccountId", input.serviceAccountId],
             ["includeProvisioningSteps", input.includeProvisioningSteps],

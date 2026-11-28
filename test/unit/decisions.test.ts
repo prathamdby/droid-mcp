@@ -19,6 +19,8 @@ import {
   type DecisionScope,
   HumanChoice,
   InvalidChoice,
+  outcomeRequirement,
+  PERMISSION_OUTCOMES,
   ReplyUncertain,
   ScopeRetired,
   StaleDecision,
@@ -1181,5 +1183,34 @@ describe("cross-scope isolation", () => {
     )
 
     expect(other.spy.invocations).toHaveLength(1)
+  })
+})
+
+describe("outcomeRequirement", () => {
+  it("maps every reviewed outcome to the autonomy it establishes", () => {
+    const expected = {
+      proceed_once: "off",
+      proceed_always: "off",
+      proceed_always_file: "off",
+      proceed_edit: "off",
+      proceed_report_false_positive: "off",
+      cancel: "off",
+      proceed_auto_run_low: "low",
+      proceed_new_session_low: "low",
+      proceed_auto_run_medium: "medium",
+      proceed_new_session_medium: "medium",
+      proceed_auto_run: "high",
+      proceed_auto_run_high: "high",
+      proceed_new_session: "high",
+      proceed_new_session_high: "high",
+      proceed_always_tools: "high",
+      proceed_always_server: "high",
+    } as const
+
+    expect(Object.keys(expected).sort()).toEqual([...PERMISSION_OUTCOMES].sort())
+
+    for (const outcome of PERMISSION_OUTCOMES) {
+      expect(outcomeRequirement(outcome)).toBe(expected[outcome])
+    }
   })
 })

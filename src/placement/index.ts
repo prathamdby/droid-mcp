@@ -195,7 +195,7 @@ export type PlacementNotice = Data.TaggedEnum<{
     readonly workRef: PlacementWorkRef | undefined
     readonly peerRequestId: string
     readonly toolUses: Schema.Json
-    readonly options: Schema.Json
+    readonly options: Schema.Json | undefined
     readonly reply: (payload: Schema.Json) => Effect.Effect<void, PlacementRejected>
   }
   /** The provider asks free-form questions. */
