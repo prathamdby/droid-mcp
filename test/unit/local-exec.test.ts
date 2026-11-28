@@ -598,6 +598,28 @@ describe("fork", () => {
     await Effect.runPromise(services.localExec.release(lease))
     await Effect.runPromise(Scope.close(scope, Exit.void))
   })
+
+  it("rejects a fork reply that only carries sessionId", async () => {
+    const services = makeServices({ env: { FAKE_DROID_FORK: "legacy" } })
+    const caller = admitCaller(services, "fork-legacy")
+    const grant = grantAt(services, caller, "high")
+    const scope = await Effect.runPromise(Scope.make())
+    const ws = await acquireWorkspace(services, caller, scope)
+    const lease = await openLease(services, ws, grant, scope)
+
+    const failure = await Effect.runPromise(
+      captureFailure(services.localExec.fork(lease, {}, grant)),
+    )
+
+    expect(failure).toBeInstanceOf(ExecRejected)
+
+    if (failure instanceof ExecRejected) {
+      expect(failure.message).toContain("reviewed result schema")
+    }
+
+    await Effect.runPromise(services.localExec.release(lease))
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+  })
 })
 
 // ---------------------------------------------------------------------------

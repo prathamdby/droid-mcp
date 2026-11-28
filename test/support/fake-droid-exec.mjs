@@ -876,6 +876,12 @@ const router = (message) => {
   }
 
   if (message.method === "droid.fork_session") {
+    if (process.env.FAKE_DROID_FORK === "legacy") {
+      respond(message.id, { sessionId: "forked-session" })
+
+      return
+    }
+
     respond(message.id, {
       newSessionId: "forked-session",
     })

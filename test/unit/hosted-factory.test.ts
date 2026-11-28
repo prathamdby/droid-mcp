@@ -38,6 +38,8 @@ import {
   HostedUnavailable,
 } from "../../src/hosted-factory/index.ts"
 import type { HostedInstallation } from "../../src/hosted-factory/index.ts"
+import type { HostedTransport } from "../../src/hosted-factory/private/http.ts"
+import { exchange, join as joinPath, segment } from "../../src/hosted-factory/private/kit.ts"
 import { startFakeFactoryApi } from "../support/fake-factory-api.ts"
 import type { FakeFactoryApi } from "../support/fake-factory-api.ts"
 
@@ -1366,5 +1368,36 @@ describe("guidance requirement", () => {
     const allowed = await runEffect(invokeJson(services, catalog, who, "rest_list_computers", {}))
 
     expect(Exit.isSuccess(allowed)).toBe(true)
+  })
+})
+
+describe("path segment encoding", () => {
+  it("refuses an unencodable segment before any request is sent", async () => {
+    expect(segment("..")).toBeUndefined()
+    expect(segment("\ud800")).toBeUndefined()
+    expect(joinPath("/api", undefined, "/x")).toBeUndefined()
+    expect(joinPath("/api", "/ok")).toBe("/api/ok")
+
+    const sent: Array<string> = []
+
+    const transport: HostedTransport = {
+      secretValues: () => Effect.succeed([]),
+      send: (request) => {
+        sent.push(request.path)
+
+        return Effect.die("send should not run")
+      },
+    }
+
+    const exit = await Effect.runPromiseExit(
+      exchange(transport, "rest_get", { method: "GET", path: undefined, query: [] }),
+    )
+
+    const failure = Exit.isFailure(exit)
+      ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+      : undefined
+
+    expect(sent).toEqual([])
+    expect(failure).toBeInstanceOf(InvalidInput)
   })
 })
