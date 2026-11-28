@@ -234,9 +234,7 @@ const exchange = (
   maxBytes: number,
 ): Effect.Effect<{ readonly status: number; readonly bytes: Uint8Array }, Failure> =>
   request.path === undefined
-    ? Effect.fail(
-        new InvalidInput({ message: operation + " refused an unencodable path segment" }),
-      )
+    ? Effect.fail(new InvalidInput({ message: operation + " refused an unencodable path segment" }))
     : transport.send({ operation, ...request, path: request.path }, maxBytes).pipe(
         Effect.mapError((failure) => sendFailure(operation, failure)),
         Effect.flatMap((received) =>
